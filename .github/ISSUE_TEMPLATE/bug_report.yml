@@ -1,0 +1,84 @@
+name: Bug report
+description: Report a reproducible extension, runtime, packaging, or compatibility problem.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not upload API keys, session JSONL, full logs, private source files, user-profile screenshots, or internal URLs. Security issues belong in a private Security Advisory.
+  - type: input
+    id: extension-version
+    attributes:
+      label: Extension version
+      placeholder: 0.1.1
+    validations:
+      required: true
+  - type: input
+    id: vscode-version
+    attributes:
+      label: VS Code version
+    validations:
+      required: true
+  - type: dropdown
+    id: host
+    attributes:
+      label: Extension host
+      options:
+        - Local
+        - Remote SSH
+        - WSL
+        - Dev Container
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      placeholder: Windows 11 x64 / win32-x64
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Runtime mode
+      options:
+        - bundled
+        - external
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Minimal reproduction
+      description: Use a non-sensitive workspace and list exact steps.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostic summary
+      description: Include only the shortest relevant error and redact paths, filenames, session content, hostnames, and credentials.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed credentials, personal paths, private code, session content, and internal URLs.
+          required: true
+        - label: I checked the support guide and known limitations.
+          required: true

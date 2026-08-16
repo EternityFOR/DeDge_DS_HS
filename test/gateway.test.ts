@@ -1,0 +1,168 @@
+import { describe, expect, it, vi } from 'vitest'
+import { GatewayClient } from '../src/gateway/gateway-client.js'
+import {
+  parseContextPressureProjection,
+  parseModelCatalog,
+  parseHostFrame,
+  parseMuxFrame,
+  parsePresetCatalog,
+  parseServerRequest,
+  parseServerResponse,
+} from '../src/gateway/protocol.js'
+
+describe('Gateway JSON frame parsing', () => {
+  it('parses successful and failed RPC envelopes', () => {
+    expect(parseServerResponse({
+      type: 'server-response',
+      rpcId: 'rpc-1',
+      result: { ok: true, value: { accepted: true } },
+    })).toEqual({
+      type: 'server-response',
+      rpcId: 'rpc-1',
+      result: { ok: true, value: { accepted: true } },
+    })
+
+    expect(parseServerResponse({
+      type: 'server-response',
+      rpcId: 'rpc-2',
+      result: { ok: false, error: { code: 'BAD_REQUEST', message: 'invalid', details: { field: 'text' } } },
+    })).toEqual({
+      type: 'server-response',
+      rpcId: 'rpc-2',
+      result: { ok: false, error: { code: 'BAD_REQUEST', message: 'invalid', details: { field: 'text' } } },
+    })
+  })
+
+  it('requires the native cancel acknowledgement', async () => {
+    const originalFetch = globalThis.fetch
+    try {
+      globalThis.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+        const request = JSON.parse(String(init?.body)) as { rpcId: string }
+        return new Response(JSON.stringify({
+          type: 'server-response',
+          rpcId: request.rpcId,
+          result: { ok: true, value: { accepted: false } },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      })
+      const client = new GatewayClient('http://127.0.0.1:1/', {} as never)
+      await expect(client.cancel('session-1')).rejects.toThrow('did not acknowledge')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('parses server requests and preserves arbitrary payloads', () => {
+    expect(parseServerRequest({ type: 'server-request', rpcId: 'evt-1', payload: { type: 'host/session-status', running: true } }))
+      .toEqual({ type: 'server-request', rpcId: 'evt-1', payload: { type: 'host/session-status', running: true } })
+  })
+
+  it('normalizes the legacy session status event into a projection frame', () => {
+    expect(parseMuxFrame({ type: 'session/status', sessionId: 's-1', running: false, seq: 12 }))
+      .toEqual({ type: 'session/projection', sessionId: 's-1', key: 'status', value: { running: false }, seq: 12 })
+  })
+
+  it('accepts bounded context-pressure projections and rejects malformed counts', () => {
+    expect(parseContextPressureProjection({ pressureTokens: 210_000, projectedTokens: 212_000, contextWindow: 353_000 }))
+      .toEqual({ pressureTokens: 210_000, projectedTokens: 212_000, contextWindow: 353_000 })
+    expect(parseContextPressureProjection({ projectedTokens: -1, contextWindow: 353_000 })).toBeUndefined()
+    expect(parseContextPressureProjection({ projectedTokens: 10, contextWindow: 0 })).toBeUndefined()
+  })
+
+  it('cleans question options but preserves their exact labels', () => {
+    expect(parseMuxFrame({
+      type: 'question/requested',
+      sessionId: 's-1',
+      questions: [
+        {
+          id: 'q-1',
+          question: 'Choose',
+          options: [
+            { label: ' A ', description: 'first' },
+            { label: 'B', description: 7 },
+            { label: '   ' },
+            { label: 9 },
+          ],
+          multiSelect: true,
+        },
+        { id: 7, question: 'discard me' },
+      ],
+    })).toEqual({
+      type: 'question/requested',
+      sessionId: 's-1',
+      questions: [{ id: 'q-1', question: 'Choose', options: [{ label: ' A ', description: 'first' }, { label: 'B' }], multiSelect: true }],
+    })
+  })
+
+  it('keeps valid approval and strict session event frames', () => {
+
+    expect(parseMuxFrame({
+      type: 'approval/requested',
+      sessionId: 's-1',
+      approvalId: 'a-1',
+      toolName: 'filesystem.write',
+      reason: 'needs approval',
+    })).toMatchObject({ type: 'approval/requested', sessionId: 's-1', approvalId: 'a-1', toolName: 'filesystem.write', reason: 'needs approval' })
+
+    expect(parseMuxFrame({
+      type: 'session/event',
+      sessionId: 's-1',
+      event: { type: 'turn/start', seq: 0, time: 100.5, data: null },
+    })).toMatchObject({ type: 'session/event', sessionId: 's-1', event: { type: 'turn/start', seq: 0, time: 100.5, data: null } })
+  })
+
+  it('rejects malformed session events and empty question batches', () => {
+    for (const event of [
+      { type: 'turn/start', time: 1, data: {} },
+      { type: 'turn/start', seq: -1, time: 1, data: {} },
+      { type: 'turn/start', seq: 1.5, time: 1, data: {} },
+      { type: 'turn/start', seq: Number.MAX_SAFE_INTEGER + 1, time: 1, data: {} },
+      { type: 'turn/start', seq: 1, time: Number.POSITIVE_INFINITY, data: {} },
+      { type: 'turn/start', seq: 1, time: 1 },
+    ]) {
+      expect(() => parseMuxFrame({ type: 'session/event', sessionId: 's-1', event })).toThrow('Malformed Harness session event')
+    }
+    expect(() => parseMuxFrame({ type: 'question/requested', sessionId: 's-1', questions: [] })).toThrow('Unsupported Harness mux frame')
+    expect(() => parseMuxFrame({ type: 'question/requested', sessionId: 's-1', questions: [{ id: 1 }] })).toThrow('Unsupported Harness mux frame')
+  })
+
+  it('parses model and agent preset catalogs', () => {
+    expect(parseModelCatalog({
+      current: { provider: 'deepseek-official', model: 'deepseek-v4', reasoningEffort: 'max' },
+      routable: true,
+      groups: [{
+        id: 'deepseek-official',
+        name: 'DeepSeek',
+        models: [{
+          id: 'deepseek-v4',
+          name: 'DeepSeek V4',
+          description: 'General coding model',
+          reasoning: {
+            efforts: [{ id: 'high', name: 'High' }, { id: 'max', name: 'Maximum', description: 'More deliberation' }],
+            defaultEffort: 'high',
+          },
+        }],
+      }],
+      failures: [],
+    })).toMatchObject({ current: { model: 'deepseek-v4', reasoningEffort: 'max' }, routable: true })
+
+    expect(parsePresetCatalog({
+      presets: [
+        { id: 'standard', trust: 'system', isDefault: true, name: 'Standard' },
+        { id: 'cordis', trust: 'system', isDefault: false, broken: 'missing plugin' },
+      ],
+      authorable: true,
+      hasDocument: true,
+    }).presets.map(preset => preset.id)).toEqual(['standard', 'cordis'])
+  })
+
+  it('parses host lifecycle frames and rejects malformed envelopes', () => {
+    expect(parseHostFrame({ type: 'host/session-added', sessionId: 's-1', cwd: 'C:\\work', agentPreset: 'standard' }))
+      .toEqual({ type: 'host/session-added', sessionId: 's-1', cwd: 'C:\\work', agentPreset: 'standard' })
+    expect(parseHostFrame({ type: 'host/session-status', sessionId: 's-1', running: true }))
+      .toEqual({ type: 'host/session-status', sessionId: 's-1', running: true })
+    expect(parseHostFrame({ type: 'host/archived-sessions-changed', archivedSessionIds: ['s-1', 's-2'] }))
+      .toEqual({ type: 'host/archived-sessions-changed', archivedSessionIds: ['s-1', 's-2'] })
+    expect(() => parseMuxFrame({ type: 'not-a-frame' })).toThrow('Unsupported Harness mux frame')
+    expect(() => parseServerResponse({ type: 'server-response', rpcId: 'x', result: { ok: 'yes' } })).toThrow('Malformed Harness RPC result')
+  })
+})

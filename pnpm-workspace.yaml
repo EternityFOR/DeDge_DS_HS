@@ -1,0 +1,13 @@
+packages:
+  - .
+
+allowBuilds:
+  '@deepseek-ai/dsh-subprocess-local': true
+  '@google/genai': true
+  '@vscode/vsce-sign': true
+  esbuild: true
+  keytar: true
+  koffi: true
+  node: true
+  node-pty: true
+  protobufjs: true

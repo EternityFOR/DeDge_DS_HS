@@ -1,0 +1,409 @@
+{
+  "name": "dedge-deepseek-harness-vscode",
+  "displayName": "DeDge DeepSeek Harness",
+  "description": "Self-contained DeepSeek Harness coding agent for VS Code with a Windows-safe runtime and isolated Codex/Claude handoffs.",
+  "version": "0.1.1",
+  "publisher": "diractive-edge",
+  "private": true,
+  "packageManager": "pnpm@11.21.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EternityFOR/DeDge_DS_HS.git"
+  },
+  "homepage": "https://github.com/EternityFOR/DeDge_DS_HS#readme",
+  "bugs": {
+    "url": "https://github.com/EternityFOR/DeDge_DS_HS/issues"
+  },
+  "preview": true,
+  "pricing": "Free",
+  "qna": "marketplace",
+  "icon": "media/marketplace-icon.png",
+  "galleryBanner": {
+    "color": "#161B22",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "DeepSeek Harness requires a local or remote filesystem-backed workspace."
+    },
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "The workbench and diagnostics remain available, but the Harness runtime cannot start until the workspace is trusted.",
+      "restrictedConfigurations": [
+        "dedgeDeepSeekHarness.runtime.mode",
+        "dedgeDeepSeekHarness.runtime.command",
+        "dedgeDeepSeekHarness.runtime.nodePath",
+        "dedgeDeepSeekHarness.permissionMode",
+        "dedgeDeepSeekHarness.baseUrl",
+        "dedgeDeepSeekHarness.context.windowTokens",
+        "dedgeDeepSeekHarness.handoff.codexCommand",
+        "dedgeDeepSeekHarness.handoff.claudeCommand",
+        "dedgeDeepSeekHarness.autoStart"
+      ]
+    }
+  },
+  "main": "./dist/extension.cjs",
+  "categories": [
+    "Other",
+    "Machine Learning"
+  ],
+  "keywords": [
+    "deepseek",
+    "deepseek harness",
+    "harness",
+    "ai",
+    "agent",
+    "coding",
+    "coding assistant",
+    "codex",
+    "claude",
+    "handoff",
+    "windows",
+    "powershell"
+  ],
+  "activationEvents": [
+    "onView:dedgeDeepSeekHarness.chat",
+    "onCommand:dedgeDeepSeekHarness.openChat",
+    "onCommand:dedgeDeepSeekHarness.newSession",
+    "onCommand:dedgeDeepSeekHarness.selectSession",
+    "onCommand:dedgeDeepSeekHarness.manageSession",
+    "onCommand:dedgeDeepSeekHarness.start",
+    "onCommand:dedgeDeepSeekHarness.stop",
+    "onCommand:dedgeDeepSeekHarness.restart",
+    "onCommand:dedgeDeepSeekHarness.setApiKey",
+    "onCommand:dedgeDeepSeekHarness.clearApiKey",
+    "onCommand:dedgeDeepSeekHarness.addSelection",
+    "onCommand:dedgeDeepSeekHarness.addFile",
+    "onCommand:dedgeDeepSeekHarness.handoff",
+    "onCommand:dedgeDeepSeekHarness.reviewChanges",
+    "onCommand:dedgeDeepSeekHarness.diagnose",
+    "onCommand:dedgeDeepSeekHarness.showLogs"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dedgeDeepSeekHarness",
+          "title": "DeepSeek Harness",
+          "icon": "media/deepseek-harness.svg"
+        }
+      ]
+    },
+    "views": {
+      "dedgeDeepSeekHarness": [
+        {
+          "type": "webview",
+          "id": "dedgeDeepSeekHarness.chat",
+          "name": "Workbench"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "dedgeDeepSeekHarness.openChat",
+        "title": "DeepSeek Harness: Open Workbench",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "dedgeDeepSeekHarness.newSession",
+        "title": "DeepSeek Harness: New Session",
+        "icon": "$(add)"
+      },
+      {
+        "command": "dedgeDeepSeekHarness.selectSession",
+        "title": "DeepSeek Harness: Select Session",
+        "icon": "$(history)"
+      },
+      {
+        "command": "dedgeDeepSeekHarness.manageSession",
+        "title": "DeepSeek Harness: Archive or Delete Session",
+        "icon": "$(ellipsis)"
+      },
+      {
+        "command": "dedgeDeepSeekHarness.start",
+        "title": "DeepSeek Harness: Start Runtime",
+        "icon": "$(play)"
+      },
+      {
+        "command": "dedgeDeepSeekHarness.stop",
+        "title": "DeepSeek Harness: Stop Runtime",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "dedgeDeepSeekHarness.restart",
+        "title": "DeepSeek Harness: Restart Runtime",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "dedgeDeepSeekHarness.setApiKey",
+        "title": "DeepSeek Harness: Configure API Connection",
+        "icon": "$(key)"
+      },
+      {
+        "command": "dedgeDeepSeekHarness.clearApiKey",
+        "title": "DeepSeek Harness: Clear API Key",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "dedgeDeepSeekHarness.addSelection",
+        "title": "Add Selection to DeepSeek Harness",
+        "icon": "$(quote)"
+      },
+      {
+        "command": "dedgeDeepSeekHarness.addFile",
+        "title": "Add File to DeepSeek Harness",
+        "icon": "$(attach)"
+      },
+      {
+        "command": "dedgeDeepSeekHarness.handoff",
+        "title": "DeepSeek Harness: Hand Off Session",
+        "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "dedgeDeepSeekHarness.reviewChanges",
+        "title": "DeepSeek Harness: Review Workspace Changes",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "dedgeDeepSeekHarness.diagnose",
+        "title": "DeepSeek Harness: Diagnose Environment",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "dedgeDeepSeekHarness.showLogs",
+        "title": "DeepSeek Harness: Show Logs",
+        "icon": "$(output)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "dedgeDeepSeekHarness.newSession",
+          "when": "view == dedgeDeepSeekHarness.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dedgeDeepSeekHarness.selectSession",
+          "when": "view == dedgeDeepSeekHarness.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "dedgeDeepSeekHarness.manageSession",
+          "when": "view == dedgeDeepSeekHarness.chat",
+          "group": "navigation@3"
+        },
+        {
+          "command": "dedgeDeepSeekHarness.restart",
+          "when": "view == dedgeDeepSeekHarness.chat",
+          "group": "navigation@4"
+        },
+        {
+          "command": "dedgeDeepSeekHarness.showLogs",
+          "when": "view == dedgeDeepSeekHarness.chat",
+          "group": "navigation@5"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "dedgeDeepSeekHarness.addSelection",
+          "when": "editorHasSelection",
+          "group": "navigation@5"
+        },
+        {
+          "command": "dedgeDeepSeekHarness.addFile",
+          "when": "resourceScheme == file || resourceScheme == vscode-remote",
+          "group": "navigation@6"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "dedgeDeepSeekHarness.addFile",
+          "when": "resourceScheme == file || resourceScheme == vscode-remote",
+          "group": "navigation@6"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "dedgeDeepSeekHarness.addFile",
+          "when": "(resourceScheme == file || resourceScheme == vscode-remote) && !explorerResourceIsFolder",
+          "group": "navigation@6"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "DeDge DeepSeek Harness",
+      "properties": {
+        "dedgeDeepSeekHarness.runtime.mode": {
+          "type": "string",
+          "enum": [
+            "bundled",
+            "external"
+          ],
+          "enumDescriptions": [
+            "Use the platform runtime shipped in the VSIX.",
+            "Use an explicitly configured executable. No automatic downloads."
+          ],
+          "default": "bundled",
+          "description": "Runtime source. Bundled mode is the supported end-user path.",
+          "scope": "machine"
+        },
+        "dedgeDeepSeekHarness.runtime.command": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to a dsh executable or dsh JavaScript entry file when runtime.mode is external.",
+          "scope": "machine"
+        },
+        "dedgeDeepSeekHarness.runtime.nodePath": {
+          "type": "string",
+          "default": "",
+          "description": "Required absolute Node executable when runtime.command points to a .js, .mjs, or .cjs entry file.",
+          "scope": "machine"
+        },
+        "dedgeDeepSeekHarness.runtime.startTimeoutMs": {
+          "type": "number",
+          "minimum": 5000,
+          "maximum": 300000,
+          "default": 90000,
+          "description": "Maximum time allowed for the local Harness host to become ready.",
+          "scope": "machine"
+        },
+        "dedgeDeepSeekHarness.model": {
+          "type": "string",
+          "default": "deepseek-v4-flash",
+          "description": "Default model for newly created sessions."
+        },
+        "dedgeDeepSeekHarness.provider": {
+          "type": "string",
+          "default": "deepseek-official",
+          "description": "Harness provider route."
+        },
+        "dedgeDeepSeekHarness.reasoningEffort": {
+          "type": "string",
+          "default": "high",
+          "description": "Default reasoning effort for new sessions. Available values are provided by the selected model adapter."
+        },
+        "dedgeDeepSeekHarness.agentPreset": {
+          "type": "string",
+          "default": "standard",
+          "description": "Default Harness agent preset."
+        },
+        "dedgeDeepSeekHarness.permissionMode": {
+          "type": "string",
+          "enum": [
+            "read-only",
+            "workspace-write",
+            "danger-full-access"
+          ],
+          "enumDescriptions": [
+            "Do not allow model-driven mutations.",
+            "Allow workspace and temporary-directory mutations; ask before wider access.",
+            "Allow unrestricted mutations without approval prompts."
+          ],
+          "default": "workspace-write",
+          "description": "Initial filesystem permission policy."
+        },
+        "dedgeDeepSeekHarness.baseUrl": {
+          "type": "string",
+          "default": "https://api.deepseek.com/",
+          "description": "DeepSeek or OpenAI-compatible API base URL. The official DeepSeek endpoint is used by default; self-hosted and sub2 endpoints may be configured here.",
+          "scope": "machine"
+        },
+        "dedgeDeepSeekHarness.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the bundled runtime when the workbench is first opened."
+        },
+        "dedgeDeepSeekHarness.context.maxBytes": {
+          "type": "number",
+          "minimum": 1024,
+          "maximum": 131072,
+          "default": 32768,
+          "description": "Maximum bytes of editor context attached to a prompt."
+        },
+        "dedgeDeepSeekHarness.context.windowTokens": {
+          "type": "number",
+          "minimum": 16384,
+          "maximum": 16000000,
+          "default": 1000000,
+          "description": "DeepSeek context-window capacity in tokens. Defaults to the official adapter maximum (1M); the compaction-enabled official presets start automatic compaction at 80% to preserve response headroom, while manual compaction may run earlier when idle. Minimal has no compaction; custom presets define their own policy. Applies after a runtime restart."
+        },
+        "dedgeDeepSeekHarness.handoff.codexHome": {
+          "type": "string",
+          "default": "${userHome}/.codex",
+          "description": "Read-only Codex home used by the official app-server session list and the filtered JSONL fallback. ${userHome} and ~ are expanded by the extension.",
+          "scope": "machine"
+        },
+        "dedgeDeepSeekHarness.handoff.claudeHome": {
+          "type": "string",
+          "default": "${userHome}/.claude",
+          "description": "Read-only Claude Code home used to discover local sessions. ${userHome} and ~ are expanded by the extension.",
+          "scope": "machine"
+        },
+        "dedgeDeepSeekHarness.handoff.codexCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Optional absolute path to a native Codex executable. Leave empty to discover the official CLI or VS Code extension binary without invoking a shell.",
+          "scope": "machine"
+        },
+        "dedgeDeepSeekHarness.handoff.claudeCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Optional absolute path to a native Claude Code executable. Leave empty to discover the official VS Code extension binary or PATH executable without invoking a shell.",
+          "scope": "machine"
+        },
+        "dedgeDeepSeekHarness.handoff.maxBytes": {
+          "type": "number",
+          "minimum": 8192,
+          "maximum": 262144,
+          "default": 65536,
+          "description": "Maximum UTF-8 transcript bytes included in an isolated cross-platform handoff package."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "clean": "node scripts/clean.mjs temp",
+    "clean:build": "node scripts/clean.mjs build",
+    "clean:dependencies": "node scripts/clean.mjs dependencies",
+    "render:preview": "node scripts/render-ui-preview.mjs",
+    "serve:preview": "node scripts/serve-preview.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepare:runtime": "node scripts/prepare-runtime.mjs",
+    "smoke:runtime": "node scripts/smoke-runtime.mjs",
+    "audit:docs": "node scripts/audit-docs.mjs",
+    "audit:release": "node scripts/audit-release.mjs",
+    "audit:package": "node scripts/audit-vsix.mjs",
+    "package:platform": "node scripts/package-platform.mjs",
+    "package": "pnpm run package:platform",
+    "vscode:prepublish": "pnpm run typecheck && pnpm run build && pnpm run prepare:runtime"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.1.0-rc.6",
+    "node": "22.22.3",
+    "pnpm": "11.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "@types/vscode": "1.96.0",
+    "@types/ws": "8.5.13",
+    "@vscode/vsce": "3.6.0",
+    "dompurify": "3.2.6",
+    "esbuild": "0.25.9",
+    "lucide": "0.468.0",
+    "marked": "15.0.7",
+    "typescript": "5.8.3",
+    "vitest": "3.2.4",
+    "ws": "8.18.3"
+  }
+}

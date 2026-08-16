@@ -1,0 +1,60 @@
+name: Static checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: static-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+
+      - name: Install locked dependencies
+        run: corepack pnpm@11.21.0 install --frozen-lockfile
+
+      - name: Typecheck
+        run: corepack pnpm@11.21.0 run typecheck
+
+      - name: Audit public documentation
+        run: corepack pnpm@11.21.0 run audit:docs
+
+      - name: Audit release source boundary
+        run: corepack pnpm@11.21.0 run audit:release
+
+      - name: Test
+        run: corepack pnpm@11.21.0 test
+
+      - name: Build
+        run: corepack pnpm@11.21.0 run build
+
+      - name: Prepare bundled runtime
+        run: corepack pnpm@11.21.0 run prepare:runtime
+
+      - name: Smoke bundled runtime
+        run: corepack pnpm@11.21.0 run smoke:runtime
+
+      - name: Package and audit platform VSIX
+        run: corepack pnpm@11.21.0 run package:platform
