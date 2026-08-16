@@ -3,6 +3,7 @@ import type { QuestionAnswer, WorkbenchSnapshot } from '../session/types.js'
 
 export type HostToWebviewMessage =
   | { readonly type: 'state'; readonly state: WorkbenchSnapshot; readonly attachments: readonly ContextAttachment[] }
+  | { readonly type: 'sendSettled'; readonly accepted: boolean; readonly text: string }
   | { readonly type: 'setDraft'; readonly text: string }
   | { readonly type: 'notice'; readonly level: 'info' | 'warning' | 'error'; readonly message: string }
 

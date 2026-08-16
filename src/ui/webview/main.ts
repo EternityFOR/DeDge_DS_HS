@@ -22,6 +22,7 @@ import {
 import { marked } from 'marked'
 import type { ContextAttachment } from '../../context/context-collector.js'
 import type { WorkbenchMessage, WorkbenchSnapshot } from '../../session/types.js'
+import { modelControlsUnavailableReason, promptUnavailableReason } from '../../session/interaction-readiness.js'
 import type { HostToWebviewMessage, WebviewToHostMessage } from '../webview-protocol.js'
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewToHostMessage): void; setState(value: unknown): void; getState(): unknown }
@@ -33,6 +34,7 @@ let state: WorkbenchSnapshot | undefined
 let attachments: readonly ContextAttachment[] = []
 let sessionTabsSignature = ''
 let noticeTimer: number | undefined
+let sendPending = false
 
 marked.setOptions({ gfm: true, breaks: false })
 
@@ -125,6 +127,13 @@ window.addEventListener('message', event => {
     state = message.state
     attachments = message.attachments
     render()
+  } else if (message.type === 'sendSettled') {
+    sendPending = false
+    if (message.accepted && elements.prompt.value === message.text) {
+      elements.prompt.value = ''
+      resizePrompt()
+    }
+    if (state !== undefined) renderStatus(state)
   } else if (message.type === 'setDraft') {
     elements.prompt.value = message.text
     resizePrompt()
@@ -217,9 +226,15 @@ function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
 
 function renderModelOptions(snapshot: WorkbenchSnapshot): void {
   const nodes: Node[] = []
+  if (snapshot.modelCatalog === undefined) {
+    elements.modelOptions.replaceChildren(menuOption({ label: 'Loading models...', selected: false, disabled: true, handler: () => undefined }))
+    elements.reasoningOptions.replaceChildren(menuOption({ label: 'Loading reasoning options...', selected: false, disabled: true, handler: () => undefined }))
+    elements.modelLabel.textContent = snapshot.model || 'Loading models...'
+    return
+  }
   let currentName = snapshot.model
   let currentFound = false
-  for (const group of snapshot.modelCatalog?.groups ?? []) {
+  for (const group of snapshot.modelCatalog.groups) {
     const heading = document.createElement('div')
     heading.className = 'menu-heading'
     heading.textContent = group.name || group.id
@@ -251,7 +266,6 @@ function renderModelOptions(snapshot: WorkbenchSnapshot): void {
   }
   elements.modelOptions.replaceChildren(...nodes)
   elements.modelLabel.textContent = currentName
-  elements.modelMenu.disabled = false
 }
 
 function renderReasoningOptions(snapshot: WorkbenchSnapshot): void {
@@ -504,13 +518,20 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
   const running = active?.running === true
   const cancelling = active?.operation === 'cancelling'
   const modelUnavailable = snapshot.modelCatalog?.routable === false
+  const sendUnavailable = promptUnavailableReason(snapshot)
+  const modelControlsUnavailable = modelControlsUnavailableReason(snapshot)
   const compactionUnavailable = snapshot.agentPreset === 'minimal'
   elements.cancel.classList.toggle('hidden', !running)
   elements.cancel.disabled = cancelling
   elements.cancel.title = cancelling ? 'Stop request is being processed' : 'Stop'
   elements.cancel.setAttribute('aria-label', elements.cancel.title)
   elements.send.classList.toggle('hidden', running)
-  elements.send.disabled = modelUnavailable
+  elements.send.disabled = sendPending || sendUnavailable !== undefined
+  elements.send.title = sendPending ? 'Sending...' : sendUnavailable ?? 'Send'
+  elements.send.setAttribute('aria-label', elements.send.title)
+  elements.modelMenu.disabled = modelControlsUnavailable !== undefined
+  elements.modelMenu.title = modelControlsUnavailable ?? 'Model, reasoning, and agent preset'
+  elements.modelMenu.setAttribute('aria-label', elements.modelMenu.title)
   const compactDisabled = snapshot.phase !== 'connected' || active === undefined || running || active.operation !== undefined || compactionUnavailable
   elements.compact.disabled = compactDisabled
   elements.compact.title = running
@@ -603,12 +624,12 @@ function menuOption(options: {
 }
 
 function send(): void {
-  if (state?.modelCatalog?.routable === false) return
+  if (sendPending || state === undefined || promptUnavailableReason(state) !== undefined) return
   const value = elements.prompt.value
   if (value.trim() === '' && attachments.length === 0) return
+  sendPending = true
+  renderStatus(state)
   post({ type: 'send', text: value })
-  elements.prompt.value = ''
-  resizePrompt()
 }
 
 async function handlePaste(event: ClipboardEvent): Promise<void> {

@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- Model and reasoning controls remain disabled while their catalog loads; prompt submission is rejected until the runtime, active session, and model catalog are ready.
 - 构建不再清空已准备好的 `dist/runtime`，避免 Windows 大文件或硬链接删除争用。
 - 相同 question id 出现在不同请求批次时不再互相覆盖。
 - 删除、归档和停止操作增加会话级互斥与即时忙碌状态，防止延迟期间重复提交。

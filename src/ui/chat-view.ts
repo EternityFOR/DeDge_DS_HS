@@ -227,9 +227,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
     if (message.type === 'send') {
       const attachments = [...this.attachments]
-      this.attachments = []
-      await this.run(() => this.controller.send(message.text, attachments))
-      await this.postState()
+      try {
+        await this.controller.send(message.text, attachments)
+        const sentIds = new Set(attachments.map(item => item.id))
+        this.attachments = this.attachments.filter(item => !sentIds.has(item.id))
+        await this.post({ type: 'sendSettled', accepted: true, text: message.text })
+        await this.postState()
+      } catch (error) {
+        const detail = errorMessage(error)
+        this.logger.error('Workbench send failed', error)
+        await this.post({ type: 'notice', level: 'error', message: conciseNotice(detail) })
+        await this.post({ type: 'sendSettled', accepted: false, text: message.text })
+      }
       return
     }
     if (message.type === 'newSession') return this.run(() => this.controller.newSession())
@@ -528,14 +537,14 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
               <span id="context-tooltip" class="context-tooltip" role="tooltip"><span>Context window:</span><strong id="context-percent">0% full</strong><span id="context-figures" class="context-figures">0 / 1M tokens used</span><span id="context-trigger" class="context-figures">Auto compact at 800K</span></span>
             </span>
             <div class="menu-anchor">
-              <button id="model-menu" class="menu-button" title="Model, reasoning, and agent preset" aria-label="Model, reasoning, and agent preset" aria-expanded="false"><span id="model-label" class="menu-label">Model</span><i class="chevron" data-lucide="chevron-down"></i></button>
+              <button id="model-menu" class="menu-button" title="Models are loading" aria-label="Models are loading" aria-expanded="false" disabled><span id="model-label" class="menu-label">Model</span><i class="chevron" data-lucide="chevron-down"></i></button>
               <div id="model-popover" class="popover model-popover align-right hidden" role="menu">
                 <section class="menu-section"><div class="menu-heading">Model</div><div id="model-options" class="menu-options"></div></section>
                 <section class="menu-section"><div class="menu-heading">Reasoning</div><div id="reasoning-options" class="menu-options"></div></section>
                 <section class="menu-section"><div class="menu-heading">Agent preset</div><div id="preset-options" class="menu-options"></div></section>
               </div>
             </div>
-            <button id="send" class="icon-button" title="Send" aria-label="Send"><i data-lucide="send"></i></button>
+            <button id="send" class="icon-button" title="Wait for Harness to connect" aria-label="Wait for Harness to connect" disabled><i data-lucide="send"></i></button>
             <button id="cancel" class="icon-button hidden" title="Stop" aria-label="Stop"><i data-lucide="square"></i></button>
           </div>
         </div>

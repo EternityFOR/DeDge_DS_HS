@@ -9,6 +9,7 @@ import type { CredentialStore } from '../security/credentials.js'
 import type { RuntimeManager } from '../runtime/runtime-manager.js'
 import type { PendingApproval, PendingQuestion, QuestionAnswer, WorkbenchSnapshot } from './types.js'
 import { SessionOperationCoordinator } from './session-operations.js'
+import { promptUnavailableReason } from './interaction-readiness.js'
 import { SessionStore } from './session-store.js'
 import { SessionTrashService } from './session-trash.js'
 import { validateQuestionAnswers } from './question-answers.js'
@@ -134,12 +135,11 @@ export class WorkbenchController implements vscode.Disposable {
   async send(text: string, attachments: readonly ContextAttachment[] = []): Promise<void> {
     const normalized = text.trim()
     if (normalized === '' && attachments.length === 0) return
-    await this.ensureStarted()
-    const sessionId = this.store.snapshot().activeSessionId
-    if (sessionId === undefined) {
-      await this.newSession()
-      return this.send(text, attachments)
-    }
+    const snapshot = this.store.snapshot()
+    const unavailable = promptUnavailableReason(snapshot)
+    if (unavailable !== undefined) throw new Error(unavailable)
+    const sessionId = snapshot.activeSessionId
+    if (sessionId === undefined) throw new Error('Wait for an active Harness session before sending.')
     const prompt = buildPrompt(normalized, attachments)
     const result = await this.requireGateway().prompt(sessionId, prompt)
     if (result.accepted === false) throw new Error('Harness rejected the prompt.')
