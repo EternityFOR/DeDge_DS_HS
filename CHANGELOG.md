@@ -4,9 +4,22 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-17
+
+### Added
+
 - 发布本机 loopback Gateway lease，供 DeDge Orbit 在不读取 API Key 的前提下连接现有 DeepSeek Harness 运行时。
+
+### Changed
+
 - Runtime 停止或异常退出时按进程所有权清理 lease，避免多窗口清理掉其他仍存活实例的地址。
 - 平台运行时打包会整体移除 `.bin` 开发 shim，避免无效 Node 启动器进入 VSIX。
+
+### Fixed
+
+- 模型目录加载期间禁用模型、思考深度和发送控件；运行时、活动会话或模型目录未就绪时，前端与扩展宿主都会拒绝提交。
+- 移除运行时就绪后自动补发旧草稿的行为，避免选择模型或思考深度后意外发送输入框内容。
+- 草稿和附件仅在 Gateway 明确接受请求后清空；拒绝或失败时保留，便于检查后重试。
 
 ## [0.1.1] - 2026-08-16
 
@@ -49,5 +62,6 @@
 - Gateway 固定监听随机 `127.0.0.1`，子进程使用参数数组、`shell: false` 和 `windowsHide: true`。
 - 发布审计拒绝 session dump、私钥、常见 provider token、绝对本机路径、Mojibake 和开发期文件进入公开源或 VSIX。
 
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.2
 [0.1.1]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.1

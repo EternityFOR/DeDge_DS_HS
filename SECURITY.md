@@ -4,8 +4,8 @@
 
 | Version | Support |
 | --- | --- |
-| 0.1.1 | Security fixes for confirmed extension-owned issues |
-| < 0.1.1 | Unsupported |
+| 0.1.2 | Security fixes for confirmed extension-owned issues |
+| < 0.1.2 | Unsupported |
 
 DeepSeek Harness 仍处于 developer preview。上游协议或运行时问题会先确认影响范围，再决定固定新版本、增加缓解措施或记录为上游限制。
 
