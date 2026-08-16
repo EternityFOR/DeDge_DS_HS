@@ -12,6 +12,7 @@ import type { RuntimeResolver } from './bundled-runtime.js'
 import { renderRuntimeOverlay } from './overlay.js'
 import { terminateProcessTree } from './process-tree.js'
 import type { RuntimeLaunch, RuntimeState } from './types.js'
+import { clearGatewayLease, defaultGatewayLeasePath, writeGatewayLease } from './gateway-lease.js'
 import { checkWindowsCompatibility, describeWindowsExitCode } from './windows-compat.js'
 
 const URL_PATTERN = /dsh web:\s+(http:\/\/127\.0\.0\.1:\d+)/u
@@ -23,6 +24,7 @@ export class RuntimeManager implements vscode.Disposable {
   private startTask: Promise<string> | undefined
   private stopTask: Promise<void> | undefined
   private launchIdentity: string | undefined
+  private readonly gatewayLease = defaultGatewayLeasePath()
   private disposed = false
 
   readonly onDidChangeState = this.changed.event
@@ -157,6 +159,9 @@ export class RuntimeManager implements vscode.Disposable {
       child.once('error', error => settle(error))
       child.once('exit', (code, signal) => {
         if (this.child === child) this.child = undefined
+        if (child.pid !== undefined) {
+          void clearGatewayLease(this.gatewayLease, child.pid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
+        }
         const windowsDetail = describeWindowsExitCode(code)
         const message = `Harness exited (code=${String(code)}, signal=${String(signal)}).${windowsDetail === undefined ? '' : ` ${windowsDetail}`}`
         if (!settled) settle(new Error(message))
@@ -169,6 +174,10 @@ export class RuntimeManager implements vscode.Disposable {
 
     try {
       const url = await ready
+      if (child.pid !== undefined) {
+        await writeGatewayLease(this.gatewayLease, { url, pid: child.pid, version: launch.version, workspace })
+          .catch(error => this.logger.error('Failed to publish the Harness gateway lease', error))
+      }
       this.setState({ phase: 'ready', version: launch.version, url, ...(child.pid === undefined ? {} : { pid: child.pid }) })
       return url
     } catch (error) {
@@ -183,11 +192,17 @@ export class RuntimeManager implements vscode.Disposable {
     this.child = undefined
     this.launchIdentity = undefined
     if (child === undefined) {
+      if (this.stateValue.pid !== undefined) {
+        await clearGatewayLease(this.gatewayLease, this.stateValue.pid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
+      }
       this.setState({ phase: 'idle' })
       return
     }
     this.setState({ phase: 'stopping', ...(this.stateValue.version === undefined ? {} : { version: this.stateValue.version }) })
     await terminateProcessTree(child).catch(error => this.logger.error('Failed to terminate the Harness process tree', error))
+    if (child.pid !== undefined) {
+      await clearGatewayLease(this.gatewayLease, child.pid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
+    }
     this.setState({ phase: 'idle' })
   }
 

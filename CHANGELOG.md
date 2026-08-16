@@ -4,7 +4,9 @@
 
 ## [Unreleased]
 
-- 暂无未发布变更。
+- 发布本机 loopback Gateway lease，供 DeDge Orbit 在不读取 API Key 的前提下连接现有 DeepSeek Harness 运行时。
+- Runtime 停止或异常退出时按进程所有权清理 lease，避免多窗口清理掉其他仍存活实例的地址。
+- 平台运行时打包会整体移除 `.bin` 开发 shim，避免无效 Node 启动器进入 VSIX。
 
 ## [0.1.1] - 2026-08-16
 

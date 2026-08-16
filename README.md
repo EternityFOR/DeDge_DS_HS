@@ -18,6 +18,7 @@
 - 只读载入本机 Codex、Claude Code 会话，并通过隔离文本交接在三个平台之间继续工作。
 - Windows 进程使用参数数组和 `shell: false` 启动，避免把路径、参数或提示词交给 PowerShell/cmd 二次解析。
 - API Key 只保存在 VS Code `SecretStorage`；Gateway 只监听随机的 `127.0.0.1` 端口。
+- Runtime 就绪时发布不含凭据的本机 lease，供 DeDge Orbit 复用同一个 Gateway；退出时只清理属于当前进程的 lease。
 
 ## 安装
 
@@ -48,6 +49,14 @@ Remote SSH、WSL 和 Dev Container 使用远端 extension host 的操作系统�
 5. 打开活动栏中的 **DeepSeek Harness**，新建会话并发送消息。
 
 默认权限为 `workspace-write`：允许在工作区和临时目录内写入，超出边界时要求审批。`danger-full-access` 会显著扩大代理权限，只应在明确理解风险时使用。
+
+## DeDge Orbit 接入
+
+扩展运行时就绪后会原子写入
+`%LOCALAPPDATA%\DeDge\DeepSeekHarness\gateway-lease.json`。文件只包含
+`127.0.0.1` Gateway 地址、进程号、运行时版本和工作区路径，不包含 API Key
+或其他凭据。Orbit Bridge 会校验 loopback 地址和进程存活状态后连接；扩展停止、
+异常退出或被新实例替换时，陈旧 lease 不会被当作在线运行时。
 
 ## 日常工作流
 
