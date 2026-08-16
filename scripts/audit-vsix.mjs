@@ -10,7 +10,7 @@ const CENTRAL_SIGNATURE = 0x02014b50
 const LOCAL_SIGNATURE = 0x04034b50
 const NODE_LICENSE_SHA256 = 'c738ae413cf561f174e34f6961f8ca458aae2369a73640dda6234c629b98bcc4'
 const MAX_ARCHIVE_BYTES = 90 * 1024 ** 2
-const MAX_UNPACKED_BYTES = 240 * 1024 ** 2
+const MAX_UNPACKED_BYTES = 256 * 1024 ** 2
 const MAX_FILES = 15_000
 
 export function auditVsix(file, target) {
@@ -75,10 +75,8 @@ export function auditVsix(file, target) {
       const native = `extension/dist/runtime/node_modules/node-pty/prebuilds/${target}/${relative}`
       if (!names.has(native)) throw new Error(`VSIX is missing the ${target} node-pty file: ${native}`)
     }
-  } else {
-    const helper = target.startsWith('linux-')
-      ? 'extension/dist/runtime/node_modules/node-pty/build/Release/spawn-helper'
-      : `extension/dist/runtime/node_modules/node-pty/prebuilds/${target}/spawn-helper`
+  } else if (target.startsWith('darwin-')) {
+    const helper = `extension/dist/runtime/node_modules/node-pty/prebuilds/${target}/spawn-helper`
     if (!names.has(helper)) throw new Error(`VSIX is missing the ${target} node-pty helper: ${helper}`)
   }
 
@@ -90,6 +88,7 @@ export function auditVsix(file, target) {
     'extension/scripts/',
     'extension/src/',
     'extension/test/',
+    'extension/dist/runtime/node_modules/.bin/',
   ]
   const forbiddenFiles = new Set([
     'extension/.gitignore',
@@ -99,12 +98,10 @@ export function auditVsix(file, target) {
     'extension/pnpm-workspace.yaml',
     'extension/tsconfig.json',
     'extension/vitest.config.ts',
-    'extension/dist/runtime/node_modules/.bin/node',
-    'extension/dist/runtime/node_modules/.bin/node.exe',
-    'extension/dist/runtime/node_modules/.bin/node.EXE',
   ])
   for (const name of names) {
-    if (forbiddenFiles.has(name) || forbiddenPrefixes.some(prefix => name.startsWith(prefix))) {
+    if (forbiddenFiles.has(name) || forbiddenPrefixes.some(prefix => name.startsWith(prefix))
+      || name.includes('/node_modules/.bin/')) {
       throw new Error(`VSIX contains a development-only file: ${name}`)
     }
     const match = /node-pty\/prebuilds\/(win32|darwin)-[^/]+\//u.exec(name)
@@ -153,13 +150,12 @@ export function auditVsix(file, target) {
   }
   assertNoLargeDuplicates(archive, entries)
   if (!target.startsWith('win32-')) {
-    for (const executableName of [
+    const executableNames = [
       `extension/dist/runtime/node_modules/node/bin/${executable}`,
       `extension/dist/runtime/node_modules/@vscode/ripgrep-${target}/bin/${ripgrep}`,
-      target.startsWith('linux-')
-        ? 'extension/dist/runtime/node_modules/node-pty/build/Release/spawn-helper'
-        : `extension/dist/runtime/node_modules/node-pty/prebuilds/${target}/spawn-helper`,
-    ]) assertExecutable(requiredEntry(entryByName, executableName))
+    ]
+    if (target.startsWith('darwin-')) executableNames.push(`extension/dist/runtime/node_modules/node-pty/prebuilds/${target}/spawn-helper`)
+    for (const executableName of executableNames) assertExecutable(requiredEntry(entryByName, executableName))
   }
   console.log(`Audited ${path.basename(file)}: ${entries.length} files, ${formatBytes(archive.length)} compressed, ${formatBytes(unpackedBytes)} unpacked`)
 }

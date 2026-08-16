@@ -1,5 +1,7 @@
 # DeDge DeepSeek Harness for VS Code
 
+[English](README.en.md)
+
 一个自包含的 DeepSeek Harness VS Code 工作台。扩展把固定版本的 Harness、Node.js 和 pnpm 一起放进平台专用 VSIX，安装后不会再运行 `npm install`、`npx`、`pip` 或 `git clone`，也不依赖用户的全局 Node、默认 shell 或 PowerShell profile。
 
 [Marketplace](https://marketplace.visualstudio.com/items?itemName=diractive-edge.dedge-deepseek-harness-vscode) · [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) · [Changelog](CHANGELOG.md) · [隐私](PRIVACY.md) · [安全](SECURITY.md) · [支持](SUPPORT.md)

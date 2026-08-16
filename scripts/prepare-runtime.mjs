@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { accessSync, constants, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -75,9 +75,7 @@ if (pnpmVersion !== expectedPnpm) throw new Error(`pnpm executable mismatch: exp
 for (const metadata of ['.modules.yaml', '.package-map.json', '.pnpm-workspace-state-v1.json', '.pnpm']) {
   rmSync(path.join(runtimeModules, metadata), { recursive: true, force: true })
 }
-for (const nodeShim of ['node', 'node.exe', 'node.cmd', 'node.ps1']) {
-  rmSync(path.join(runtimeModules, '.bin', nodeShim), { force: true })
-}
+removeCommandShimDirectories(runtimeModules)
 copyFileSync(nodeLicense, path.join(runtimeModules, 'node', 'LICENSE'))
 const nodePtyPrebuilds = path.join(runtimeModules, 'node-pty', 'prebuilds')
 const nodePtyTarget = process.platform === 'win32' || process.platform === 'darwin'
@@ -130,6 +128,17 @@ writeFileSync(path.join(root, 'dist', 'runtime-manifest.json'), `${JSON.stringif
 }, null, 2)}\n`)
 console.log(`Validated bundled runtime ${dshVersion} / ${nodeVersion} / pnpm ${pnpmVersion} for ${platformKey}`)
 
+
+function removeCommandShimDirectories(directory) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const candidate = path.join(directory, entry.name)
+    if (entry.name === '.bin') {
+      rmSync(candidate, { recursive: true, force: true })
+      continue
+    }
+    if (entry.isDirectory()) removeCommandShimDirectories(candidate)
+  }
+}
 function cleanupStage(directory) {
   try {
     rmSync(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 })
