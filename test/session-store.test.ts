@@ -41,6 +41,36 @@ describe('session event projection', () => {
     ])
   })
 
+  it('groups inserted prompts and intermediate work inside a completed task turn', () => {
+    const messages = projectMessages([
+      entry('user/message', 1, { source: { kind: 'user' }, content: [{ type: 'text', text: 'Start task' }] }),
+      entry('turn/start', 2, {}),
+      entry('assistant/message', 3, { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'Working' }] } }),
+      entry('user/message', 4, { source: { kind: 'user' }, content: [{ type: 'text', text: 'Steer this' }] }),
+      entry('tool/call', 5, { callId: 'call-1', name: 'read_file', arguments: {} }),
+      entry('assistant/message', 6, { turn: 1, step: 2, message: { content: [{ type: 'text', text: 'Final summary' }] } }),
+      entry('turn/end', 7, { reason: { kind: 'complete' } }),
+    ])
+
+    expect(messages.map(message => [message.text, message.taskId, message.taskComplete])).toEqual([
+      ['Start task', 'turn:2', true],
+      ['Working', 'turn:2', true],
+      ['Steer this', 'turn:2', true],
+      ['{}', 'turn:2', true],
+      ['Final summary', 'turn:2', true],
+    ])
+  })
+
+  it('bounds verbose reasoning in workbench snapshots while retaining its original length', () => {
+    const reasoning = 'x'.repeat(80_000)
+    const messages = projectMessages([
+      entry('assistant/message', 1, { turn: 1, step: 1, message: { content: [{ type: 'reasoning', text: reasoning }] } }),
+    ])
+    expect(messages[0]?.text.length).toBeLessThan(70_000)
+    expect(messages[0]?.textLength).toBe(reasoning.length)
+    expect(messages[0]?.text).toContain('complete event remains in Harness session data')
+  })
+
   it('projects imported context as attachment metadata instead of a full user transcript', () => {
     const messages = projectMessages([
       entry('user/message', 1, { content: [{

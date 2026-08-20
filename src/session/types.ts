@@ -13,11 +13,14 @@ export interface WorkbenchMessage {
   readonly id: string
   readonly role: 'user' | 'assistant' | 'reasoning' | 'tool' | 'system'
   readonly text: string
+  readonly textLength?: number
   readonly attachments?: readonly WorkbenchMessageAttachment[]
   readonly title?: string
   readonly status?: 'streaming' | 'complete' | 'error'
   readonly seq?: number
   readonly time?: number
+  readonly taskId?: string
+  readonly taskComplete?: boolean
 }
 
 export interface WorkbenchSession {

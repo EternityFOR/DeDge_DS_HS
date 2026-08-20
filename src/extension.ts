@@ -163,6 +163,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     handoffCurrentSession: () => handoff.handoffCurrentHarness(),
     configureContextWindow,
     openSettings,
+    ensureVisionConfigured: () => ensureVisionConfigured(),
   })
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 20)
   status.name = 'DeepSeek Harness'
@@ -244,6 +245,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (value === undefined) return
     if (value.trim() !== '') await credentials.setVisionApiKey(value.trim())
     void vscode.window.showInformationMessage('Vision API key stored in SecretStorage. Attached images will be described before sending.')
+  }
+  async function ensureVisionConfigured(): Promise<boolean> {
+    const current = configuration.get()
+    let key = await credentials.getVisionApiKey()
+    if (key === undefined || key.trim() === '') {
+      const choice = await vscode.window.showWarningMessage(
+        'Configure a vision API key before pasting or attaching an image.',
+        'Configure Vision Key',
+        'Cancel',
+      )
+      if (choice !== 'Configure Vision Key') return false
+      await setVisionApiKey()
+      key = await credentials.getVisionApiKey()
+    }
+    if (key === undefined || key.trim() === '') return false
+    if (current.visionBaseUrl.trim() === '' || current.visionModel.trim() === '') {
+      const choice = await vscode.window.showWarningMessage(
+        'Configure a vision endpoint and model before pasting or attaching an image.',
+        'Open Vision Settings',
+        'Cancel',
+      )
+      if (choice !== 'Open Vision Settings') return false
+      await vscode.commands.executeCommand('workbench.action.openSettings', 'dedgeDeepSeekHarness.vision')
+      return false
+    }
+    return true
   }
   const clearVisionApiKey = async (): Promise<void> => {
     await credentials.clearVisionApiKey()

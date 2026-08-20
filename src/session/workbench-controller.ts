@@ -130,11 +130,11 @@ export class WorkbenchController implements vscode.Disposable {
     if (this.store.snapshot().phase !== 'connected' || this.gateway === undefined) await this.start()
   }
 
-  async newSession(): Promise<void> {
+  async newSession(requestedPreset?: string): Promise<void> {
     await this.ensureRuntimeOnly()
     const gateway = this.requireGateway()
     if (this.store.snapshot().presetCatalog === undefined) await this.refreshPresetCatalog(gateway)
-    const preset = presetForNewSession(this.configuration.get().agentPreset, this.store.snapshot().presetCatalog)
+    const preset = presetForNewSession(requestedPreset ?? this.configuration.get().agentPreset, this.store.snapshot().presetCatalog)
     const created = await gateway.createSession(workspaceDirectory(), preset)
     this.store.addSession({
       sessionId: created.sessionId,
@@ -144,6 +144,32 @@ export class WorkbenchController implements vscode.Disposable {
       ...(created.agentPreset === undefined ? {} : { agentPreset: created.agentPreset }),
     })
     await this.selectSession(created.sessionId)
+  }
+
+  async continueWithPreset(preset: string): Promise<ContextAttachment> {
+    const snapshot = this.store.snapshot()
+    const active = snapshot.sessions.find(item => item.id === snapshot.activeSessionId)
+    if (active === undefined || active.blank) throw new Error('The current session does not need a preset handoff.')
+    if (active.running) throw new Error('Stop the current response before continuing with another Agent Preset.')
+    if (active.operation !== undefined) throw new Error('Wait for the current session operation to finish.')
+
+    const transcript = snapshot.messages
+      .filter(message => message.role === 'user' || message.role === 'assistant')
+      .map(message => `${message.role === 'user' ? 'User' : 'Assistant'}:\n${message.text}`)
+      .join('\n\n')
+    const maxBytes = this.configuration.get().handoffMaxBytes
+    const bytes = Buffer.from(transcript, 'utf8')
+    const bounded = bytes.byteLength <= maxBytes
+      ? transcript
+      : `[Earlier conversation omitted]\n\n${bytes.subarray(bytes.byteLength - maxBytes).toString('utf8').replace(/^\uFFFD+/u, '')}`
+    const sourceTitle = active.title
+    await this.newSession(preset)
+    await this.configuration.update('agentPreset', preset)
+    this.publish()
+    return this.attachHandoff(
+      `Preset handoff from ${sourceTitle}.txt`,
+      `Continue this task in the ${preset} Agent Preset. This is an isolated text handoff; reasoning, tool state, and the source session are unchanged.\n\n${bounded}`,
+    )
   }
 
   async selectSession(sessionId: string): Promise<void> {
@@ -165,6 +191,8 @@ export class WorkbenchController implements vscode.Disposable {
   async send(text: string, attachments: readonly ContextAttachment[] = [], mode: 'queue' | 'steer' = 'queue'): Promise<void> {
     const normalized = text.trim()
     if (normalized === '' && attachments.length === 0) return
+    await this.ensureStarted()
+    if (this.store.snapshot().activeSessionId === undefined) await this.newSession()
     const snapshot = this.store.snapshot()
     const unavailable = promptUnavailableReason(snapshot)
     if (unavailable !== undefined) throw new Error(unavailable)

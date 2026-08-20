@@ -4,7 +4,6 @@ import {
   Check,
   ChevronDown,
   ChevronsDown,
-  ChevronsUp,
   createElement as lucideCreateElement,
   Diff,
   Ellipsis,
@@ -39,7 +38,6 @@ const iconComponents = {
   'check': Check,
   'chevron-down': ChevronDown,
   'chevrons-down': ChevronsDown,
-  'chevrons-up': ChevronsUp,
   'fold-vertical': FoldVertical,
   'diff': Diff,
   'ellipsis': Ellipsis,
@@ -60,6 +58,7 @@ const iconComponents = {
 } as const
 type IconName = keyof typeof iconComponents
 const contextCircumference = 2 * Math.PI * 5.5
+const maxStreamingChars = 32_768
 
 let state: WorkbenchSnapshot | undefined
 let attachments: readonly ContextAttachment[] = []
@@ -71,7 +70,7 @@ let pasteFileThreshold = 8_192
 let scrollBottomButton: HTMLButtonElement | undefined
 let stickToBottom = true
 const collapsedMessages = new Set<string>()
-const turnHidden = new Set<string>()
+const expandedTasks = new Set<string>()
 let compactThinking = true
 let skillCatalog: readonly SkillSummary[] = []
 let skillPopoverVisible = false
@@ -94,6 +93,7 @@ const messageElements = new Map<string, HTMLElement>()
 const messageSignatures = new Map<string, string>()
 const autoOpenedDetails = new Set<string>()
 const userToggledDetails = new Set<string>()
+const taskFoldElements = new Map<string, HTMLButtonElement>()
 
 marked.setOptions({ gfm: true, breaks: false })
 
@@ -252,6 +252,10 @@ elements.prompt.addEventListener('input', () => {
   resizePrompt()
   vscode.setState({ draft: elements.prompt.value })
 })
+elements.prompt.addEventListener('pointerdown', event => {
+  const rect = elements.prompt.getBoundingClientRect()
+  if (event.clientX >= rect.right - 24 && event.clientY >= rect.bottom - 24) elements.prompt.dataset.manualResize = 'true'
+})
 elements.prompt.addEventListener('paste', event => { void handlePaste(event) })
 elements.composerBox.addEventListener('dragover', event => {
   if (!hasAttachableData(event.dataTransfer)) return
@@ -381,15 +385,16 @@ function renderControls(snapshot: WorkbenchSnapshot): void {
 }
 
 function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
+  const visibleSessions = snapshot.sessions.filter(session => !session.blank)
   const signature = JSON.stringify({
     activeSessionId: snapshot.activeSessionId,
-    sessions: snapshot.sessions.map(session => [session.id, session.title, session.running, session.operation]),
+    sessions: visibleSessions.map(session => [session.id, session.title, session.running, session.operation]),
   })
   if (signature === sessionTabsSignature) return
   sessionTabsSignature = signature
   const scrollLeft = elements.sessionTabs.scrollLeft
   const activeId = snapshot.activeSessionId
-  const nodes = snapshot.sessions.map(session => {
+  const nodes = visibleSessions.map(session => {
     const wrapper = document.createElement('div')
     wrapper.className = 'session-tab-wrap'
     wrapper.setAttribute('role', 'presentation')
@@ -511,20 +516,22 @@ function renderReasoningOptions(snapshot: WorkbenchSnapshot | undefined): void {
 function renderPresetOptions(snapshot: WorkbenchSnapshot | undefined): void {
   if (snapshot === undefined) return
   const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
-  const locked = active?.blank !== true
+  const unavailable = active?.running === true || active?.operation !== undefined
   const presets = snapshot.presetCatalog?.presets?.filter(preset => preset.broken === undefined) ?? []
   const options = presets.map(preset => menuOption({
     label: preset.name ?? preset.id,
-    ...(preset.description === undefined ? {} : { description: preset.description }),
+    ...(preset.description === undefined
+      ? (active?.blank === false && preset.id !== snapshot.agentPreset ? { description: 'Continue in a new isolated session' } : {})
+      : { description: active?.blank === false && preset.id !== snapshot.agentPreset ? `${preset.description} · Continue in a new session` : preset.description }),
     selected: preset.id === snapshot.agentPreset,
-    disabled: locked,
+    disabled: unavailable,
     handler: () => {
       post({ type: 'selectPreset', preset: preset.id })
       closePopovers()
     },
   }))
   if (!presets.some(preset => preset.id === snapshot.agentPreset)) {
-    options.unshift(menuOption({ label: snapshot.agentPreset, selected: true, disabled: locked, handler: () => undefined }))
+    options.unshift(menuOption({ label: snapshot.agentPreset, selected: true, disabled: unavailable, handler: () => undefined }))
   }
   elements.presetOptions.replaceChildren(...options)
 }
@@ -571,7 +578,8 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     autoOpenedDetails.clear()
     userToggledDetails.clear()
     collapsedMessages.clear()
-    turnHidden.clear()
+    expandedTasks.clear()
+    taskFoldElements.clear()
     stickToBottom = true
     emptyNode = undefined
     elements.conversation.replaceChildren()
@@ -598,20 +606,8 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
 
   const messages = snapshot.messages ?? []
   const seen = new Set<string>()
-  const turnCounts = new Map<string, number>()
-  let countingTurn: string | undefined
-  for (const message of messages) {
-    if (message.role === 'user') {
-      countingTurn = message.id
-      turnCounts.set(message.id, turnCounts.get(message.id) ?? 0)
-    } else if (countingTurn !== undefined) {
-      turnCounts.set(countingTurn, (turnCounts.get(countingTurn) ?? 0) + 1)
-    }
-  }
-  let currentTurn: string | undefined
   let streaming = false
   for (const message of messages) {
-    if (message.role === 'user') currentTurn = message.id
     seen.add(message.id)
     const signature = messageSignature(message)
     let node = messageElements.get(message.id)
@@ -624,9 +620,6 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
       messageSignatures.set(message.id, signature)
       updateMessage(node, message)
     }
-    const owner = currentTurn === message.id || message.role !== 'user' ? currentTurn : undefined
-    node.classList.toggle('turn-hidden', owner !== undefined && message.role !== 'user' && turnHidden.has(owner))
-    if (message.role === 'user') updateTurnBadge(node, message.id, turnCounts.get(message.id) ?? 0)
     if (message.status === 'streaming') streaming = true
   }
   for (const [id, node] of messageElements) {
@@ -635,6 +628,7 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     messageElements.delete(id)
     messageSignatures.delete(id)
   }
+  renderTaskFolds(messages)
 
   const approvals = snapshot.approvals
   const questions = snapshot.questions
@@ -643,18 +637,8 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     if (emptyNode === undefined) {
       emptyNode = document.createElement('div')
       emptyNode.className = 'empty'
-      const title = document.createElement('div')
-      title.className = 'empty-title'
-      const start = document.createElement('button')
-      start.type = 'button'
-      start.className = 'command primary'
-      start.textContent = 'Start new session'
-      start.addEventListener('click', () => post({ type: 'newSession' }))
-      emptyNode.append(title, start)
       elements.conversation.insertBefore(emptyNode, pendingAnchor)
     }
-    const title = emptyNode.querySelector('.empty-title')
-    if (title !== null) title.textContent = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)?.title ?? `DeepSeek Harness: ${snapshot.phase}`
   } else if (emptyNode !== undefined) {
     emptyNode.remove()
     emptyNode = undefined
@@ -671,6 +655,59 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     conversation.scrollTop = Math.max(0, conversation.scrollHeight - conversation.clientHeight)
   }
   updateScrollBottomButton()
+}
+
+function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
+  const groups = new Map<string, WorkbenchMessage[]>()
+  for (const message of messages) {
+    if (message.taskId === undefined || message.taskComplete !== true) continue
+    const items = groups.get(message.taskId) ?? []
+    items.push(message)
+    groups.set(message.taskId, items)
+  }
+  for (const [taskId, node] of taskFoldElements) {
+    if (groups.has(taskId)) continue
+    node.remove()
+    taskFoldElements.delete(taskId)
+  }
+  for (const [taskId, items] of groups) {
+    const first = items.find(item => item.role === 'user') ?? items[0]
+    const last = [...items].reverse().find(item => item.role === 'assistant' || item.role === 'system') ?? items.at(-1)
+    if (first === undefined || last === undefined || first.id === last.id) continue
+    const middle = items.filter(item => item.id !== first.id && item.id !== last.id)
+    const collapsed = compactThinking && !expandedTasks.has(taskId) && middle.length > 0
+    for (const item of items) messageElements.get(item.id)?.classList.toggle('task-middle-hidden', collapsed && middle.some(candidate => candidate.id === item.id))
+
+    let fold = taskFoldElements.get(taskId)
+    if (fold === undefined) {
+      fold = document.createElement('button')
+      fold.type = 'button'
+      fold.className = 'task-fold-summary'
+      fold.append(svgIcon('chevron-down'), document.createElement('span'))
+      fold.addEventListener('click', () => {
+        if (expandedTasks.has(taskId)) expandedTasks.delete(taskId)
+        else expandedTasks.add(taskId)
+        if (state !== undefined) renderConversation(state)
+      })
+      taskFoldElements.set(taskId, fold)
+    }
+    const reasoning = middle.filter(item => item.role === 'reasoning').length
+    const tools = middle.filter(item => item.role === 'tool').length
+    const inserted = middle.filter(item => item.role === 'user').length
+    const details = [
+      `${String(middle.length)} intermediate ${middle.length === 1 ? 'item' : 'items'}`,
+      reasoning === 0 ? '' : `${String(reasoning)} reasoning`,
+      tools === 0 ? '' : `${String(tools)} tools`,
+      inserted === 0 ? '' : `${String(inserted)} inserted ${inserted === 1 ? 'message' : 'messages'}`,
+    ].filter(Boolean).join(' · ')
+    const label = fold.querySelector('span')
+    if (label !== null) label.textContent = `${collapsed ? 'Show' : 'Hide'} ${details}`
+    fold.title = collapsed ? 'Show the intermediate work in this completed task' : 'Hide the intermediate work in this completed task'
+    fold.setAttribute('aria-expanded', String(!collapsed))
+    fold.querySelector('svg')?.classList.toggle('collapsed', collapsed)
+    const firstNode = messageElements.get(first.id)
+    if (firstNode !== undefined && fold.previousElementSibling !== firstNode) firstNode.after(fold)
+  }
 }
 
 function updateSteerNotice(snapshot: WorkbenchSnapshot): void {
@@ -696,36 +733,15 @@ function applyCompactThinkingButton(): void {
   elements.compactThinkingButton.classList.toggle('active', compactThinking)
   elements.compactThinkingButton.setAttribute('aria-pressed', String(compactThinking))
   elements.compactThinkingButton.title = compactThinking
-    ? 'Thinking and tool details are collapsed by default; click to expand them while streaming'
-    : 'Collapse thinking and tool details by default'
-}
-
-function updateTurnBadge(node: HTMLElement, userMessageId: string, count: number): void {
-  if (count === 0) return
-  const collapsed = turnHidden.has(userMessageId)
-  let badge = node.querySelector<HTMLButtonElement>('.turn-badge')
-  if (collapsed) {
-    if (badge === null) {
-      badge = document.createElement('button')
-      badge.type = 'button'
-      badge.className = 'turn-badge'
-      badge.title = 'Show the replies of this turn'
-      badge.addEventListener('click', () => {
-        turnHidden.delete(userMessageId)
-        if (state !== undefined) renderConversation(state)
-      })
-      node.querySelector('.message-head')?.append(badge)
-    }
-    badge.textContent = `${String(count)} ${count === 1 ? 'reply' : 'replies'} hidden`
-  } else {
-    badge?.remove()
-  }
+    ? 'Compact completed tasks and collapse thinking/tool details'
+    : 'Show completed task details and expanded live thinking'
+  elements.compactThinkingButton.setAttribute('aria-label', elements.compactThinkingButton.title)
 }
 
 function detailSummaryText(message: WorkbenchMessage): string {
   const base = message.role === 'reasoning' ? 'Reasoning' : message.title ?? 'Tool'
   if (!compactThinking || message.text === '') return base
-  return `${base} · ${formatChars(message.text.length)}`
+  return `${base} · ${formatChars(message.textLength ?? message.text.length)}`
 }
 
 function formatChars(value: number): string {
@@ -760,7 +776,7 @@ function pendingAreaSignature(approvals: WorkbenchSnapshot['approvals'], questio
 }
 
 function messageSignature(message: WorkbenchMessage): string {
-  return `${message.id}\u0000${message.seq ?? ''}\u0000${message.status ?? ''}\u0000${message.text.length}\u0000${message.title ?? ''}\u0000${message.attachments === undefined ? '' : message.attachments.map(attachment => attachment.kind + attachment.label).join(',')}`
+  return `${message.id}\u0000${message.seq ?? ''}\u0000${message.status ?? ''}\u0000${message.text.length}\u0000${message.textLength ?? ''}\u0000${message.title ?? ''}\u0000${message.attachments === undefined ? '' : message.attachments.map(attachment => attachment.kind + attachment.label).join(',')}`
 }
 
 function renderMessage(message: WorkbenchMessage): HTMLElement {
@@ -780,11 +796,19 @@ function renderMessage(message: WorkbenchMessage): HTMLElement {
     summary.append(summaryLabel, chevron)
     const body = document.createElement('div')
     body.className = 'message-body'
-    body.append(renderMessageBody(message))
+    if (details.open) body.append(renderMessageBody(message))
     details.append(summary, body)
     summary.addEventListener('click', () => { userToggledDetails.add(message.id) })
     summary.addEventListener('keydown', event => {
       if (event.key === 'Enter' || event.key === ' ') userToggledDetails.add(message.id)
+    })
+    details.addEventListener('toggle', () => {
+      if (!details.open) {
+        body.replaceChildren()
+        return
+      }
+      const latest = state?.messages.find(item => item.id === message.id)
+      if (latest !== undefined) body.replaceChildren(renderMessageBody(latest))
     })
     return details
   }
@@ -808,7 +832,10 @@ function updateMessage(node: HTMLElement, message: WorkbenchMessage): void {
     const summaryLabel = summary?.querySelector('.summary-label')
     if (summaryLabel !== undefined && summaryLabel !== null) summaryLabel.textContent = detailSummaryText(message)
     const body = details.querySelector('.message-body')
-    if (body !== null) body.replaceChildren(renderMessageBody(message))
+    if (body !== null) {
+      if (details.open) body.replaceChildren(renderMessageBody(message))
+      else body.replaceChildren()
+    }
     if (message.status === 'streaming') {
       if (!userToggledDetails.has(message.id) && !compactThinking) {
         details.open = true
@@ -849,20 +876,6 @@ function buildMessageHead(message: WorkbenchMessage): { head: HTMLDivElement; to
   label.className = 'message-role-label'
   label.textContent = roleLabel(message.role)
   head.append(toggle, label)
-  if (message.role === 'user') {
-    const turnToggle = document.createElement('button')
-    turnToggle.type = 'button'
-    turnToggle.className = 'collapse-toggle turn-toggle'
-    turnToggle.title = 'Collapse or expand this turn'
-    turnToggle.setAttribute('aria-label', 'Collapse or expand this turn')
-    turnToggle.append(svgIcon('chevrons-up'))
-    turnToggle.addEventListener('click', () => {
-      if (turnHidden.has(message.id)) turnHidden.delete(message.id)
-      else turnHidden.add(message.id)
-      if (state !== undefined) renderConversation(state)
-    })
-    head.append(turnToggle)
-  }
   return { head, toggle }
 }
 
@@ -938,12 +951,17 @@ function renderMessageBody(message: WorkbenchMessage): Node {
   if (message.status === 'streaming') {
     const stream = document.createElement('div')
     stream.className = 'streaming-text'
-    stream.textContent = message.text
+    stream.textContent = streamingText(message.text)
     return stream
   }
   const content = document.createElement('div')
   content.innerHTML = markdown(message.text)
   return content
+}
+
+function streamingText(value: string): string {
+  if (value.length <= maxStreamingChars) return value
+  return `[Earlier streaming output hidden to keep the workbench responsive; the complete event remains in Harness session data.]\n\n${value.slice(-maxStreamingChars)}`
 }
 
 function renderQuestionBatch(questions: readonly WorkbenchSnapshot['questions'][number][]): HTMLElement {
@@ -1394,8 +1412,9 @@ function stripTrailingZero(value: number): string {
 }
 
 function resizePrompt(): void {
+  if (elements.prompt.dataset.manualResize === 'true') return
   elements.prompt.style.height = 'auto'
-  elements.prompt.style.height = `${Math.min(240, Math.max(88, elements.prompt.scrollHeight))}px`
+  elements.prompt.style.height = `${Math.min(480, Math.max(88, elements.prompt.scrollHeight))}px`
 }
 
 interface PopoverBinding {

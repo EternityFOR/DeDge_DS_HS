@@ -5,7 +5,8 @@ export function promptUnavailableReason(snapshot: WorkbenchSnapshot): string | u
     return 'Wait for the Harness runtime to finish connecting before sending.'
   }
   const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
-  if (active === undefined) return 'Wait for an active Harness session before sending.'
+  // Sending without an active session creates one with the configured defaults.
+  if (active === undefined) return undefined
   if (active.operation !== undefined) return 'Wait for the current session operation to finish before sending.'
   if (snapshot.permissionChanging) return 'Wait for the file permission change to finish before sending.'
   if (snapshot.modelCatalog === undefined) return 'Wait for the model catalog to finish loading before sending.'

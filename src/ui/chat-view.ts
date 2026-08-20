@@ -21,6 +21,7 @@ export interface ChatViewActions {
   readonly handoffCurrentSession: () => Promise<StagedHandoff | undefined>
   readonly configureContextWindow: () => Promise<void>
   readonly openSettings: () => Promise<void>
+  readonly ensureVisionConfigured: () => Promise<boolean>
 }
 
 type SessionPickerAction = 'load-codex' | 'load-claude' | 'handoff-current'
@@ -293,6 +294,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       for (const file of message.files) this.upsertAttachment(await this.controller.attachTextFile(file.name, file.text))
     })
     if (message.type === 'attachImageFiles') return this.run(async () => {
+      if (!await this.actions.ensureVisionConfigured()) return
       for (const file of message.files) this.upsertAttachment(await this.controller.attachImageData(file.name, file.dataUrl))
     })
     if (message.type === 'listSkills') return this.run(async () => {
@@ -310,7 +312,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (message.type === 'approve') return this.run(() => this.controller.approve(message.approvalId, message.outcome))
     if (message.type === 'answerQuestions') return this.run(() => this.controller.answerQuestions(message.rpcId, message.answers))
     if (message.type === 'selectModel') return this.run(() => this.controller.selectModel(message.provider, message.model, message.reasoningEffort))
-    if (message.type === 'selectPreset') return this.run(() => this.controller.selectPreset(message.preset))
+    if (message.type === 'selectPreset') return this.run(async () => {
+      const snapshot = this.controller.snapshot()
+      const active = snapshot.sessions.find(item => item.id === snapshot.activeSessionId)
+      if (active?.blank !== false) return this.controller.selectPreset(message.preset)
+      if (message.preset === snapshot.agentPreset) return
+      const selected = await vscode.window.showWarningMessage(
+        'DeepSeek Harness fixes the Agent Preset after the first prompt because it defines tools, system instructions, and compaction behavior. Continue in a new isolated session with a bounded user/assistant transcript?',
+        { modal: true },
+        'Continue in New Session',
+      )
+      if (selected !== 'Continue in New Session') return
+      this.upsertAttachment(await this.controller.continueWithPreset(message.preset))
+    })
     if (message.type === 'selectPermission') return this.run(async () => {
       if (message.permission === 'danger-full-access') {
         const confirmed = await vscode.window.showWarningMessage(
@@ -366,7 +380,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       this.statePostScheduled = false
       this.statePostTimer = undefined
       void this.restorePendingHandoff().then(() => this.postState())
-    }, 30)
+    }, 120)
   }
 
   private postState(): Promise<boolean> {
@@ -561,12 +575,14 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .steer-notice button { display: grid; place-items: center; flex: 0 0 16px; width: 16px; height: 16px; padding: 0; background: transparent; color: inherit; cursor: pointer; border-radius: 3px; }
     .steer-notice button:hover { background: var(--vscode-toolbar-hoverBackground); }
     .steer-notice svg { width: 12px; height: 12px; }
-    .turn-hidden { display: none !important; }
-    .turn-badge { display: inline-flex; align-items: center; margin-left: 6px; padding: 1px 6px; border: 1px solid var(--vscode-panel-border); border-radius: 8px; color: var(--vscode-descriptionForeground); font-size: 10px; cursor: pointer; }
-    .turn-badge:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+    .task-middle-hidden { display: none !important; }
+    .task-fold-summary { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 5px 8px; border-bottom: 1px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground); font-size: 11px; cursor: pointer; }
+    .task-fold-summary:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
+    .task-fold-summary svg { flex: 0 0 12px; width: 12px; height: 12px; }
+    .task-fold-summary span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .composer-box:focus-within { border-color: var(--vscode-focusBorder); }
     .composer-box.drop-active { border-color: var(--vscode-focusBorder); background: var(--vscode-list-hoverBackground); }
-    textarea { resize: none; min-height: 88px; max-height: 240px; width: 100%; border: 0; outline: 0; background: transparent; color: var(--vscode-input-foreground); padding: 2px; overflow-y: auto; }
+    textarea { resize: vertical; min-height: 88px; max-height: min(50vh,480px); width: 100%; border: 0; outline: 0; background: transparent; color: var(--vscode-input-foreground); padding: 2px; overflow-y: auto; }
     .composer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
     .composer-left, .composer-right { display: flex; align-items: center; gap: 3px; min-width: 0; }
     .composer-left { flex: 0 1 auto; }

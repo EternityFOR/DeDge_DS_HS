@@ -9,7 +9,7 @@ if (template === undefined) throw new Error('Could not locate the Webview HTML t
 
 const state = {
   phase: 'connected',
-  runtime: { phase: 'ready', version: '0.1.0-rc.6' },
+  runtime: { phase: 'ready', version: '0.1.0-rc.7' },
   hasApiKey: true,
   sessions: [
     { id: 'one', title: 'DeDge_DS_HS', running: false, blank: false },
@@ -26,8 +26,13 @@ const state = {
       text: 'Continue the unfinished task after checking the workspace.',
       attachments: [{ kind: 'handoff', label: 'Codex handoff - DeDge_DS_HS' }],
       status: 'complete',
+      taskId: 'turn:1',
+      taskComplete: true,
     },
-    { id: 'a1', role: 'assistant', text: 'The preview uses the production Webview markup and bundle.', status: 'complete' },
+    { id: 'r1', role: 'reasoning', text: 'Inspecting the relevant implementation and official runtime behavior.', status: 'complete', taskId: 'turn:1', taskComplete: true },
+    { id: 't1', role: 'tool', title: 'read_file', text: 'Intermediate tool output.', status: 'complete', taskId: 'turn:1', taskComplete: true },
+    { id: 'u2', role: 'user', text: 'Also keep the inserted message inside this task.', status: 'complete', taskId: 'turn:1', taskComplete: true },
+    { id: 'a1', role: 'assistant', text: 'The preview keeps the first prompt and final summary visible while folding all intermediate work.', status: 'complete', taskId: 'turn:1', taskComplete: true },
   ],
   approvals: [],
   questions: [],

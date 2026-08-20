@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-08-20
+
+### Added
+
+- 已完成任务支持任务级紧凑视图：保留首条用户消息和最终答复，中间 reasoning、工具、阶段性答复与插队消息统一折叠，并可随时展开。
+- 已开始的会话选择其他 Agent Preset 时，可确认后创建隔离的新 Preset 会话，并附带有长度上限的 user/assistant 文本交接；原会话和工具状态不变。
+
+### Changed
+
+- 空白会话不再占用顶部 tab，也不显示 `Start new session` 占位页；没有活动会话时直接发送会自动创建会话。
+- 图片在粘贴或拖入时立即检查 Vision endpoint、model 和 SecretStorage key，配置不完整时先提示配置，不再等到发送时才失败。
+- 输入框支持手动纵向调整高度；流式快照改为 120 ms 合并刷新，reasoning/工具采用惰性 DOM 和有界可视投影，避免长思考阻塞侧栏缩放。
+
+### Fixed
+
+- 内置 Harness 版本校验与实际依赖统一为官方 `0.1.0-rc.7`，不再错误提示 rc.6/rc.7 不匹配。
+
 ## [0.1.9] - 2026-08-20
 
 ### Added
@@ -147,7 +164,8 @@
 - Gateway 固定监听随机 `127.0.0.1`，子进程使用参数数组、`shell: false` 和 `windowsHide: true`。
 - 发布审计拒绝 session dump、私钥、常见 provider token、绝对本机路径、Mojibake 和开发期文件进入公开源或 VSIX。
 
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.10...HEAD
+[0.1.10]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.10
 [0.1.9]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.9
 [0.1.8]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.8
 [0.1.7]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.7

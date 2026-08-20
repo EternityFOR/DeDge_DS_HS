@@ -32,6 +32,11 @@ function snapshot(overrides: Partial<WorkbenchSnapshot> = {}): WorkbenchSnapshot
 }
 
 describe('workbench interaction readiness', () => {
+  it('allows sending without an active session so one can be created lazily', () => {
+    const { activeSessionId: _activeSessionId, ...withoutActive } = snapshot({ sessions: [] })
+    expect(promptUnavailableReason(withoutActive)).toBeUndefined()
+  })
+
   it('allows prompts and model controls only after the active session catalog is ready', () => {
     const ready = snapshot()
     expect(promptUnavailableReason(ready)).toBeUndefined()

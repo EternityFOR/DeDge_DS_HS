@@ -233,7 +233,7 @@ function questionKey(rpcId: string, questionId: string): string {
 
 export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMessage[] {
   const output: WorkbenchMessage[] = []
-  const streams = new Map<string, WorkbenchMessage>()
+  const streams = new Map<string, { id: string; role: 'assistant' | 'reasoning'; chunks: string[]; seq: number; time: number }>()
   const toolIndexes = new Map<string, number>()
 
   for (const { event } of entries) {
@@ -265,8 +265,10 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
       if ((chunk.type === 'text-delta' || chunk.type === 'reasoning-delta') && typeof chunk.text === 'string') {
         const role = chunk.type === 'text-delta' ? 'assistant' : 'reasoning'
         const key = `${String(data.turn)}:${String(data.step)}:${String(chunk.index)}:${role}`
-        const current = streams.get(key) ?? { id: `stream:${key}`, role, text: '', status: 'streaming', seq: event.seq, time: event.time }
-        streams.set(key, { ...current, text: current.text + chunk.text, seq: event.seq })
+        const current = streams.get(key) ?? { id: `stream:${key}`, role, chunks: [], seq: event.seq, time: event.time }
+        current.chunks.push(chunk.text)
+        current.seq = event.seq
+        streams.set(key, current)
       }
       continue
     }
@@ -282,10 +284,12 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
         for (const block of content) {
           if (!isRecord(block) || typeof block.type !== 'string') continue
           if ((block.type === 'text' || block.type === 'reasoning') && typeof block.text === 'string' && block.text !== '') {
+            const projected = projectVerboseText(block.text, block.type === 'reasoning' ? 65_536 : Number.MAX_SAFE_INTEGER)
             output.push({
               id: `assistant:${event.seq}:${index++}`,
               role: block.type === 'reasoning' ? 'reasoning' : 'assistant',
-              text: block.text,
+              text: projected.text,
+              ...(projected.textLength === undefined ? {} : { textLength: projected.textLength }),
               status: 'complete',
               seq: event.seq,
               time: event.time,
@@ -311,7 +315,10 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
       const at = toolIndexes.get(callId)
       if (at !== undefined) {
         const current = output[at]
-        if (current !== undefined) output[at] = { ...current, text: result === '' ? current.text : result, status: 'complete', seq: event.seq }
+        if (current !== undefined) {
+          const projected = projectVerboseText(result === '' ? current.text : result, 65_536)
+          output[at] = { ...current, text: projected.text, ...(projected.textLength === undefined ? {} : { textLength: projected.textLength }), status: 'complete', seq: event.seq }
+        }
       }
       continue
     }
@@ -321,8 +328,54 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
     }
   }
 
-  output.push(...streams.values())
-  return output.sort((left, right) => (left.seq ?? Number.MAX_SAFE_INTEGER) - (right.seq ?? Number.MAX_SAFE_INTEGER))
+  output.push(...[...streams.values()].map(stream => {
+    const projected = projectVerboseText(stream.chunks.join(''), 32_768)
+    return {
+      id: stream.id,
+      role: stream.role,
+      text: projected.text,
+      ...(projected.textLength === undefined ? {} : { textLength: projected.textLength }),
+      status: 'streaming' as const,
+      seq: stream.seq,
+      time: stream.time,
+    }
+  }))
+  const sorted = output.sort((left, right) => (left.seq ?? Number.MAX_SAFE_INTEGER) - (right.seq ?? Number.MAX_SAFE_INTEGER))
+  return annotateTaskGroups(sorted, entries)
+}
+
+function projectVerboseText(value: string, maxChars: number): { readonly text: string; readonly textLength?: number } {
+  if (value.length <= maxChars) return { text: value }
+  return {
+    text: `[Earlier output hidden from the workbench to keep it responsive; the complete event remains in Harness session data.]\n\n${value.slice(-maxChars)}`,
+    textLength: value.length,
+  }
+}
+
+function annotateTaskGroups(messages: readonly WorkbenchMessage[], entries: readonly HistoryEntry[]): WorkbenchMessage[] {
+  const groups: { readonly id: string; readonly from: number; to: number; complete: boolean }[] = []
+  let previousEnd = -1
+  let active: { readonly id: string; readonly from: number; to: number; complete: boolean } | undefined
+  for (const { event } of entries) {
+    if (event.type === 'turn/start') {
+      active = { id: `turn:${String(event.seq)}`, from: previousEnd + 1, to: Number.MAX_SAFE_INTEGER, complete: false }
+      groups.push(active)
+    } else if (event.type === 'turn/end' && active !== undefined) {
+      active.to = event.seq
+      active.complete = true
+      previousEnd = event.seq
+      active = undefined
+    }
+  }
+  if (groups.length === 0) return [...messages]
+  const groupCounts = new Map(groups.map(group => [group.id, messages.filter(message => message.seq !== undefined && message.seq >= group.from && message.seq <= group.to).length]))
+  return messages.map(message => {
+    const seq = message.seq
+    if (seq === undefined) return message
+    const group = groups.find(candidate => seq >= candidate.from && seq <= candidate.to)
+    if (group === undefined || (groupCounts.get(group.id) ?? 0) < 2) return message
+    return { ...message, taskId: group.id, taskComplete: group.complete }
+  })
 }
 
 function toWorkbenchSession(summary: SessionSummary, operation?: SessionOperation): WorkbenchSession {
