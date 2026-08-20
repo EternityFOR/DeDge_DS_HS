@@ -26,6 +26,11 @@ export interface HarnessConfiguration {
   readonly codexCommand: string
   readonly claudeCommand: string
   readonly handoffMaxBytes: number
+  readonly handoffLaunchMode: 'clipboard' | 'cli'
+  readonly skillDirectories: readonly string[]
+  readonly visionBaseUrl: string
+  readonly visionModel: string
+  readonly visionMaxBytes: number
 }
 
 const PREFIX = 'dedgeDeepSeekHarness'
@@ -68,6 +73,11 @@ export class ConfigurationService implements vscode.Disposable {
       codexCommand: config.get<string>('handoff.codexCommand', '').trim(),
       claudeCommand: config.get<string>('handoff.claudeCommand', '').trim(),
       handoffMaxBytes: bounded(config.get<number>('handoff.maxBytes'), 8_192, 262_144, 65_536),
+      handoffLaunchMode: oneOf(config.get<string>('handoff.launchMode'), ['clipboard', 'cli'], 'clipboard'),
+      skillDirectories: stringList(config.get<string[]>('skills.directories'), ['${userHome}/.codex/skills']),
+      visionBaseUrl: config.get<string>('vision.baseUrl', '').trim(),
+      visionModel: nonEmpty(config.get<string>('vision.model'), 'qwen-vl-plus'),
+      visionMaxBytes: bounded(config.get<number>('vision.maxBytes'), 65_536, 8_388_608, 4_194_304),
     }
   }
 
@@ -123,6 +133,11 @@ function configuredBaseUrl(value: string | undefined): string {
   } catch {
     return OFFICIAL_DEEPSEEK_BASE_URL
   }
+}
+
+function stringList(value: string[] | undefined, fallback: readonly string[]): readonly string[] {
+  const items = (Array.isArray(value) ? value : fallback).map(item => item.trim()).filter(item => item !== '')
+  return items.length > 0 ? items : fallback
 }
 
 function nonEmpty(value: string | undefined, fallback: string): string {

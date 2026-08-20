@@ -119,6 +119,11 @@ export class SessionStore {
     this.presetCatalog = catalog
   }
 
+  setSessionTitle(sessionId: string, title: string): void {
+    const current = this.sessions.get(sessionId)
+    if (current !== undefined) this.sessions.set(sessionId, { ...current, title })
+  }
+
   setAgentPreset(sessionId: string, agentPreset: string): void {
     const current = this.sessions.get(sessionId)
     if (current !== undefined) this.sessions.set(sessionId, { ...current, agentPreset })

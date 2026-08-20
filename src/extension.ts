@@ -180,7 +180,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await controller.stop()
   }
 
+  const setVisionApiKey = async (): Promise<void> => {
+    const existing = await credentials.getVisionApiKey()
+    const value = await vscode.window.showInputBox({
+      title: 'Vision API key (OpenAI-compatible)',
+      prompt: existing === undefined
+        ? 'Used only for attached images; stored in VS Code SecretStorage. Example: Qwen-VL, GLM-4V, GPT-4o, or a local Ollama endpoint.'
+        : 'Enter a replacement key, or leave blank to keep the existing SecretStorage value.',
+      password: true,
+      ignoreFocusOut: true,
+      validateInput: input => existing === undefined && input.trim() === '' ? 'The vision API key cannot be empty.' : undefined,
+    })
+    if (value === undefined) return
+    if (value.trim() !== '') await credentials.setVisionApiKey(value.trim())
+    void vscode.window.showInformationMessage('Vision API key stored in SecretStorage. Attached images will be described before sending.')
+  }
+  const clearVisionApiKey = async (): Promise<void> => {
+    await credentials.clearVisionApiKey()
+    void vscode.window.showInformationMessage('Vision API key cleared.')
+  }
+
   context.subscriptions.push(
+    vscode.commands.registerCommand('dedgeDeepSeekHarness.setVisionApiKey', () => run(setVisionApiKey)),
+    vscode.commands.registerCommand('dedgeDeepSeekHarness.clearVisionApiKey', () => run(clearVisionApiKey)),
     logger,
     configuration,
     view,

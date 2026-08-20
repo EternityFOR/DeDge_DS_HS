@@ -8,10 +8,19 @@ export function promptUnavailableReason(snapshot: WorkbenchSnapshot): string | u
   if (active === undefined) return 'Wait for an active Harness session before sending.'
   if (active.operation !== undefined) return 'Wait for the current session operation to finish before sending.'
   if (snapshot.permissionChanging) return 'Wait for the file permission change to finish before sending.'
-  if (active.running) return 'Wait for the current response to finish before sending another message.'
   if (snapshot.modelCatalog === undefined) return 'Wait for the model catalog to finish loading before sending.'
   if (snapshot.modelCatalog.routable === false) return 'Select an available model before sending.'
   return undefined
+}
+
+/** A running session accepts a steer prompt that the model handles immediately. */
+export function steerAvailable(snapshot: WorkbenchSnapshot): boolean {
+  const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
+  return active?.running === true
+    && active.operation === undefined
+    && !snapshot.permissionChanging
+    && snapshot.modelCatalog !== undefined
+    && snapshot.modelCatalog.routable !== false
 }
 
 export function modelControlsUnavailableReason(snapshot: WorkbenchSnapshot): string | undefined {

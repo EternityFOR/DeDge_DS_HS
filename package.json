@@ -2,7 +2,7 @@
   "name": "dedge-deepseek-harness-vscode",
   "displayName": "DeDge DeepSeek Harness",
   "description": "Self-contained DeepSeek Harness coding agent for VS Code with a Windows-safe runtime and isolated Codex/Claude handoffs.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "diractive-edge",
   "private": true,
   "packageManager": "pnpm@11.21.0",
@@ -86,7 +86,9 @@
     "onCommand:dedgeDeepSeekHarness.handoff",
     "onCommand:dedgeDeepSeekHarness.reviewChanges",
     "onCommand:dedgeDeepSeekHarness.diagnose",
-    "onCommand:dedgeDeepSeekHarness.showLogs"
+    "onCommand:dedgeDeepSeekHarness.showLogs",
+    "onCommand:dedgeDeepSeekHarness.setVisionApiKey",
+    "onCommand:dedgeDeepSeekHarness.clearVisionApiKey"
   ],
   "contributes": {
     "viewsContainers": {
@@ -182,6 +184,16 @@
         "command": "dedgeDeepSeekHarness.showLogs",
         "title": "DeepSeek Harness: Show Logs",
         "icon": "$(output)"
+      },
+      {
+        "command": "dedgeDeepSeekHarness.setVisionApiKey",
+        "title": "DeepSeek Harness: Configure Vision API Key",
+        "icon": "$(image)"
+      },
+      {
+        "command": "dedgeDeepSeekHarness.clearVisionApiKey",
+        "title": "DeepSeek Harness: Clear Vision API Key",
+        "icon": "$(trash)"
       }
     ],
     "menus": {
@@ -366,6 +378,47 @@
           "maximum": 262144,
           "default": 65536,
           "description": "Maximum UTF-8 transcript bytes included in an isolated cross-platform handoff package."
+        },
+        "dedgeDeepSeekHarness.handoff.launchMode": {
+          "type": "string",
+          "enum": [
+            "clipboard",
+            "cli"
+          ],
+          "enumDescriptions": [
+            "Copy a ready-to-paste take-over prompt to the clipboard; start a new session in your Codex or Claude Code extension and paste it. Never spawns terminals.",
+            "Launch the native CLI/extension executable directly with the handoff prompt."
+          ],
+          "default": "clipboard",
+          "description": "How a hand-off to Codex or Claude Code is delivered. Clipboard mode keeps VS Code extensions (Codex, Claude Code) able to take over the task in their own session."
+        },
+        "dedgeDeepSeekHarness.skills.directories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "${userHome}/.codex/skills"
+          ],
+          "description": "Directories scanned for SKILL.md documents. Type @ in the composer to reference a skill; the referenced SKILL.md body is attached to the prompt when sending. ${userHome} and ~ are expanded by the extension."
+        },
+        "dedgeDeepSeekHarness.vision.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI-compatible vision endpoint used to describe attached images before sending. DeepSeek models are text-only, so this is how images become readable. Leave empty to disable image attachment.",
+          "scope": "machine"
+        },
+        "dedgeDeepSeekHarness.vision.model": {
+          "type": "string",
+          "default": "qwen-vl-plus",
+          "description": "Vision model name for the configured vision endpoint."
+        },
+        "dedgeDeepSeekHarness.vision.maxBytes": {
+          "type": "number",
+          "minimum": 65536,
+          "maximum": 8388608,
+          "default": 4194304,
+          "description": "Maximum encoded image bytes sent to the vision endpoint per attached image."
         }
       }
     }

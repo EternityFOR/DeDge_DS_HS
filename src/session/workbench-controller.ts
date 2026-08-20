@@ -5,6 +5,8 @@ import type { ConfigurationService, HarnessConfiguration } from '../config/confi
 import { buildPrompt, type ContextAttachment, ContextCollector } from '../context/context-collector.js'
 import type { GatewayClient } from '../gateway/gateway-client.js'
 import { parseContextPressureProjection, parsePermissionProjection, type HostFrame, type MuxFrame, type SessionEvent, type SessionSummary } from '../gateway/protocol.js'
+import { listSkills, parseSkillRefs, readSkillBody, type SkillSummary } from '../skills/skill-catalog.js'
+import { describeImage } from '../vision/vision-client.js'
 import { errorMessage, type Logger } from '../platform/logger.js'
 import type { CredentialStore } from '../security/credentials.js'
 import type { RuntimeManager } from '../runtime/runtime-manager.js'
@@ -21,6 +23,7 @@ export class WorkbenchController implements vscode.Disposable {
   private readonly store: SessionStore
   private readonly sessionOperations: SessionOperationCoordinator
   private gateway: GatewayClient | undefined
+  private skillCatalogCache: { readonly key: string; readonly at: number; readonly items: Promise<SkillSummary[]> } | undefined
   private runtimeSubscription: vscode.Disposable
   private configurationSubscription: vscode.Disposable
   private startTask: Promise<void> | undefined
@@ -90,8 +93,15 @@ export class WorkbenchController implements vscode.Disposable {
         onHost: (frame, rpcId) => this.handleHost(frame, rpcId),
         onError: error => this.logger.warn(`Gateway event stream: ${error.message}`),
       })
-      const [sessions, workspaces] = await Promise.all([gateway.listSessions(), gateway.listWorkspaces()])
-      this.store.replaceSessions(sessions.items ?? [])
+      let sessions = (await gateway.listSessions()).items ?? []
+      if (sessions.length === 0) {
+        for (let attempt = 0; attempt < 4 && sessions.length === 0; attempt++) {
+          await delay(1_000)
+          sessions = (await gateway.listSessions()).items ?? []
+        }
+      }
+      const workspaces = await gateway.listWorkspaces()
+      this.store.replaceSessions(sessions)
       this.store.replaceArchivedSessions(workspaces.archivedSessionIds ?? [])
       await this.refreshPresetCatalog(gateway)
       const remembered = this.context.workspaceState.get<string>('activeSessionId')
@@ -146,7 +156,7 @@ export class WorkbenchController implements vscode.Disposable {
     ])
   }
 
-  async send(text: string, attachments: readonly ContextAttachment[] = []): Promise<void> {
+  async send(text: string, attachments: readonly ContextAttachment[] = [], mode: 'queue' | 'steer' = 'queue'): Promise<void> {
     const normalized = text.trim()
     if (normalized === '' && attachments.length === 0) return
     const snapshot = this.store.snapshot()
@@ -154,8 +164,9 @@ export class WorkbenchController implements vscode.Disposable {
     if (unavailable !== undefined) throw new Error(unavailable)
     const sessionId = snapshot.activeSessionId
     if (sessionId === undefined) throw new Error('Wait for an active Harness session before sending.')
-    const prompt = buildPrompt(normalized, attachments)
-    const result = await this.requireGateway().prompt(sessionId, prompt)
+    const resolved = await this.resolveAttachments(normalized, attachments)
+    const prompt = buildPrompt(normalized, resolved)
+    const result = await this.requireGateway().prompt(sessionId, prompt, mode)
     if (result.accepted === false) throw new Error('Harness rejected the prompt.')
   }
 
@@ -240,6 +251,92 @@ export class WorkbenchController implements vscode.Disposable {
 
   attachTextFile(name: string, text: string): ContextAttachment {
     return this.contextCollector.collectTextFile(name, text, this.configuration.get().contextMaxBytes)
+  }
+
+  async attachImageData(name: string, dataUrl: string): Promise<ContextAttachment> {
+    return this.contextCollector.collectImageData(name, dataUrl, this.configuration.get().visionMaxBytes)
+  }
+
+  listSkillCatalog(): Promise<SkillSummary[]> {
+    return this.loadSkillCatalog()
+  }
+
+  async renameSession(sessionId: string, title: string): Promise<void> {
+    const result = await this.requireGateway().renameSession(sessionId, title)
+    this.store.setSessionTitle(sessionId, result.title)
+    this.publish()
+  }
+
+  private async resolveAttachments(input: string, attachments: readonly ContextAttachment[]): Promise<readonly ContextAttachment[]> {
+    const output: ContextAttachment[] = []
+    const skillRefs = parseSkillRefs(input)
+    if (skillRefs.length > 0) {
+      const skills = await this.loadSkillCatalog()
+      for (const name of skillRefs) {
+        const skill = skills.find(item => item.name === name)
+        if (skill === undefined) {
+          this.logger.warn(`Prompt references an unknown skill: @${name}`)
+          continue
+        }
+        output.push(await this.skillAttachment(skill))
+      }
+    }
+    for (const attachment of attachments) {
+      if (attachment.kind === 'image') output.push(await this.imageAttachment(attachment))
+      else output.push(attachment)
+    }
+    return output
+  }
+
+  private async imageAttachment(attachment: ContextAttachment): Promise<ContextAttachment> {
+    if (attachment.truncated || attachment.image === undefined || attachment.image.dataBase64 === '') {
+      throw new Error(`${attachment.label} is too large for the vision endpoint; reduce the image or raise dedgeDeepSeekHarness.vision.maxBytes.`)
+    }
+    const configuration = this.configuration.get()
+    const apiKey = await this.credentials.getVisionApiKey()
+    if (apiKey === undefined || apiKey.trim() === '') {
+      throw new Error('No vision API key is stored; run the "Configure Vision API Key" command before attaching images.')
+    }
+    const description = await describeImage({
+      baseUrl: configuration.visionBaseUrl,
+      model: configuration.visionModel,
+      apiKey,
+      maxBytes: configuration.visionMaxBytes,
+    }, { fileName: attachment.label, mimeType: attachment.image.mimeType, dataBase64: attachment.image.dataBase64 })
+    const label = attachment.label.replace(/^Image: /u, '')
+    return {
+      id: attachment.id,
+      kind: 'file',
+      label: `Vision: ${label}`,
+      text: `Vision description of ${label}:\n\n${description}`,
+      ...(attachment.uri === undefined ? {} : { uri: attachment.uri }),
+      truncated: false,
+    }
+  }
+
+  private async skillAttachment(skill: SkillSummary): Promise<ContextAttachment> {
+    const body = await readSkillBody(skill.directory)
+    return {
+      id: `skill:${skill.name}`,
+      kind: 'skill',
+      label: `Skill: ${skill.name}`,
+      text: `<skill name=${JSON.stringify(skill.name)}>\n${body.text}\n</skill>`,
+      skillDirectory: skill.directory,
+      truncated: body.truncated,
+    }
+  }
+
+  private loadSkillCatalog(): Promise<SkillSummary[]> {
+    const key = JSON.stringify(this.configuration.get().skillDirectories)
+    if (this.skillCatalogCache !== undefined && this.skillCatalogCache.key === key && Date.now() - this.skillCatalogCache.at < 30_000) {
+      return Promise.resolve(this.skillCatalogCache.items)
+    }
+    const items = listSkills(this.configuration.get().skillDirectories).catch(error => {
+      this.logger.warn(`Could not load the skill catalog: ${errorMessage(error)}`)
+      return []
+    })
+    this.skillCatalogCache = { key, at: Date.now(), items }
+    return items
   }
 
   attachHandoff(name: string, text: string): ContextAttachment {

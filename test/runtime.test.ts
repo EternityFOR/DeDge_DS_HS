@@ -64,6 +64,11 @@ describe('runtime overlay rendering', () => {
       codexCommand: '',
       claudeCommand: '',
       handoffMaxBytes: 65_536,
+      handoffLaunchMode: 'clipboard',
+      skillDirectories: ['${userHome}/.codex/skills'],
+      visionBaseUrl: '',
+      visionModel: 'qwen-vl-plus',
+      visionMaxBytes: 4_194_304,
     }
 
     const overlay = renderRuntimeOverlay(configuration)

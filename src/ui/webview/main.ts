@@ -4,10 +4,11 @@ import {
   Check,
   ChevronDown,
   ChevronsDown,
+  ChevronsUp,
   createElement as lucideCreateElement,
-  createIcons,
   Diff,
   Ellipsis,
+  FoldVertical,
   KeyRound,
   LoaderCircle,
   Paperclip,
@@ -23,8 +24,9 @@ import {
 } from 'lucide'
 import { marked } from 'marked'
 import type { ContextAttachment } from '../../context/context-collector.js'
+import type { SkillSummary } from '../../skills/skill-catalog.js'
 import type { WorkbenchMessage, WorkbenchSnapshot } from '../../session/types.js'
-import { modelControlsUnavailableReason, promptUnavailableReason } from '../../session/interaction-readiness.js'
+import { modelControlsUnavailableReason, promptUnavailableReason, steerAvailable } from '../../session/interaction-readiness.js'
 import type { HostToWebviewMessage, WebviewToHostMessage } from '../webview-protocol.js'
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewToHostMessage): void; setState(value: unknown): void; getState(): unknown }
@@ -35,6 +37,8 @@ const iconComponents = {
   'check': Check,
   'chevron-down': ChevronDown,
   'chevrons-down': ChevronsDown,
+  'chevrons-up': ChevronsUp,
+  'fold-vertical': FoldVertical,
   'diff': Diff,
   'ellipsis': Ellipsis,
   'key-round': KeyRound,
@@ -61,6 +65,12 @@ let sendPending = false
 let scrollBottomButton: HTMLButtonElement | undefined
 let stickToBottom = true
 const collapsedMessages = new Set<string>()
+const turnHidden = new Set<string>()
+let compactThinking = false
+let skillCatalog: readonly SkillSummary[] = []
+let skillPopoverVisible = false
+let skillHighlight = 0
+let skillFilter = ''
 const sentHistory: string[] = []
 let historyIndex = -1
 
@@ -108,6 +118,8 @@ const elements = {
   configureContext: requiredButton('configure-context'),
   statusDot: required('status-dot'),
   statusText: required('status-text'),
+  skillPopover: required('skill-popover'),
+  compactThinkingButton: requiredButton('compact-thinking'),
 }
 
 const persistedWebviewState = vscode.getState()
@@ -115,6 +127,10 @@ if (typeof persistedWebviewState === 'object' && persistedWebviewState !== null 
   elements.prompt.value = persistedWebviewState.draft
   resizePrompt()
 }
+if (typeof persistedWebviewState === 'object' && persistedWebviewState !== null && 'compactThinking' in persistedWebviewState && persistedWebviewState.compactThinking === true) {
+  compactThinking = true
+}
+applyCompactThinkingButton()
 
 const popovers = [
   popover('attach-menu', 'attach-popover'),
@@ -137,8 +153,47 @@ bindAction('compact', { type: 'compact' })
 bindAction('configure-context', { type: 'configureContextWindow' })
 bindAction('cancel', { type: 'cancel' })
 requiredButton('send').addEventListener('click', send)
+elements.compactThinkingButton.addEventListener('click', () => {
+  compactThinking = !compactThinking
+  applyCompactThinkingButton()
+  const persisted = vscode.getState()
+  vscode.setState({ ...(typeof persisted === 'object' && persisted !== null ? persisted : {}), compactThinking })
+  if (compactThinking) {
+    for (const [id, node] of messageElements) {
+      if (autoOpenedDetails.has(id) && !userToggledDetails.has(id) && node instanceof HTMLDetailsElement) {
+        node.open = false
+      }
+    }
+    autoOpenedDetails.clear()
+  }
+  if (state !== undefined) renderConversation(state)
+})
 
 elements.prompt.addEventListener('keydown', event => {
+  if (skillPopoverVisible) {
+    if (event.key === 'Enter' || event.key === 'Tab') {
+      const matches = skillCatalog.filter(skill => skill.name.includes(skillFilter.toLowerCase())).slice(0, 8)
+      const selected = matches[skillHighlight]
+      if (selected !== undefined) {
+        event.preventDefault()
+        insertSkillRef(selected.name)
+        hideSkillPopover()
+        return
+      }
+    } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      const count = Math.min(8, skillCatalog.filter(skill => skill.name.includes(skillFilter.toLowerCase())).length)
+      if (count > 0) {
+        event.preventDefault()
+        skillHighlight = (skillHighlight + (event.key === 'ArrowDown' ? 1 : count - 1)) % count
+        renderSkillPopover()
+        return
+      }
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      hideSkillPopover()
+      return
+    }
+  }
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault()
     send()
@@ -177,6 +232,9 @@ elements.prompt.addEventListener('keydown', event => {
 })
 elements.prompt.addEventListener('input', () => {
   if (historyIndex !== -1 && elements.prompt.value !== sentHistory[historyIndex]) historyIndex = -1
+  const filter = detectSkillFilter()
+  if (filter !== undefined) showSkillPopover(filter)
+  else if (skillPopoverVisible) hideSkillPopover()
   resizePrompt()
   vscode.setState({ draft: elements.prompt.value })
 })
@@ -211,11 +269,17 @@ elements.conversation.addEventListener('scroll', () => {
   else if (conversation.scrollTop < maxScroll - 96) stickToBottom = false
   updateScrollBottomButton()
 })
+let resizeFrame: number | undefined
 window.addEventListener('resize', () => {
-  for (const item of popovers) {
-    if (!item.popover.classList.contains('hidden')) positionPopover(item)
-  }
-  if (!elements.contextMeterAnchor.classList.contains('hidden')) positionContextTooltip()
+  if (resizeFrame !== undefined) return
+  resizeFrame = window.requestAnimationFrame(() => {
+    resizeFrame = undefined
+    for (const item of popovers) {
+      if (!item.popover.classList.contains('hidden')) positionPopover(item)
+    }
+    if (!elements.contextMeterAnchor.classList.contains('hidden')) positionContextTooltip()
+    updateScrollBottomButton()
+  })
 })
 
 window.addEventListener('message', event => {
@@ -239,9 +303,22 @@ window.addEventListener('message', event => {
     resizePrompt()
     elements.prompt.focus()
   } else if (message.type === 'notice') showNotice(message.message)
+  else if (message.type === 'skills') {
+    skillCatalog = message.skills
+    if (skillPopoverVisible) renderSkillPopover()
+  }
 })
 
-createIcons({ icons: iconComponents })
+// Replace static <i data-lucide> placeholders with real SVG icons. lucide's createIcons
+// looks up icons by PascalCase keys, so a direct replacement is used instead.
+document.querySelectorAll('i[data-lucide]').forEach(element => {
+  const name = element.getAttribute('data-lucide')
+  if (name !== null && name in iconComponents) {
+    const icon = svgIcon(name as IconName)
+    icon.classList.add(...Array.from(element.classList))
+    element.replaceWith(icon)
+  }
+})
 resizePrompt()
 post({ type: 'ready' })
 
@@ -477,6 +554,7 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     autoOpenedDetails.clear()
     userToggledDetails.clear()
     collapsedMessages.clear()
+    turnHidden.clear()
     stickToBottom = true
     emptyNode = undefined
     elements.conversation.replaceChildren()
@@ -503,8 +581,20 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
 
   const messages = snapshot.messages
   const seen = new Set<string>()
+  const turnCounts = new Map<string, number>()
+  let countingTurn: string | undefined
+  for (const message of messages) {
+    if (message.role === 'user') {
+      countingTurn = message.id
+      turnCounts.set(message.id, turnCounts.get(message.id) ?? 0)
+    } else if (countingTurn !== undefined) {
+      turnCounts.set(countingTurn, (turnCounts.get(countingTurn) ?? 0) + 1)
+    }
+  }
+  let currentTurn: string | undefined
   let streaming = false
   for (const message of messages) {
+    if (message.role === 'user') currentTurn = message.id
     seen.add(message.id)
     const signature = messageSignature(message)
     let node = messageElements.get(message.id)
@@ -517,6 +607,9 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
       messageSignatures.set(message.id, signature)
       updateMessage(node, message)
     }
+    const owner = currentTurn === message.id || message.role !== 'user' ? currentTurn : undefined
+    node.classList.toggle('turn-hidden', owner !== undefined && message.role !== 'user' && turnHidden.has(owner))
+    if (message.role === 'user') updateTurnBadge(node, message.id, turnCounts.get(message.id) ?? 0)
     if (message.status === 'streaming') streaming = true
   }
   for (const [id, node] of messageElements) {
@@ -562,6 +655,48 @@ function updateScrollBottomButton(): void {
   scrollBottomButton.classList.toggle('hidden', !away)
 }
 
+function applyCompactThinkingButton(): void {
+  elements.compactThinkingButton.classList.toggle('active', compactThinking)
+  elements.compactThinkingButton.setAttribute('aria-pressed', String(compactThinking))
+  elements.compactThinkingButton.title = compactThinking
+    ? 'Thinking and tool details are collapsed by default; click to expand them while streaming'
+    : 'Collapse thinking and tool details by default'
+}
+
+function updateTurnBadge(node: HTMLElement, userMessageId: string, count: number): void {
+  if (count === 0) return
+  const collapsed = turnHidden.has(userMessageId)
+  let badge = node.querySelector<HTMLButtonElement>('.turn-badge')
+  if (collapsed) {
+    if (badge === null) {
+      badge = document.createElement('button')
+      badge.type = 'button'
+      badge.className = 'turn-badge'
+      badge.title = 'Show the replies of this turn'
+      badge.addEventListener('click', () => {
+        turnHidden.delete(userMessageId)
+        if (state !== undefined) renderConversation(state)
+      })
+      node.querySelector('.message-head')?.append(badge)
+    }
+    badge.textContent = `${String(count)} ${count === 1 ? 'reply' : 'replies'} hidden`
+  } else {
+    badge?.remove()
+  }
+}
+
+function detailSummaryText(message: WorkbenchMessage): string {
+  const base = message.role === 'reasoning' ? 'Reasoning' : message.title ?? 'Tool'
+  if (!compactThinking || message.text === '') return base
+  return `${base} · ${formatChars(message.text.length)}`
+}
+
+function formatChars(value: number): string {
+  if (value >= 1_000_000) return `${stripTrailingZero(value / 1_000_000)}M chars`
+  if (value >= 1_000) return `${stripTrailingZero(value / 1_000)}K chars`
+  return `${String(value)} chars`
+}
+
 function renderPendingArea(approvals: WorkbenchSnapshot['approvals'], questions: WorkbenchSnapshot['questions']): Node[] {
   const nodes: Node[] = []
   for (const approval of approvals) {
@@ -595,14 +730,14 @@ function renderMessage(message: WorkbenchMessage): HTMLElement {
   if (message.role === 'reasoning' || message.role === 'tool') {
     const details = document.createElement('details')
     details.className = `message ${message.role}`
-    if (message.status === 'streaming' && !userToggledDetails.has(message.id)) {
+    if (message.status === 'streaming' && !userToggledDetails.has(message.id) && !compactThinking) {
       details.open = true
       autoOpenedDetails.add(message.id)
     }
     const summary = document.createElement('summary')
     const summaryLabel = document.createElement('span')
     summaryLabel.className = 'summary-label'
-    summaryLabel.textContent = message.role === 'reasoning' ? 'Reasoning' : message.title ?? 'Tool'
+    summaryLabel.textContent = detailSummaryText(message)
     const chevron = svgIcon('chevron-down')
     chevron.classList.add('summary-chevron')
     summary.append(summaryLabel, chevron)
@@ -634,16 +769,16 @@ function updateMessage(node: HTMLElement, message: WorkbenchMessage): void {
     const details = node as HTMLDetailsElement
     const summary = details.querySelector('summary')
     const summaryLabel = summary?.querySelector('.summary-label')
-    if (summaryLabel !== undefined && summaryLabel !== null) summaryLabel.textContent = message.role === 'reasoning' ? 'Reasoning' : message.title ?? 'Tool'
+    if (summaryLabel !== undefined && summaryLabel !== null) summaryLabel.textContent = detailSummaryText(message)
     const body = details.querySelector('.message-body')
     if (body !== null) body.replaceChildren(renderMessageBody(message))
     if (message.status === 'streaming') {
-      if (!userToggledDetails.has(message.id)) {
+      if (!userToggledDetails.has(message.id) && !compactThinking) {
         details.open = true
         autoOpenedDetails.add(message.id)
       }
     } else {
-      if (autoOpenedDetails.has(message.id) && !userToggledDetails.has(message.id)) details.open = false
+      if (autoOpenedDetails.has(message.id) && !userToggledDetails.has(message.id) && !compactThinking) details.open = false
       autoOpenedDetails.delete(message.id)
     }
     return
@@ -677,6 +812,20 @@ function buildMessageHead(message: WorkbenchMessage): { head: HTMLDivElement; to
   label.className = 'message-role-label'
   label.textContent = roleLabel(message.role)
   head.append(toggle, label)
+  if (message.role === 'user') {
+    const turnToggle = document.createElement('button')
+    turnToggle.type = 'button'
+    turnToggle.className = 'collapse-toggle turn-toggle'
+    turnToggle.title = 'Collapse or expand this turn'
+    turnToggle.setAttribute('aria-label', 'Collapse or expand this turn')
+    turnToggle.append(svgIcon('chevrons-up'))
+    turnToggle.addEventListener('click', () => {
+      if (turnHidden.has(message.id)) turnHidden.delete(message.id)
+      else turnHidden.add(message.id)
+      if (state !== undefined) renderConversation(state)
+    })
+    head.append(turnToggle)
+  }
   return { head, toggle }
 }
 
@@ -886,15 +1035,21 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
   const cancelling = active?.operation === 'cancelling'
   const modelUnavailable = snapshot.modelCatalog?.routable === false
   const sendUnavailable = promptUnavailableReason(snapshot)
+  const steer = steerAvailable(snapshot)
   const modelControlsUnavailable = modelControlsUnavailableReason(snapshot)
   const compactionUnavailable = snapshot.agentPreset === 'minimal'
   elements.cancel.classList.toggle('hidden', !running)
   elements.cancel.disabled = cancelling
   elements.cancel.title = cancelling ? 'Stop request is being processed' : 'Stop'
   elements.cancel.setAttribute('aria-label', elements.cancel.title)
-  elements.send.classList.toggle('hidden', running)
-  elements.send.disabled = sendPending || sendUnavailable !== undefined
-  elements.send.title = sendPending ? 'Sending...' : sendUnavailable ?? 'Send'
+  elements.send.classList.toggle('hidden', false)
+  elements.send.classList.toggle('steer', running && steer)
+  elements.send.disabled = sendPending || (sendUnavailable !== undefined && !steer)
+  elements.send.title = sendPending
+    ? 'Sending...'
+    : steer
+      ? 'Send immediately - the running response will address this prompt'
+      : sendUnavailable ?? 'Send'
   elements.send.setAttribute('aria-label', elements.send.title)
   elements.modelMenu.disabled = modelControlsUnavailable !== undefined
   elements.modelMenu.title = modelControlsUnavailable ?? 'Model, reasoning, and agent preset'
@@ -1010,8 +1165,77 @@ function send(): void {
   }
   historyIndex = -1
   renderStatus(state)
-  post({ type: 'send', text: value })
+  const steer = steerAvailable(state)
+  post({ type: 'send', text: value, ...(steer ? { mode: 'steer' } : {}) })
   elements.prompt.focus()
+}
+
+function showSkillPopover(filter: string): void {
+  if (skillCatalog.length === 0) post({ type: 'listSkills' })
+  skillFilter = filter
+  skillHighlight = 0
+  skillPopoverVisible = true
+  renderSkillPopover()
+  elements.skillPopover.classList.remove('hidden')
+}
+
+function hideSkillPopover(): void {
+  skillPopoverVisible = false
+  elements.skillPopover.classList.add('hidden')
+}
+
+function renderSkillPopover(): void {
+  const matches = skillCatalog
+    .filter(skill => skill.name.includes(skillFilter.toLowerCase()))
+    .slice(0, 8)
+  elements.skillPopover.replaceChildren()
+  if (matches.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'skill-empty'
+    empty.textContent = 'No matching skills found'
+    elements.skillPopover.append(empty)
+    return
+  }
+  for (const [index, skill] of matches.entries()) {
+    const option = document.createElement('button')
+    option.type = 'button'
+    option.className = `skill-option${index === skillHighlight ? ' highlighted' : ''}`
+    option.setAttribute('role', 'option')
+    option.setAttribute('aria-selected', String(index === skillHighlight))
+    const name = document.createElement('div')
+    name.className = 'skill-option-name'
+    name.textContent = `@${skill.name}`
+    const description = document.createElement('div')
+    description.className = 'skill-option-desc'
+    description.textContent = skill.description === '' ? 'SKILL.md' : skill.description
+    option.append(name, description)
+    option.addEventListener('click', () => {
+      insertSkillRef(skill.name)
+      hideSkillPopover()
+    })
+    elements.skillPopover.append(option)
+  }
+}
+
+function insertSkillRef(name: string): void {
+  const el = elements.prompt
+  const position = el.selectionStart
+  const before = el.value.slice(0, position)
+  const at = before.lastIndexOf('@')
+  const start = at === -1 ? position : at
+  el.value = `${el.value.slice(0, start)}@${name} ${el.value.slice(position)}`
+  const caret = start + name.length + 2
+  el.setSelectionRange(caret, caret)
+  resizePrompt()
+  vscode.setState({ draft: el.value })
+  el.focus()
+}
+
+function detectSkillFilter(): string | undefined {
+  const el = elements.prompt
+  const before = el.value.slice(0, el.selectionStart)
+  const match = /(?:^|\s)@([a-z0-9-]*)$/iu.exec(before)
+  return match === null ? undefined : match[1] ?? ''
 }
 
 async function handlePaste(event: ClipboardEvent): Promise<void> {
@@ -1043,11 +1267,30 @@ async function handleDrop(event: DragEvent): Promise<void> {
 }
 
 async function attachBrowserFiles(files: FileList): Promise<void> {
-  const payload: { readonly name: string; readonly text: string }[] = []
+  const textPayload: { readonly name: string; readonly text: string }[] = []
+  const imagePayload: { readonly name: string; readonly dataUrl: string }[] = []
+  let imageBytes = 0
   for (const file of Array.from(files).slice(0, 10)) {
-    payload.push({ name: file.name, text: await file.slice(0, 262_144).text() })
+    if (file.type.startsWith('image/')) {
+      const dataUrl = await readFileAsDataUrl(file)
+      imageBytes += dataUrl.length
+      if (imageBytes > 64 * 1_048_576) break
+      imagePayload.push({ name: file.name, dataUrl })
+    } else {
+      textPayload.push({ name: file.name, text: await file.slice(0, 262_144).text() })
+    }
   }
-  if (payload.length > 0) post({ type: 'attachTextFiles', files: payload })
+  if (textPayload.length > 0) post({ type: 'attachTextFiles', files: textPayload })
+  if (imagePayload.length > 0) post({ type: 'attachImageFiles', files: imagePayload })
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+    reader.onerror = () => reject(new Error(`Could not read image ${file.name}.`))
+    reader.readAsDataURL(file)
+  })
 }
 
 function hasAttachableData(data: DataTransfer | null): boolean {

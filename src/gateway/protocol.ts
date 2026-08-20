@@ -330,6 +330,11 @@ export function parsePresetCatalog(value: unknown): PresetCatalog {
   }
 }
 
+export function parseRenameResult(value: unknown): { readonly title: string; readonly seq: number } {
+  if (!isRecord(value) || typeof value.title !== 'string' || typeof value.seq !== 'number') throw new Error('Malformed Harness session rename result.')
+  return { title: value.title, seq: value.seq }
+}
+
 export function parsePresetSelectionResult(value: unknown): { readonly agentPreset: string } {
   if (!isRecord(value) || typeof value.agentPreset !== 'string') throw new Error('Malformed Harness agent preset selection.')
   return { agentPreset: value.agentPreset }

@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-08-20
+
+### Added
+
+- 底部图标修复：静态按钮（发送、附加、权限、模型、压缩等）的图标重新显示为内联 SVG。
+- 输入框输入 `@` 弹出 Skill 选择：从可配置目录（默认 `~/.codex/skills`）遍历 SKILL.md，选择后插入 `@name`，发送时自动把对应 SKILL.md 正文作为附件注入。设置项 `dedgeDeepSeekHarness.skills.directories`。
+- 图片识别：拖入/粘贴/右键添加的图片在发送前调用可配置的 OpenAI 兼容视觉模型（如 Qwen-VL、GLM-4V、GPT-4o）生成文字描述再发给 DeepSeek。设置项 `vision.baseUrl`、`vision.model`，密钥存 SecretStorage（命令 Configure Vision API Key）。
+- 思考过程紧凑模式按钮：开启后 Reasoning/Tool 默认折叠，只显示摘要（如 `Reasoning · 12K chars`），流式过程不再自动展开；可单独展开任意一条。
+- 按轮次折叠：每条用户消息头部新增本轮折叠按钮，折叠后显示 `N replies hidden`，流式更新期间保持。
+- 输出中发送插队（steer）：回复进行时发送按钮变为虚线插队模式，点击后让当前回复立即处理新指令；停止按钮仍可用。官方 `session.prompt` 的 `mode: steer`。
+- 交接到 Codex/Claude 默认不再启动 CLI：改为把接手 prompt（现状说明 + 隔离历史）复制到剪贴板，在 VS Code 的 Codex/Claude 扩展里新建会话粘贴即可接手。设置项 `handoff.launchMode`（clipboard/cli）。
+- 从 Codex/Claude 导入的会话自动重命名为 `平台: 原会话名`，会话标签不再显示无意义的 id。
+
+### Fixed
+
+- 打开工作台时如果会话列表为空会等待运行时恢复历史会话后再创建新会话，避免重启后总是冒出 `New session` 标签。
+- 输出过程中滚动不再跟随：滚离底部后保持阅读位置，滚回底部才恢复跟随（带跳到底部按钮）。
+- 拖动窗口大小时弹层重定位合并到动画帧，避免布局抖动。
+
 ## [0.1.4] - 2026-08-20
 
 ### Fixed
@@ -86,7 +105,9 @@
 - Gateway 固定监听随机 `127.0.0.1`，子进程使用参数数组、`shell: false` 和 `windowsHide: true`。
 - 发布审计拒绝 session dump、私钥、常见 provider token、绝对本机路径、Mojibake 和开发期文件进入公开源或 VSIX。
 
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.5
+[0.1.4]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.4
 [0.1.3]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.3
 [0.1.2]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.2
 [0.1.1]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.1

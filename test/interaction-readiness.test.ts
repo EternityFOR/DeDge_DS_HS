@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { modelControlsUnavailableReason, promptUnavailableReason } from '../src/session/interaction-readiness.js'
+import { modelControlsUnavailableReason, promptUnavailableReason, steerAvailable } from '../src/session/interaction-readiness.js'
 import type { WorkbenchSnapshot } from '../src/session/types.js'
 
 function snapshot(overrides: Partial<WorkbenchSnapshot> = {}): WorkbenchSnapshot {
@@ -49,10 +49,20 @@ describe('workbench interaction readiness', () => {
     expect(modelControlsUnavailableReason(loading)).toContain('still loading')
   })
 
-  it('blocks prompt and model changes while a response is running', () => {
+  it('allows steer prompts while a response is running but blocks model changes', () => {
     const running = snapshot({ sessions: [{ id: 's-1', title: 'Session', running: true, blank: false }] })
-    expect(promptUnavailableReason(running)).toContain('current response')
+    expect(promptUnavailableReason(running)).toBeUndefined()
+    expect(steerAvailable(running)).toBe(true)
     expect(modelControlsUnavailableReason(running)).toContain('Finish or cancel')
+  })
+
+  it('does not offer steering before the model catalog is ready', () => {
+    const { modelCatalog: _modelCatalog, ...loading } = snapshot({ sessions: [{ id: 's-1', title: 'Session', running: true, blank: false }] })
+    expect(steerAvailable(loading)).toBe(false)
+  })
+
+  it('offers steering only for a running session', () => {
+    expect(steerAvailable(snapshot())).toBe(false)
   })
 
   it('keeps model controls available when the current model is not routable', () => {

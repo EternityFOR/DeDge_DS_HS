@@ -245,7 +245,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (message.type === 'send') {
       const attachments = [...this.attachments]
       try {
-        await this.controller.send(message.text, attachments)
+        await this.controller.send(message.text, attachments, message.mode ?? 'queue')
         const sentIds = new Set(attachments.map(item => item.id))
         this.attachments = this.attachments.filter(item => !sentIds.has(item.id))
         if (this.pendingHandoff?.sessionId === this.controller.snapshot().activeSessionId) await this.clearPendingHandoff()
@@ -289,6 +289,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     })
     if (message.type === 'attachTextFiles') return this.run(async () => {
       for (const file of message.files) this.upsertAttachment(this.controller.attachTextFile(file.name, file.text))
+    })
+    if (message.type === 'attachImageFiles') return this.run(async () => {
+      for (const file of message.files) this.upsertAttachment(await this.controller.attachImageData(file.name, file.dataUrl))
+    })
+    if (message.type === 'listSkills') return this.run(async () => {
+      await this.post({ type: 'skills', skills: await this.controller.listSkillCatalog() })
     })
     if (message.type === 'removeAttachment') {
       const removedPendingHandoff = this.pendingHandoff !== undefined && this.attachments.some(item => item.id === message.id && item.label === this.pendingHandoff?.draft.attachmentName)
@@ -379,7 +385,7 @@ function parseWebviewMessage(value: unknown): WebviewToHostMessage {
   if (type === 'ready' || type === 'newSession' || type === 'cancel' || type === 'start' || type === 'restart' || type === 'stop'
     || type === 'setApiKey' || type === 'attachSelection' || type === 'attachDiagnostics' || type === 'attachFile'
     || type === 'compact' || type === 'configureContextWindow' || type === 'handoff' || type === 'showLogs' || type === 'reviewChanges' || type === 'diagnose') return { type }
-  if (type === 'send' && typeof value.text === 'string') return { type, text: value.text }
+  if (type === 'send' && typeof value.text === 'string') return { type, text: value.text, ...(value.mode === 'queue' || value.mode === 'steer' ? { mode: value.mode } : {}) }
   if (type === 'selectSession' && typeof value.sessionId === 'string' && value.sessionId.length <= 256) return { type, sessionId: value.sessionId }
   if (type === 'manageSession' && typeof value.sessionId === 'string' && value.sessionId.length <= 256) return { type, sessionId: value.sessionId }
   if (type === 'attachUris' && Array.isArray(value.uris) && value.uris.length <= 20 && value.uris.every(item => typeof item === 'string' && item.length <= 8_192)) {
@@ -390,6 +396,12 @@ function parseWebviewMessage(value: unknown): WebviewToHostMessage {
     if (files.reduce((total, file) => total + file.text.length, 0) > 1_048_576) throw new Error('Dropped file payload is too large.')
     return { type, files }
   }
+  if (type === 'attachImageFiles' && Array.isArray(value.files) && value.files.length <= 10) {
+    const files = value.files.map(parseImageFile)
+    if (files.reduce((total, file) => total + file.dataUrl.length, 0) > 64 * 1_048_576) throw new Error('Dropped image payload is too large.')
+    return { type, files }
+  }
+  if (type === 'listSkills') return { type }
   if (type === 'removeAttachment' && typeof value.id === 'string') return { type, id: value.id }
   if (type === 'approve' && typeof value.approvalId === 'string' && (value.outcome === 'allowed-once' || value.outcome === 'rejected')) return { type, approvalId: value.approvalId, outcome: value.outcome }
   if (type === 'answerQuestions' && typeof value.rpcId === 'string' && Array.isArray(value.answers)) {
@@ -407,6 +419,13 @@ function parseTextFile(value: unknown): { readonly name: string; readonly text: 
     throw new Error('Malformed dropped file.')
   }
   return { name: value.name, text: value.text }
+}
+
+function parseImageFile(value: unknown): { readonly name: string; readonly dataUrl: string } {
+  if (!isRecord(value) || typeof value.name !== 'string' || value.name.length > 512 || typeof value.dataUrl !== 'string' || value.dataUrl.length > 8_388_608) {
+    throw new Error('Malformed dropped image.')
+  }
+  return { name: value.name, dataUrl: value.dataUrl }
 }
 
 function parseQuestionAnswer(value: unknown): { readonly id: string; readonly selected: readonly string[]; readonly custom?: string } {
@@ -516,7 +535,21 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .chip { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; max-width: 220px; padding: 3px 6px; border: 1px solid var(--vscode-badge-background); border-radius: 3px; background: var(--vscode-editor-inactiveSelectionBackground); color: var(--vscode-foreground); }
     .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .chip button { display: grid; place-items: center; background: transparent; cursor: pointer; padding: 0; }
-    .composer-box { display: grid; grid-template-rows: minmax(88px,auto) auto; gap: 5px; border: 1px solid var(--vscode-input-border); border-radius: 5px; background: var(--vscode-input-background); padding: 7px; transition: border-color 80ms ease, background 80ms ease; }
+    .composer-box { position: relative; display: grid; grid-template-rows: minmax(88px,auto) auto; gap: 5px; border: 1px solid var(--vscode-input-border); border-radius: 5px; background: var(--vscode-input-background); padding: 7px; transition: border-color 80ms ease, background 80ms ease; }
+    .icon-button.active { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+    .icon-button.active:hover { background: var(--vscode-button-hoverBackground); }
+    .icon-button.steer { border: 1px dashed var(--vscode-charts-orange); color: var(--vscode-charts-orange); }
+    .icon-button.steer:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-charts-orange); }
+    .skill-popover { position: absolute; left: 6px; right: 6px; bottom: calc(100% - 4px); z-index: 35; max-height: 220px; overflow: auto; padding: 4px; border: 1px solid var(--vscode-menu-border,var(--vscode-panel-border)); border-radius: 5px; background: var(--vscode-menu-background,var(--vscode-dropdown-background)); color: var(--vscode-menu-foreground,var(--vscode-dropdown-foreground)); box-shadow: 0 -4px 18px rgba(0,0,0,.28); }
+    .skill-option { display: grid; gap: 1px; width: 100%; padding: 5px 8px; border-radius: 3px; text-align: left; color: inherit; background: transparent; cursor: pointer; }
+    .skill-option:hover, .skill-option.highlighted { color: var(--vscode-menu-selectionForeground,var(--vscode-list-activeSelectionForeground)); background: var(--vscode-menu-selectionBackground,var(--vscode-list-activeSelectionBackground)); }
+    .skill-option-name { font-size: 12px; font-weight: 600; }
+    .skill-option-desc { font-size: 10px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .skill-option:hover .skill-option-desc { color: inherit; opacity: .8; }
+    .skill-empty { padding: 6px 8px; font-size: 11px; color: var(--vscode-descriptionForeground); }
+    .turn-hidden { display: none !important; }
+    .turn-badge { display: inline-flex; align-items: center; margin-left: 6px; padding: 1px 6px; border: 1px solid var(--vscode-panel-border); border-radius: 8px; color: var(--vscode-descriptionForeground); font-size: 10px; cursor: pointer; }
+    .turn-badge:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
     .composer-box:focus-within { border-color: var(--vscode-focusBorder); }
     .composer-box.drop-active { border-color: var(--vscode-focusBorder); background: var(--vscode-list-hoverBackground); }
     textarea { resize: none; min-height: 88px; max-height: 240px; width: 100%; border: 0; outline: 0; background: transparent; color: var(--vscode-input-foreground); padding: 2px; overflow-y: auto; }
@@ -587,7 +620,8 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     <footer class="composer">
       <div id="attachments" class="attachments"></div>
       <div id="composer-box" class="composer-box">
-        <textarea id="prompt" rows="4" placeholder="Message DeepSeek Harness"></textarea>
+        <textarea id="prompt" rows="4" placeholder="Message DeepSeek Harness; type @ to reference a skill"></textarea>
+        <div id="skill-popover" class="skill-popover hidden" role="listbox" aria-label="Skills"></div>
         <div class="composer-bottom">
           <div class="composer-left">
             <div class="menu-anchor">
@@ -609,6 +643,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
             <button id="configure-context" class="icon-button" title="Configure context capacity and automatic compaction threshold" aria-label="Configure context capacity and automatic compaction threshold"><i data-lucide="settings-2"></i></button>
           </div>
           <div class="composer-right">
+            <button id="compact-thinking" class="icon-button" title="Collapse thinking and tool details by default" aria-label="Collapse thinking and tool details by default" aria-pressed="false"><i data-lucide="fold-vertical"></i></button>
             <button id="compact" class="icon-button" title="Compact context" aria-label="Compact context"><i data-lucide="shrink"></i></button>
             <span id="context-meter-anchor" class="context-meter-anchor hidden">
               <span id="context-meter" class="context-meter" aria-label="Context window" role="img" tabindex="0">

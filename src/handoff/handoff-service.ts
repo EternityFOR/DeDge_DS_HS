@@ -6,7 +6,7 @@ import { errorMessage, type Logger } from '../platform/logger.js'
 import type { StorageLayout } from '../platform/storage.js'
 import type { WorkbenchController } from '../session/workbench-controller.js'
 import { listCodexSessionsViaAppServer } from './codex-app-server.js'
-import { createHandoffPackage, createStagedHandoff, platformName, renderHandoffMarkdown } from './handoff-format.js'
+import { createHandoffPackage, createStagedHandoff, platformName, renderHandoffMarkdown, renderTargetPrompt } from './handoff-format.js'
 import { launchHandoffTarget, resolveAgentCli } from './cli-launcher.js'
 import { groupExternalSessions } from './session-groups.js'
 import { expandUserPath, listExternalSessions as listJsonlSessions, readExternalSession } from './session-readers.js'
@@ -50,9 +50,21 @@ export class HandoffService {
     let staged: StagedHandoff | undefined
     if (target === 'deepseek-harness') {
       await this.controller.newSession()
+      const activeId = this.controller.snapshot().activeSessionId
+      if (activeId !== undefined) {
+        const label = platformName(value.source.platform)
+        const title = `${label}: ${value.source.title.trim() || `${label} session`}`.slice(0, 100)
+        await this.controller.renameSession(activeId, title)
+          .catch(error => this.logger.warn(`Could not rename the imported ${label} session: ${errorMessage(error)}`))
+      }
       staged = createStagedHandoff(value)
-    } else {
+    } else if (this.configuration.get().handoffLaunchMode === 'cli') {
       await launchHandoffTarget(target, stored, this.configuration.get())
+    } else {
+      const label = platformName(target)
+      await vscode.env.clipboard.writeText(renderTargetPrompt(value))
+      void vscode.window.showInformationMessage(`${label} take-over prompt copied to the clipboard. Open a new ${label} session in your ${label} VS Code extension and paste it to continue.`)
+      this.logger.info(`Copied ${label} handoff ${value.id} take-over prompt to the clipboard`)
     }
     this.logger.info(`Created isolated handoff ${value.id}: ${platformName(source.platform)} -> ${platformName(target)}`)
     return staged

@@ -23,7 +23,13 @@ describe('staged external handoffs', () => {
     await mkdir(layout.handoffs, { recursive: true })
     const newSession = vi.fn(async () => undefined)
     const send = vi.fn(async () => undefined)
-    const controller = { newSession, send } as unknown as WorkbenchController
+    const renameSession = vi.fn(async () => undefined)
+    const controller = {
+      newSession,
+      send,
+      renameSession,
+      snapshot: () => ({ activeSessionId: undefined }),
+    } as unknown as WorkbenchController
     const configuration = { get: () => ({ handoffMaxBytes: 65_536 }) } as unknown as ConfigurationService
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger
     const service = new HandoffService(configuration, controller, layout, logger)

@@ -3,14 +3,17 @@ import { createHash } from 'node:crypto'
 import { open } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as vscode from 'vscode'
+import { imageExtensionMimeType, mimeTypeForDataUrl, stripDataUrlPrefix } from '../vision/vision-client.js'
 
 export interface ContextAttachment {
   readonly id: string
-  readonly kind: 'selection' | 'file' | 'diagnostics'
+  readonly kind: 'selection' | 'file' | 'diagnostics' | 'image' | 'skill'
   readonly label: string
   readonly text: string
   readonly uri?: string
   readonly truncated: boolean
+  readonly image?: { readonly mimeType: string; readonly dataBase64: string }
+  readonly skillDirectory?: string
 }
 
 export class ContextCollector {
@@ -72,6 +75,8 @@ export class ContextCollector {
   async collectUri(uri: vscode.Uri, maxBytes: number, label = relativeLabel(uri)): Promise<ContextAttachment> {
     const stat = await vscode.workspace.fs.stat(uri)
     if ((stat.type & vscode.FileType.Directory) !== 0) throw new Error('Folders cannot be attached as prompt text.')
+    const mimeType = imageExtensionMimeType(label)
+    if (mimeType !== undefined) return this.collectImageFile(uri, label, mimeType, maxBytes)
     const bytes = uri.scheme === 'file'
       ? await readLocalPrefix(uri.fsPath, Math.min(stat.size, maxBytes + 4))
       : await vscode.workspace.fs.readFile(uri)
@@ -84,6 +89,45 @@ export class ContextCollector {
       text: `File: ${label}\n\n${limited.text}`,
       uri: uri.toString(),
       truncated: limited.truncated || stat.size > bytes.byteLength,
+    }
+  }
+
+  async collectImageFile(uri: vscode.Uri, label: string, mimeType: string, maxBytes: number): Promise<ContextAttachment> {
+    const stat = await vscode.workspace.fs.stat(uri)
+    if (stat.size > maxBytes) {
+      return { id: `image:${uri.toString()}`, kind: 'image', label: `Image: ${label} (too large)`, text: '', uri: uri.toString(), truncated: true, image: { mimeType, dataBase64: '' } }
+    }
+    const bytes = uri.scheme === 'file'
+      ? await readLocalPrefix(uri.fsPath, stat.size)
+      : await vscode.workspace.fs.readFile(uri)
+    return {
+      id: `image:${uri.toString()}`,
+      kind: 'image',
+      label: `Image: ${label}`,
+      text: '',
+      uri: uri.toString(),
+      truncated: false,
+      image: { mimeType, dataBase64: Buffer.from(bytes).toString('base64') },
+    }
+  }
+
+  collectImageData(name: string, dataUrl: string, maxBytes: number): ContextAttachment {
+    const mimeType = mimeTypeForDataUrl(dataUrl)
+    if (mimeType === undefined) throw new Error(`${name} is not a supported image format.`)
+    const base64 = stripDataUrlPrefix(dataUrl)
+    if (base64 === undefined) throw new Error(`${name} is not a valid base64 image.`)
+    const bytes = Math.ceil(base64.length * 3 / 4)
+    const label = path.basename(name.trim()) || 'pasted-image'
+    if (bytes > maxBytes) {
+      return { id: `image-data:${createHash('sha256').update(label).update('\u0000').update(base64).digest('hex').slice(0, 16)}`, kind: 'image', label: `Image: ${label} (too large)`, text: '', truncated: true, image: { mimeType, dataBase64: '' } }
+    }
+    return {
+      id: `image-data:${createHash('sha256').update(label).update('\u0000').update(base64).digest('hex').slice(0, 16)}`,
+      kind: 'image',
+      label: `Image: ${label}`,
+      text: '',
+      truncated: false,
+      image: { mimeType, dataBase64: base64 },
     }
   }
 
