@@ -12,6 +12,7 @@ describe('permission projection', () => {
       agentPreset: 'standard',
       permissionMode: 'workspace-write',
       contextWindowTokens: 1_000_000,
+    pasteFileThreshold: 8_192,
     })
     store.addSession({ sessionId: 'session-1', running: false, blank: true })
     store.setActive('session-1')

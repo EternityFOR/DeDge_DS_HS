@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-08-20
+
+### Added
+
+- 长文本粘贴不再直接进入输入框：粘贴内容超过 `context.pasteFileThreshold`（默认 8 KB）时自动转为附件，输入框上方显示带文件图标的缩略 chip（标注 `saved to file`），可随时删除；发送时才把内容写入插件存储目录并以路径引用给模型。
+- 删除长文本附件时同步清理已落盘的文件。
+
 ## [0.1.7] - 2026-08-20
 
 ### Added
@@ -133,7 +140,8 @@
 - Gateway 固定监听随机 `127.0.0.1`，子进程使用参数数组、`shell: false` 和 `windowsHide: true`。
 - 发布审计拒绝 session dump、私钥、常见 provider token、绝对本机路径、Mojibake 和开发期文件进入公开源或 VSIX。
 
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.8
 [0.1.7]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.7
 [0.1.6]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.6
 [0.1.5]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.5

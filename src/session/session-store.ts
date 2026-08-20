@@ -10,6 +10,7 @@ export interface StoreConfiguration {
   readonly agentPreset: string
   readonly permissionMode: string
   readonly contextWindowTokens: number
+  readonly pasteFileThreshold: number
 }
 
 export class SessionStore {

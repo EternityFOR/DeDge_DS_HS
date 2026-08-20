@@ -8,6 +8,7 @@ import {
   createElement as lucideCreateElement,
   Diff,
   Ellipsis,
+  FileText,
   FoldVertical,
   KeyRound,
   LoaderCircle,
@@ -42,6 +43,7 @@ const iconComponents = {
   'fold-vertical': FoldVertical,
   'diff': Diff,
   'ellipsis': Ellipsis,
+  'file-text': FileText,
   'key-round': KeyRound,
   'loader-circle': LoaderCircle,
   'paperclip': Paperclip,
@@ -64,6 +66,7 @@ let attachments: readonly ContextAttachment[] = []
 let sessionTabsSignature = ''
 let noticeTimer: number | undefined
 let sendPending = false
+let pasteFileThreshold = 8_192
 let scrollBottomButton: HTMLButtonElement | undefined
 let stickToBottom = true
 const collapsedMessages = new Set<string>()
@@ -289,6 +292,7 @@ window.addEventListener('message', event => {
   if (message.type === 'state') {
     pendingState = message.state
     pendingAttachments = message.attachments
+    pasteFileThreshold = message.state.pasteFileThreshold
     scheduleRender()
   } else if (message.type === 'sendSettled') {
     sendPending = false
@@ -1035,10 +1039,18 @@ function renderAttachments(): void {
       thumb.src = `data:${attachment.image.mimeType};base64,${attachment.image.dataBase64}`
       thumb.alt = attachment.label
       chip.append(thumb)
+    } else if (attachment.pastedPath !== undefined) {
+      const thumb = document.createElement('span')
+      thumb.className = 'attachment-thumb file-thumb'
+      thumb.title = attachment.pastedPath
+      thumb.append(svgIcon('file-text'))
+      chip.append(thumb)
     }
     const label = document.createElement('span')
     const display = attachment.kind === 'image' ? attachment.label.replace(/^Image: /u, '') : attachment.label
-    label.textContent = `${display}${attachment.truncated ? ' [truncated]' : ''}`
+    label.textContent = attachment.pastedPath !== undefined
+      ? `${display} · saved to file`
+      : `${display}${attachment.truncated ? ' [truncated]' : ''}`
     const remove = document.createElement('button')
     remove.title = 'Remove attachment'
     remove.setAttribute('aria-label', 'Remove attachment')
@@ -1274,6 +1286,12 @@ async function handlePaste(event: ClipboardEvent): Promise<void> {
     await attachBrowserFiles([file])
     return
   }
+  const plain = data.getData('text/plain')
+  if (plain !== '' && plain.length > pasteFileThreshold) {
+    event.preventDefault()
+    post({ type: 'attachTextFiles', files: [{ name: pasteFileName(plain), text: plain }] })
+    return
+  }
   const uris = parseUriList(data.getData('text/uri-list'))
   if (uris.length > 0) {
     event.preventDefault()
@@ -1324,6 +1342,12 @@ function readFileAsDataUrl(file: File): Promise<string> {
 function hasAttachableData(data: DataTransfer | null): boolean {
   if (data === null) return false
   return data.files.length > 0 || data.types.includes('text/uri-list')
+}
+
+function pasteFileName(value: string): string {
+  const firstLine = value.split(/\r?\n/u).find(line => line.trim() !== '') ?? 'pasted-text'
+  const safe = firstLine.trim().slice(0, 40).replace(/[\\/:*?"<>|]/gu, '_').trim()
+  return `${safe === '' ? 'pasted-text' : safe}.txt`
 }
 
 function parseUriList(value: string): string[] {

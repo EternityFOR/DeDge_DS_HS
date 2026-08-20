@@ -12,6 +12,7 @@ export interface ContextAttachment {
   readonly text: string
   readonly uri?: string
   readonly truncated: boolean
+  readonly pastedPath?: string
   readonly image?: { readonly mimeType: string; readonly dataBase64: string }
   readonly skillDirectory?: string
 }
@@ -151,6 +152,7 @@ export class ContextCollector {
           `(${byteLength} bytes; read the file when you need its content instead of pasting it inline)`,
         ].join('\n'),
         truncated: false,
+        pastedPath: target,
       }
     }
     const limited = limitUtf8(value, maxBytes)

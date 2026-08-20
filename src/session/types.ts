@@ -75,6 +75,7 @@ export interface WorkbenchSnapshot {
   readonly permissionOptions?: PermissionProjection['options']
   readonly permissionChanging: boolean
   readonly contextWindowTokens: number
+  readonly pasteFileThreshold: number
   readonly contextPressure?: ContextPressureProjection
   readonly error?: string
 }

@@ -26,6 +26,7 @@ function snapshot(overrides: Partial<WorkbenchSnapshot> = {}): WorkbenchSnapshot
     permissionMode: 'workspace-write',
     permissionChanging: false,
     contextWindowTokens: 1_000_000,
+    pasteFileThreshold: 8_192,
     ...overrides,
   }
 }

@@ -299,8 +299,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       await this.post({ type: 'skills', skills: await this.controller.listSkillCatalog() })
     })
     if (message.type === 'removeAttachment') {
+      const removed = this.attachments.find(item => item.id === message.id)
       const removedPendingHandoff = this.pendingHandoff !== undefined && this.attachments.some(item => item.id === message.id && item.label === this.pendingHandoff?.draft.attachmentName)
       this.attachments = this.attachments.filter(item => item.id !== message.id)
+      if (removed?.pastedPath !== undefined) void this.controller.deletePastedFile(removed.pastedPath)
       if (removedPendingHandoff) await this.clearPendingHandoff()
       await this.postState()
       return
@@ -537,6 +539,8 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .chip { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; max-width: 220px; padding: 3px 6px; border: 1px solid var(--vscode-badge-background); border-radius: 3px; background: var(--vscode-editor-inactiveSelectionBackground); color: var(--vscode-foreground); }
     .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .attachment-thumb { flex: 0 0 26px; width: 26px; height: 26px; border-radius: 3px; object-fit: cover; border: 1px solid var(--vscode-panel-border); }
+    .file-thumb { display: grid; place-items: center; background: var(--vscode-editor-inactiveSelectionBackground); color: var(--vscode-descriptionForeground); }
+    .file-thumb svg { width: 14px; height: 14px; }
     .empty { display: grid; place-items: center; gap: 10px; min-height: 100%; color: var(--vscode-descriptionForeground); text-align: center; padding: 24px; font-size: 12px; }
     .empty-title { font-size: 12px; }
     .chip button { display: grid; place-items: center; background: transparent; cursor: pointer; padding: 0; }

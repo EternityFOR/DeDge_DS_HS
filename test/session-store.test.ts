@@ -60,7 +60,8 @@ describe('session event projection', () => {
   })
 
   it('surfaces turn errors and updates session metadata from events', () => {
-    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000 })
+    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000,
+    pasteFileThreshold: 8_192, })
     store.setActive('s-1')
     store.appendEvent('s-1', { type: 'session/title', seq: 1, time: 10, data: { title: 'Review' } })
     store.appendEvent('s-1', { type: 'turn/start', seq: 2, time: 11, data: {} })
@@ -72,7 +73,8 @@ describe('session event projection', () => {
   })
 
   it('projects active-session catalogs and keeps duplicate question ids in separate RPC batches', () => {
-    const store = new SessionStore({ provider: 'fallback', model: 'fallback-model', reasoningEffort: 'fallback-effort', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000 })
+    const store = new SessionStore({ provider: 'fallback', model: 'fallback-model', reasoningEffort: 'fallback-effort', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000,
+    pasteFileThreshold: 8_192, })
     store.addSession({ sessionId: 's-1', blank: true, running: false, agentPreset: 'cordis' })
     store.setActive('s-1')
     store.setModelCatalog('s-1', {
@@ -89,14 +91,15 @@ describe('session event projection', () => {
     ])
 
     const snapshot = store.snapshot()
-    expect(snapshot).toMatchObject({ provider: 'deepseek-official', model: 'deepseek-v4', reasoningEffort: '', agentPreset: 'cordis', contextWindowTokens: 1_000_000, contextPressure: { projectedTokens: 600_000, contextWindow: 1_000_000 } })
+    expect(snapshot).toMatchObject({ provider: 'deepseek-official', model: 'deepseek-v4', reasoningEffort: '', agentPreset: 'cordis', contextWindowTokens: 1_000_000, pasteFileThreshold: 8_192, contextPressure: { projectedTokens: 600_000, contextWindow: 1_000_000 } })
     expect(snapshot.questions.map(question => question.rpcId)).toEqual(['rpc-1', 'rpc-2'])
     store.resolveQuestions('rpc-1')
     expect(store.snapshot().questions.map(question => question.rpcId)).toEqual(['rpc-2'])
   })
 
   it('hides archived sessions and clears an archived active selection', () => {
-    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000 })
+    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000,
+    pasteFileThreshold: 8_192, })
     store.replaceSessions([
       { sessionId: 'session-one', blank: false, running: false, updatedAt: 10 },
       { sessionId: 'session-two', blank: false, running: false, updatedAt: 20 },
@@ -109,7 +112,8 @@ describe('session event projection', () => {
   })
 
   it('projects a deleting operation while the underlying mutation is in flight', () => {
-    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000 })
+    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000,
+    pasteFileThreshold: 8_192, })
     store.addSession({ sessionId: 'session-one', blank: false, running: false })
     store.setSessionOperation('session-one', 'deleting')
     expect(store.snapshot().sessions[0]).toMatchObject({ id: 'session-one', operation: 'deleting' })

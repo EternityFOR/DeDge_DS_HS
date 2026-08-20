@@ -285,6 +285,13 @@ export class WorkbenchController implements vscode.Disposable {
     return attachment
   }
 
+  async deletePastedFile(target: string): Promise<void> {
+    const directory = this.pastedDirectory()
+    const resolved = path.resolve(target)
+    if (!resolved.startsWith(directory + path.sep)) return
+    await rm(resolved, { force: true }).catch(() => undefined)
+  }
+
   private pastedDirectory(): string {
     return path.join(this.context.globalStorageUri.fsPath, 'tmp', 'pasted')
   }
@@ -665,7 +672,7 @@ function workspaceDirectory(): string {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd()
 }
 
-function toStoreConfiguration(configuration: HarnessConfiguration): { provider: string; model: string; reasoningEffort: string; agentPreset: string; permissionMode: string; contextWindowTokens: number } {
+function toStoreConfiguration(configuration: HarnessConfiguration): { provider: string; model: string; reasoningEffort: string; agentPreset: string; permissionMode: string; contextWindowTokens: number; pasteFileThreshold: number } {
   return {
     provider: configuration.provider,
     model: configuration.model,
@@ -673,6 +680,7 @@ function toStoreConfiguration(configuration: HarnessConfiguration): { provider: 
     agentPreset: configuration.agentPreset,
     permissionMode: configuration.permissionMode,
     contextWindowTokens: configuration.contextWindowTokens,
+    pasteFileThreshold: configuration.pasteFileThreshold,
   }
 }
 
