@@ -6,7 +6,7 @@
 
 [Marketplace](https://marketplace.visualstudio.com/items?itemName=diractive-edge.dedge-deepseek-harness-vscode) · [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) · [Changelog](CHANGELOG.md) · [隐私](PRIVACY.md) · [安全](SECURITY.md) · [支持](SUPPORT.md)
 
-> 当前版本为 `0.1.3`。发布产物优先验证 Windows 10/11 x64；DeepSeek Harness 上游仍处于 developer preview，升级前请阅读变更日志和已知限制。
+> 当前版本为 `0.1.4`。发布产物优先验证 Windows 10/11 x64；DeepSeek Harness 上游仍处于 developer preview，升级前请阅读变更日志和已知限制。
 
 ## 主要能力
 
@@ -28,14 +28,14 @@
 
 ### 从 VSIX 安装
 
-1. 从 [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) 下载与 extension host 匹配的文件，例如 `dedge-deepseek-harness-vscode-0.1.3-win32-x64.vsix`。
+1. 从 [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) 下载与 extension host 匹配的文件，例如 `dedge-deepseek-harness-vscode-0.1.4-win32-x64.vsix`。
 2. 在 VS Code 扩展视图右上角菜单选择 **Install from VSIX...**。
 3. 安装完成后按 VS Code 提示重新加载窗口。
 
 也可以显式安装：
 
 ```powershell
-code --install-extension .\dedge-deepseek-harness-vscode-0.1.3-win32-x64.vsix
+code --install-extension .\dedge-deepseek-harness-vscode-0.1.4-win32-x64.vsix
 ```
 
 Remote SSH、WSL 和 Dev Container 使用远端 extension host 的操作系统与架构，不是本地 UI 的平台。平台 VSIX 不能混用。
@@ -103,7 +103,7 @@ Codex / Claude / DeepSeek source session (read-only)
 
 | Extension host | VSIX target | 当前状态 |
 | --- | --- | --- |
-| Windows 10/11 x64 | `win32-x64` | `0.1.3` 完整验证目标 |
+| Windows 10/11 x64 | `win32-x64` | `0.1.4` 完整验证目标 |
 | Linux x64 | `linux-x64` | 源码支持；发布前需要原生 runner 验证 |
 | macOS Apple Silicon | `darwin-arm64` | 源码支持；发布前需要原生 runner 验证 |
 | Windows ARM64 / Linux ARM64 / macOS Intel | 对应 target | 需要对应原生 runner 或设备验证 |

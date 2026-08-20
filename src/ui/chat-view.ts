@@ -34,6 +34,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private readonly controllerSubscription: vscode.Disposable
   private pendingHandoff: PendingHandoffState | undefined
   private restoredHandoffSessionId: string | undefined
+  private statePostTimer: ReturnType<typeof setTimeout> | undefined
+  private statePostScheduled = false
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -44,7 +46,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   ) {
     this.pendingHandoff = parsePendingHandoffState(context.workspaceState.get<unknown>(PENDING_HANDOFF_KEY))
     this.controllerSubscription = controller.onDidChange(() => {
-      void this.restorePendingHandoff().then(() => this.postState())
+      this.scheduleStatePost()
     })
   }
 
@@ -223,6 +225,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   dispose(): void {
+    if (this.statePostTimer !== undefined) clearTimeout(this.statePostTimer)
     this.controllerSubscription.dispose()
   }
 
@@ -346,7 +349,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
   }
 
+  private scheduleStatePost(): void {
+    if (this.statePostScheduled) return
+    this.statePostScheduled = true
+    this.statePostTimer = setTimeout(() => {
+      this.statePostScheduled = false
+      this.statePostTimer = undefined
+      void this.restorePendingHandoff().then(() => this.postState())
+    }, 30)
+  }
+
   private postState(): Promise<boolean> {
+    if (this.statePostScheduled) {
+      this.statePostScheduled = false
+      if (this.statePostTimer !== undefined) clearTimeout(this.statePostTimer)
+      this.statePostTimer = undefined
+    }
     return this.post({ type: 'state', state: this.controller.snapshot(), attachments: this.attachments })
   }
 
@@ -445,6 +463,14 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .conversation { overflow: auto; min-height: 0; padding: 2px 10px 18px; }
     .empty { display: grid; place-items: center; min-height: 100%; color: var(--vscode-descriptionForeground); text-align: center; padding: 24px; font-size: 12px; }
     .message { padding: 12px 2px; border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent); overflow-wrap: anywhere; }
+    .message-head { display: flex; align-items: center; gap: 4px; min-height: 18px; margin-bottom: 3px; opacity: 0; transition: opacity 90ms ease; }
+    .message:hover .message-head, .message.collapsed .message-head { opacity: 1; }
+    .message-role-label { color: var(--vscode-descriptionForeground); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+    .collapse-toggle { display: grid; place-items: center; width: 18px; height: 18px; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border-radius: 3px; cursor: pointer; }
+    .collapse-toggle:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }
+    .collapse-toggle svg { width: 13px; height: 13px; transition: transform 120ms ease; }
+    .collapse-toggle.collapsed svg { transform: rotate(-90deg); }
+    .message-preview { color: var(--vscode-descriptionForeground); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
     .message.user { padding-left: 10px; border-left: 2px solid var(--vscode-charts-blue); }
     .message-attachments { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 7px; min-width: 0; }
     .message-attachment { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-height: 24px; padding: 2px 6px; border: 1px solid var(--vscode-panel-border); border-radius: 3px; color: var(--vscode-descriptionForeground); background: var(--vscode-editor-inactiveSelectionBackground); font-size: 11px; }
@@ -456,7 +482,15 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .message code { font-family: var(--vscode-editor-font-family); }
     .message p:first-child { margin-top: 0; }
     .message p:last-child { margin-bottom: 0; }
-    details.message summary { cursor: pointer; color: var(--vscode-descriptionForeground); }
+    .streaming-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .streaming-text::after { content: '\u258d'; color: var(--vscode-progressBar-background); margin-left: 1px; animation: streaming-caret 1.1s ease-in-out infinite alternate; }
+    @keyframes streaming-caret { from { opacity: 1; } to { opacity: .15; } }
+    details.message .message-body { margin-top: 4px; }
+    details.message summary { cursor: pointer; color: var(--vscode-descriptionForeground); display: flex; align-items: center; gap: 4px; list-style: none; }
+    details.message summary::-webkit-details-marker { display: none; }
+    details.message .summary-chevron { width: 12px; height: 12px; flex: 0 0 12px; transition: transform 120ms ease; }
+    details.message:not([open]) .summary-chevron { transform: rotate(-90deg); }
+    details.message .summary-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     details.reasoning { border-left: 2px solid var(--vscode-charts-yellow); padding-left: 8px; }
     details.tool { border-left: 2px solid var(--vscode-charts-green); padding-left: 8px; }
     .pending { margin: 8px 0; padding: 10px; border: 1px solid var(--vscode-inputValidation-warningBorder); border-radius: 4px; background: var(--vscode-inputValidation-warningBackground); }
@@ -520,6 +554,9 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .context-meter-anchor:hover .context-tooltip, .context-meter-anchor:focus-within .context-tooltip { opacity: 1; visibility: visible; transform: translateY(0); }
     .context-tooltip strong { color: var(--vscode-foreground); font-weight: 600; }
     .context-figures { font-variant-numeric: tabular-nums; }
+    .scroll-bottom { position: sticky; bottom: 8px; display: grid; place-items: center; width: 26px; height: 26px; margin: -34px 0 0 auto; padding: 0; border: 1px solid var(--vscode-panel-border); border-radius: 50%; background: var(--vscode-sideBar-background); color: var(--vscode-icon-foreground); box-shadow: 0 3px 10px rgba(0,0,0,.25); cursor: pointer; z-index: 30; }
+    .scroll-bottom:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }
+    .scroll-bottom svg { width: 14px; height: 14px; }
     .status { display: flex; align-items: center; gap: 6px; color: var(--vscode-descriptionForeground); font-size: 11px; padding-top: 6px; }
     .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-disabledForeground); }
     .status-dot.ready { background: var(--vscode-testing-iconPassed); }

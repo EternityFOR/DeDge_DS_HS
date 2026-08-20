@@ -3,6 +3,8 @@ import {
   ArrowLeftRight,
   Check,
   ChevronDown,
+  ChevronsDown,
+  createElement as lucideCreateElement,
   createIcons,
   Diff,
   Ellipsis,
@@ -10,8 +12,8 @@ import {
   LoaderCircle,
   Paperclip,
   Plus,
-  Settings2,
   Send,
+  Settings2,
   ShieldCheck,
   Shrink,
   Square,
@@ -28,13 +30,54 @@ import type { HostToWebviewMessage, WebviewToHostMessage } from '../webview-prot
 declare function acquireVsCodeApi(): { postMessage(message: WebviewToHostMessage): void; setState(value: unknown): void; getState(): unknown }
 
 const vscode = acquireVsCodeApi()
-const icons = { ArrowLeftRight, Check, ChevronDown, Diff, Ellipsis, KeyRound, LoaderCircle, Paperclip, Plus, Send, Settings2, ShieldCheck, Shrink, Square, TextQuote, TriangleAlert, X }
+const iconComponents = {
+  'arrow-left-right': ArrowLeftRight,
+  'check': Check,
+  'chevron-down': ChevronDown,
+  'chevrons-down': ChevronsDown,
+  'diff': Diff,
+  'ellipsis': Ellipsis,
+  'key-round': KeyRound,
+  'loader-circle': LoaderCircle,
+  'paperclip': Paperclip,
+  'plus': Plus,
+  'send': Send,
+  'settings-2': Settings2,
+  'shield-check': ShieldCheck,
+  'shrink': Shrink,
+  'square': Square,
+  'text-quote': TextQuote,
+  'triangle-alert': TriangleAlert,
+  'x': X,
+} as const
+type IconName = keyof typeof iconComponents
 const contextCircumference = 2 * Math.PI * 5.5
+
 let state: WorkbenchSnapshot | undefined
 let attachments: readonly ContextAttachment[] = []
 let sessionTabsSignature = ''
 let noticeTimer: number | undefined
 let sendPending = false
+let scrollBottomButton: HTMLButtonElement | undefined
+let stickToBottom = true
+const collapsedMessages = new Set<string>()
+const sentHistory: string[] = []
+let historyIndex = -1
+
+// Rendering state: state messages are coalesced into at most one full render per animation frame.
+let renderScheduled = false
+let pendingState: WorkbenchSnapshot | undefined
+let pendingAttachments: readonly ContextAttachment[] = []
+let renderedSessionKey: string | undefined
+let emptyNode: HTMLElement | undefined
+let pendingAnchor: HTMLElement | undefined
+let pendingSignature = ''
+let controlsSignature = ''
+let attachmentsSignature = ''
+const messageElements = new Map<string, HTMLElement>()
+const messageSignatures = new Map<string, string>()
+const autoOpenedDetails = new Set<string>()
+const userToggledDetails = new Set<string>()
 
 marked.setOptions({ gfm: true, breaks: false })
 
@@ -75,8 +118,13 @@ if (typeof persistedWebviewState === 'object' && persistedWebviewState !== null 
 
 const popovers = [
   popover('attach-menu', 'attach-popover'),
-  popover('permission-menu', 'permission-popover'),
-  popover('model-menu', 'model-popover'),
+  popover('permission-menu', 'permission-popover', () => renderPermissionOptions(state)),
+  popover('model-menu', 'model-popover', () => {
+    if (state === undefined) return
+    renderModelOptions(state)
+    renderReasoningOptions(state)
+    renderPresetOptions(state)
+  }),
 ]
 
 bindAction('attach-selection', { type: 'attachSelection' })
@@ -94,9 +142,41 @@ elements.prompt.addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault()
     send()
+    return
+  }
+  if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && sentHistory.length > 0) {
+    const browsing = historyIndex !== -1 && elements.prompt.value === sentHistory[historyIndex]
+    if (browsing || elements.prompt.value === '') {
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        historyIndex = historyIndex === -1 ? sentHistory.length - 1 : Math.max(0, historyIndex - 1)
+        const entry = sentHistory[historyIndex]
+        if (entry !== undefined) {
+          elements.prompt.value = entry
+          resizePrompt()
+          vscode.setState({ draft: elements.prompt.value })
+        }
+        return
+      }
+      if (browsing) {
+        event.preventDefault()
+        historyIndex += 1
+        if (historyIndex >= sentHistory.length) {
+          historyIndex = -1
+          elements.prompt.value = ''
+        } else {
+          const entry = sentHistory[historyIndex]
+          if (entry !== undefined) elements.prompt.value = entry
+        }
+        resizePrompt()
+        vscode.setState({ draft: elements.prompt.value })
+        return
+      }
+    }
   }
 })
 elements.prompt.addEventListener('input', () => {
+  if (historyIndex !== -1 && elements.prompt.value !== sentHistory[historyIndex]) historyIndex = -1
   resizePrompt()
   vscode.setState({ draft: elements.prompt.value })
 })
@@ -124,6 +204,13 @@ document.addEventListener('click', event => {
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') closePopovers()
 })
+elements.conversation.addEventListener('scroll', () => {
+  const conversation = elements.conversation
+  const maxScroll = Math.max(0, conversation.scrollHeight - conversation.clientHeight)
+  if (conversation.scrollTop >= maxScroll - 24) stickToBottom = true
+  else if (conversation.scrollTop < maxScroll - 96) stickToBottom = false
+  updateScrollBottomButton()
+})
 window.addEventListener('resize', () => {
   for (const item of popovers) {
     if (!item.popover.classList.contains('hidden')) positionPopover(item)
@@ -134,9 +221,9 @@ window.addEventListener('resize', () => {
 window.addEventListener('message', event => {
   const message = event.data as HostToWebviewMessage
   if (message.type === 'state') {
-    state = message.state
-    attachments = message.attachments
-    render()
+    pendingState = message.state
+    pendingAttachments = message.attachments
+    scheduleRender()
   } else if (message.type === 'sendSettled') {
     sendPending = false
     if (message.accepted && elements.prompt.value === message.text) {
@@ -145,6 +232,7 @@ window.addEventListener('message', event => {
       resizePrompt()
     }
     if (state !== undefined) renderStatus(state)
+    elements.prompt.focus()
   } else if (message.type === 'setDraft') {
     elements.prompt.value = message.text
     vscode.setState({ draft: message.text })
@@ -153,12 +241,23 @@ window.addEventListener('message', event => {
   } else if (message.type === 'notice') showNotice(message.message)
 })
 
-createIcons({ icons })
+createIcons({ icons: iconComponents })
 resizePrompt()
 post({ type: 'ready' })
 
+function scheduleRender(): void {
+  if (renderScheduled) return
+  renderScheduled = true
+  window.requestAnimationFrame(() => {
+    renderScheduled = false
+    if (pendingState === undefined) return
+    render()
+  })
+}
+
 function render(): void {
-  if (state === undefined) return
+  if (pendingState === undefined) return
+  state = pendingState
   renderSessionTabs(state)
   renderControls(state)
   renderContextMeter(state)
@@ -166,10 +265,21 @@ function render(): void {
   renderAttachments()
   renderStatus(state)
   vscode.setState({ activeSessionId: state.activeSessionId })
-  createIcons({ icons })
 }
 
 function renderControls(snapshot: WorkbenchSnapshot): void {
+  const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
+  const signature = [
+    snapshot.provider, snapshot.model, snapshot.reasoningEffort, snapshot.agentPreset,
+    snapshot.permissionMode, String(snapshot.permissionChanging), snapshot.phase,
+    snapshot.modelCatalog === undefined ? 'u' : 'd',
+    snapshot.presetCatalog === undefined ? 'u' : 'd',
+    snapshot.permissionOptions === undefined ? null : snapshot.permissionOptions,
+    active === undefined ? null : [active.blank, active.running, active.operation],
+  ]
+  const fingerprint = JSON.stringify(signature)
+  if (fingerprint === controlsSignature) return
+  controlsSignature = fingerprint
   renderModelOptions(snapshot)
   renderReasoningOptions(snapshot)
   renderPresetOptions(snapshot)
@@ -221,9 +331,8 @@ function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
           ? 'Stop in progress'
           : session.running ? 'Finish or cancel the response before managing this session' : `Archive or delete ${session.title}`
     manage.setAttribute('aria-label', manage.title)
-    const icon = document.createElement('i')
-    icon.dataset.lucide = session.operation === undefined ? 'ellipsis' : 'loader-circle'
-    if (session.operation !== undefined) icon.className = 'session-operation-icon'
+    const icon = svgIcon(session.operation === undefined ? 'ellipsis' : 'loader-circle')
+    if (session.operation !== undefined) icon.classList.add('session-operation-icon')
     manage.append(icon)
     manage.addEventListener('click', event => {
       event.stopPropagation()
@@ -236,7 +345,8 @@ function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
   elements.sessionTabs.scrollLeft = scrollLeft
 }
 
-function renderModelOptions(snapshot: WorkbenchSnapshot): void {
+function renderModelOptions(snapshot: WorkbenchSnapshot | undefined): void {
+  if (snapshot === undefined) return
   const nodes: Node[] = []
   if (snapshot.modelCatalog === undefined) {
     elements.modelOptions.replaceChildren(menuOption({ label: 'Loading models...', selected: false, disabled: true, handler: () => undefined }))
@@ -280,7 +390,8 @@ function renderModelOptions(snapshot: WorkbenchSnapshot): void {
   elements.modelLabel.textContent = currentName
 }
 
-function renderReasoningOptions(snapshot: WorkbenchSnapshot): void {
+function renderReasoningOptions(snapshot: WorkbenchSnapshot | undefined): void {
+  if (snapshot === undefined) return
   const model = snapshot.modelCatalog?.groups
     .find(group => group.id === snapshot.provider)?.models
     .find(candidate => candidate.id === snapshot.model)
@@ -303,7 +414,8 @@ function renderReasoningOptions(snapshot: WorkbenchSnapshot): void {
   })))
 }
 
-function renderPresetOptions(snapshot: WorkbenchSnapshot): void {
+function renderPresetOptions(snapshot: WorkbenchSnapshot | undefined): void {
+  if (snapshot === undefined) return
   const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
   const locked = active?.blank !== true
   const presets = snapshot.presetCatalog?.presets?.filter(preset => preset.broken === undefined) ?? []
@@ -323,7 +435,8 @@ function renderPresetOptions(snapshot: WorkbenchSnapshot): void {
   elements.presetOptions.replaceChildren(...options)
 }
 
-function renderPermissionOptions(snapshot: WorkbenchSnapshot): void {
+function renderPermissionOptions(snapshot: WorkbenchSnapshot | undefined): void {
+  if (snapshot === undefined) return
   const fallback = [
     { id: 'read-only', label: 'Read only', short: 'Read only', description: 'No model-driven file mutations' },
     { id: 'workspace-write', label: 'Workspace write', short: 'Workspace', description: 'Workspace writes; some Windows external tools require one-time approval' },
@@ -356,15 +469,102 @@ function renderPermissionOptions(snapshot: WorkbenchSnapshot): void {
 }
 
 function renderConversation(snapshot: WorkbenchSnapshot): void {
-  const nodes: Node[] = []
-  if (snapshot.messages.length === 0 && snapshot.approvals.length === 0 && snapshot.questions.length === 0) {
-    const empty = document.createElement('div')
-    empty.className = 'empty'
-    empty.textContent = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)?.title ?? `DeepSeek Harness: ${snapshot.phase}`
-    nodes.push(empty)
+  const sessionKey = snapshot.activeSessionId ?? '\u0000'
+  if (sessionKey !== renderedSessionKey) {
+    renderedSessionKey = sessionKey
+    messageElements.clear()
+    messageSignatures.clear()
+    autoOpenedDetails.clear()
+    userToggledDetails.clear()
+    collapsedMessages.clear()
+    stickToBottom = true
+    emptyNode = undefined
+    elements.conversation.replaceChildren()
+    pendingAnchor = document.createElement('div')
+    pendingAnchor.className = 'pending-area'
+    elements.conversation.append(pendingAnchor)
+    scrollBottomButton = document.createElement('button')
+    scrollBottomButton.type = 'button'
+    scrollBottomButton.className = 'scroll-bottom hidden'
+    scrollBottomButton.title = 'Jump to latest output'
+    scrollBottomButton.setAttribute('aria-label', 'Jump to latest output')
+    scrollBottomButton.append(svgIcon('chevrons-down'))
+    scrollBottomButton.addEventListener('click', () => {
+      elements.conversation.scrollTop = elements.conversation.scrollHeight
+      updateScrollBottomButton()
+    })
+    elements.conversation.append(scrollBottomButton)
   }
-  for (const message of snapshot.messages) nodes.push(renderMessage(message))
-  for (const approval of snapshot.approvals) {
+  if (pendingAnchor === undefined || !pendingAnchor.isConnected) {
+    pendingAnchor = document.createElement('div')
+    pendingAnchor.className = 'pending-area'
+    elements.conversation.append(pendingAnchor)
+  }
+
+  const messages = snapshot.messages
+  const seen = new Set<string>()
+  let streaming = false
+  for (const message of messages) {
+    seen.add(message.id)
+    const signature = messageSignature(message)
+    let node = messageElements.get(message.id)
+    if (node === undefined) {
+      node = renderMessage(message)
+      messageElements.set(message.id, node)
+      messageSignatures.set(message.id, signature)
+      elements.conversation.insertBefore(node, pendingAnchor)
+    } else if (signature !== messageSignatures.get(message.id)) {
+      messageSignatures.set(message.id, signature)
+      updateMessage(node, message)
+    }
+    if (message.status === 'streaming') streaming = true
+  }
+  for (const [id, node] of messageElements) {
+    if (seen.has(id)) continue
+    node.remove()
+    messageElements.delete(id)
+    messageSignatures.delete(id)
+  }
+
+  const approvals = snapshot.approvals
+  const questions = snapshot.questions
+  const empty = messages.length === 0 && approvals.length === 0 && questions.length === 0
+  if (empty) {
+    if (emptyNode === undefined) {
+      emptyNode = document.createElement('div')
+      emptyNode.className = 'empty'
+      elements.conversation.insertBefore(emptyNode, pendingAnchor)
+    }
+    emptyNode.textContent = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)?.title ?? `DeepSeek Harness: ${snapshot.phase}`
+  } else if (emptyNode !== undefined) {
+    emptyNode.remove()
+    emptyNode = undefined
+  }
+
+  const signature = pendingAreaSignature(approvals, questions)
+  if (signature !== pendingSignature) {
+    pendingSignature = signature
+    pendingAnchor.replaceChildren(...renderPendingArea(approvals, questions))
+  }
+
+  if (streaming && stickToBottom) {
+    const conversation = elements.conversation
+    conversation.scrollTop = Math.max(0, conversation.scrollHeight - conversation.clientHeight)
+  }
+  updateScrollBottomButton()
+}
+
+function updateScrollBottomButton(): void {
+  if (scrollBottomButton === undefined) return
+  const conversation = elements.conversation
+  const maxScroll = Math.max(0, conversation.scrollHeight - conversation.clientHeight)
+  const away = maxScroll - conversation.scrollTop > 48
+  scrollBottomButton.classList.toggle('hidden', !away)
+}
+
+function renderPendingArea(approvals: WorkbenchSnapshot['approvals'], questions: WorkbenchSnapshot['questions']): Node[] {
+  const nodes: Node[] = []
+  for (const approval of approvals) {
     const pending = document.createElement('section')
     pending.className = 'pending'
     pending.innerHTML = '<div class="pending-title"></div><div class="pending-reason"></div><div class="actions"></div>'
@@ -376,49 +576,188 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     )
     nodes.push(pending)
   }
-  for (const questions of groupQuestions(snapshot.questions)) nodes.push(renderQuestionBatch(questions))
-  elements.conversation.replaceChildren(...nodes)
-  if (snapshot.messages.some(message => message.status === 'streaming')) elements.conversation.scrollTop = elements.conversation.scrollHeight
+  for (const batch of groupQuestions(questions)) nodes.push(renderQuestionBatch(batch))
+  return nodes
+}
+
+function pendingAreaSignature(approvals: WorkbenchSnapshot['approvals'], questions: WorkbenchSnapshot['questions']): string {
+  return JSON.stringify([
+    approvals.map(approval => [approval.id, approval.toolName, approval.reason]),
+    questions.map(question => [question.rpcId, question.id, question.header, question.question, question.detail, question.multiSelect, question.options.map(option => [option.label, option.description])]),
+  ])
+}
+
+function messageSignature(message: WorkbenchMessage): string {
+  return `${message.id}\u0000${message.seq ?? ''}\u0000${message.status ?? ''}\u0000${message.text.length}\u0000${message.title ?? ''}\u0000${message.attachments === undefined ? '' : message.attachments.map(attachment => attachment.kind + attachment.label).join(',')}`
 }
 
 function renderMessage(message: WorkbenchMessage): HTMLElement {
   if (message.role === 'reasoning' || message.role === 'tool') {
     const details = document.createElement('details')
     details.className = `message ${message.role}`
-    details.open = message.status === 'streaming'
+    if (message.status === 'streaming' && !userToggledDetails.has(message.id)) {
+      details.open = true
+      autoOpenedDetails.add(message.id)
+    }
     const summary = document.createElement('summary')
-    summary.textContent = message.role === 'reasoning' ? 'Reasoning' : message.title ?? 'Tool'
+    const summaryLabel = document.createElement('span')
+    summaryLabel.className = 'summary-label'
+    summaryLabel.textContent = message.role === 'reasoning' ? 'Reasoning' : message.title ?? 'Tool'
+    const chevron = svgIcon('chevron-down')
+    chevron.classList.add('summary-chevron')
+    summary.append(summaryLabel, chevron)
     const body = document.createElement('div')
-    body.innerHTML = markdown(message.text)
+    body.className = 'message-body'
+    body.append(renderMessageBody(message))
     details.append(summary, body)
+    summary.addEventListener('click', () => { userToggledDetails.add(message.id) })
+    summary.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') userToggledDetails.add(message.id)
+    })
     return details
   }
   const article = document.createElement('article')
   article.className = `message ${message.role}`
+  const head = buildMessageHead(message)
+  article.append(head.head)
   if (message.attachments !== undefined && message.attachments.length > 0) {
-    const attachments = document.createElement('div')
-    attachments.className = 'message-attachments'
-    for (const attachment of message.attachments) {
-      const item = document.createElement('span')
-      item.className = 'message-attachment'
-      item.title = `${attachment.label} - content hidden from the conversation view`
-      const icon = document.createElement('i')
-      icon.dataset.lucide = attachment.kind === 'handoff' ? 'arrow-left-right' : 'paperclip'
-      const label = document.createElement('span')
-      label.className = 'message-attachment-label'
-      label.textContent = attachment.label
-      item.append(icon, label)
-      attachments.append(item)
-    }
-    article.append(attachments)
+    article.append(buildAttachmentsRow(message.attachments))
   }
-  if (message.text !== '') {
-    const body = document.createElement('div')
-    body.className = 'message-copy'
-    body.innerHTML = markdown(message.text)
-    article.append(body)
-  }
+  if (message.text !== '') article.append(buildMessageCopy(message))
+  bindCollapseToggle(article, head.toggle, message)
+  if (collapsedMessages.has(message.id)) applyCollapse(article, message, true)
   return article
+}
+
+function updateMessage(node: HTMLElement, message: WorkbenchMessage): void {
+  if (message.role === 'reasoning' || message.role === 'tool') {
+    const details = node as HTMLDetailsElement
+    const summary = details.querySelector('summary')
+    const summaryLabel = summary?.querySelector('.summary-label')
+    if (summaryLabel !== undefined && summaryLabel !== null) summaryLabel.textContent = message.role === 'reasoning' ? 'Reasoning' : message.title ?? 'Tool'
+    const body = details.querySelector('.message-body')
+    if (body !== null) body.replaceChildren(renderMessageBody(message))
+    if (message.status === 'streaming') {
+      if (!userToggledDetails.has(message.id)) {
+        details.open = true
+        autoOpenedDetails.add(message.id)
+      }
+    } else {
+      if (autoOpenedDetails.has(message.id) && !userToggledDetails.has(message.id)) details.open = false
+      autoOpenedDetails.delete(message.id)
+    }
+    return
+  }
+  let head = node.querySelector('.message-head')
+  if (head === null) {
+    const built = buildMessageHead(message)
+    head = built.head
+    bindCollapseToggle(node, built.toggle, message)
+    node.prepend(head)
+  }
+  node.querySelectorAll('.message-attachments, .message-copy, .message-preview').forEach(element => element.remove())
+  if (message.attachments !== undefined && message.attachments.length > 0) {
+    node.append(buildAttachmentsRow(message.attachments))
+  }
+  if (message.text !== '') node.append(buildMessageCopy(message))
+  if (collapsedMessages.has(message.id)) applyCollapse(node, message, true)
+}
+
+function buildMessageHead(message: WorkbenchMessage): { head: HTMLDivElement; toggle: HTMLButtonElement } {
+  const head = document.createElement('div')
+  head.className = 'message-head'
+  const toggle = document.createElement('button')
+  toggle.type = 'button'
+  toggle.className = 'collapse-toggle'
+  toggle.setAttribute('aria-expanded', 'true')
+  toggle.title = 'Collapse or expand this message'
+  toggle.setAttribute('aria-label', 'Collapse or expand this message')
+  toggle.append(svgIcon('chevron-down'))
+  const label = document.createElement('span')
+  label.className = 'message-role-label'
+  label.textContent = roleLabel(message.role)
+  head.append(toggle, label)
+  return { head, toggle }
+}
+
+function bindCollapseToggle(article: HTMLElement, toggle: HTMLButtonElement, message: WorkbenchMessage): void {
+  toggle.addEventListener('click', () => {
+    const collapsed = collapsedMessages.has(message.id)
+    if (collapsed) {
+      collapsedMessages.delete(message.id)
+      applyCollapse(article, message, false)
+    } else {
+      collapsedMessages.add(message.id)
+      applyCollapse(article, message, true)
+    }
+  })
+}
+
+function applyCollapse(article: HTMLElement, message: WorkbenchMessage, collapsed: boolean): void {
+  article.classList.toggle('collapsed', collapsed)
+  const toggle = article.querySelector('.collapse-toggle')
+  toggle?.classList.toggle('collapsed', collapsed)
+  toggle?.setAttribute('aria-expanded', String(!collapsed))
+  article.querySelectorAll('.message-attachments, .message-copy').forEach(element => element.classList.toggle('hidden', collapsed))
+  let preview = article.querySelector('.message-preview')
+  if (collapsed) {
+    if (preview === null) {
+      preview = document.createElement('div')
+      preview.className = 'message-preview'
+      const copy = article.querySelector('.message-copy')
+      if (copy !== null) article.insertBefore(preview, copy)
+      else article.append(preview)
+    }
+    const text = message.text === '' ? (message.attachments?.map(attachment => attachment.label).join(', ') ?? '') : message.text
+    const flattened = text.replace(/\s+/gu, ' ')
+    preview.textContent = flattened.length > 120 ? flattened.slice(0, 117).trimEnd() + '...' : flattened
+  } else {
+    preview?.remove()
+  }
+}
+
+function roleLabel(role: WorkbenchMessage['role']): string {
+  if (role === 'user') return 'You'
+  if (role === 'assistant') return 'Assistant'
+  if (role === 'system') return 'System'
+  if (role === 'reasoning') return 'Reasoning'
+  return 'Tool'
+}
+
+function buildAttachmentsRow(attachments: readonly NonNullable<WorkbenchMessage['attachments']>[number][]): HTMLDivElement {
+  const row = document.createElement('div')
+  row.className = 'message-attachments'
+  for (const attachment of attachments) {
+    const item = document.createElement('span')
+    item.className = 'message-attachment'
+    item.title = `${attachment.label} - content hidden from the conversation view`
+    item.append(svgIcon(attachment.kind === 'handoff' ? 'arrow-left-right' : 'paperclip'))
+    const label = document.createElement('span')
+    label.className = 'message-attachment-label'
+    label.textContent = attachment.label
+    item.append(label)
+    row.append(item)
+  }
+  return row
+}
+
+function buildMessageCopy(message: WorkbenchMessage): HTMLDivElement {
+  const copy = document.createElement('div')
+  copy.className = 'message-copy'
+  copy.append(renderMessageBody(message))
+  return copy
+}
+
+function renderMessageBody(message: WorkbenchMessage): Node {
+  if (message.status === 'streaming') {
+    const stream = document.createElement('div')
+    stream.className = 'streaming-text'
+    stream.textContent = message.text
+    return stream
+  }
+  const content = document.createElement('div')
+  content.innerHTML = markdown(message.text)
+  return content
 }
 
 function renderQuestionBatch(questions: readonly WorkbenchSnapshot['questions'][number][]): HTMLElement {
@@ -523,6 +862,9 @@ function groupQuestions(questions: WorkbenchSnapshot['questions']): WorkbenchSna
 }
 
 function renderAttachments(): void {
+  const signature = JSON.stringify(attachments.map(attachment => [attachment.id, attachment.label, attachment.truncated === true]))
+  if (signature === attachmentsSignature) return
+  attachmentsSignature = signature
   elements.attachments.replaceChildren(...attachments.map(attachment => {
     const chip = document.createElement('div')
     chip.className = 'chip'
@@ -531,7 +873,7 @@ function renderAttachments(): void {
     const remove = document.createElement('button')
     remove.title = 'Remove attachment'
     remove.setAttribute('aria-label', 'Remove attachment')
-    remove.innerHTML = '<i data-lucide="x"></i>'
+    remove.append(svgIcon('x'))
     remove.addEventListener('click', () => post({ type: 'removeAttachment', id: attachment.id }))
     chip.append(label, remove)
     return chip
@@ -630,7 +972,7 @@ function menuOption(options: {
   button.setAttribute('aria-checked', String(options.selected))
   const check = document.createElement('span')
   check.className = 'menu-check'
-  if (options.selected) check.innerHTML = '<i data-lucide="check"></i>'
+  if (options.selected) check.append(svgIcon('check'))
   const copy = document.createElement('span')
   copy.className = 'menu-option-copy'
   const label = document.createElement('span')
@@ -648,13 +990,28 @@ function menuOption(options: {
   return button
 }
 
+function svgIcon(name: IconName): SVGSVGElement {
+  const component = iconComponents[name]
+  const svg = lucideCreateElement(component) as SVGSVGElement
+  svg.setAttribute('data-lucide', name)
+  svg.classList.add('lucide', `lucide-${name}`)
+  svg.setAttribute('aria-hidden', 'true')
+  return svg
+}
+
 function send(): void {
   if (sendPending || state === undefined || promptUnavailableReason(state) !== undefined) return
   const value = elements.prompt.value
   if (value.trim() === '' && attachments.length === 0) return
   sendPending = true
+  if (value.trim() !== '') {
+    if (sentHistory[sentHistory.length - 1] !== value) sentHistory.push(value)
+    if (sentHistory.length > 200) sentHistory.shift()
+  }
+  historyIndex = -1
   renderStatus(state)
   post({ type: 'send', text: value })
+  elements.prompt.focus()
 }
 
 async function handlePaste(event: ClipboardEvent): Promise<void> {
@@ -726,7 +1083,7 @@ interface PopoverBinding {
   readonly anchor: HTMLElement
 }
 
-function popover(buttonId: string, popoverId: string): PopoverBinding {
+function popover(buttonId: string, popoverId: string, onOpen?: () => void): PopoverBinding {
   const button = requiredButton(buttonId)
   const popup = required(popoverId)
   const anchor = button.closest('.menu-anchor')
@@ -737,9 +1094,12 @@ function popover(buttonId: string, popoverId: string): PopoverBinding {
     closePopovers()
     popup.classList.toggle('hidden', !opening)
     button.setAttribute('aria-expanded', String(opening))
-    if (opening) window.requestAnimationFrame(() => {
-      if (!popup.classList.contains('hidden')) positionPopover({ button, popover: popup, anchor })
-    })
+    if (opening) {
+      onOpen?.()
+      window.requestAnimationFrame(() => {
+        if (!popup.classList.contains('hidden')) positionPopover({ button, popover: popup, anchor })
+      })
+    }
   })
   popup.addEventListener('click', event => event.stopPropagation())
   return { button, popover: popup, anchor }

@@ -25,6 +25,8 @@ export class WorkbenchController implements vscode.Disposable {
   private configurationSubscription: vscode.Disposable
   private startTask: Promise<void> | undefined
   private disposed = false
+  private publishTimer: ReturnType<typeof setTimeout> | undefined
+  private publishScheduled = false
 
   readonly onDidChange = this.changed.event
 
@@ -365,6 +367,7 @@ export class WorkbenchController implements vscode.Disposable {
 
   dispose(): void {
     this.disposed = true
+    if (this.publishTimer !== undefined) clearTimeout(this.publishTimer)
     this.sessionOperations.clear()
     this.runtimeSubscription.dispose()
     this.configurationSubscription.dispose()
@@ -480,7 +483,13 @@ export class WorkbenchController implements vscode.Disposable {
   }
 
   private publish(): void {
-    if (!this.disposed) this.changed.fire(this.store.snapshot())
+    if (this.publishScheduled) return
+    this.publishScheduled = true
+    this.publishTimer = setTimeout(() => {
+      this.publishScheduled = false
+      this.publishTimer = undefined
+      if (!this.disposed) this.changed.fire(this.store.snapshot())
+    }, 16)
   }
 
   private async waitForCancellation(sessionId: string, timeoutMs: number): Promise<boolean> {
