@@ -141,20 +141,77 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   }
 
+  let autoStartSuppressed = false
+  let autoStartTimer: ReturnType<typeof setTimeout> | undefined
+  let autoStartTask: Promise<void> | undefined
+  let autoStartDelayMs = 1_000
+  const clearAutoStartTimer = (): void => {
+    if (autoStartTimer !== undefined) clearTimeout(autoStartTimer)
+    autoStartTimer = undefined
+  }
+  const scheduleAutoStart = (delayMs = 0): void => {
+    if (autoStartSuppressed || !vscode.workspace.isTrusted || !configuration.get().autoStart ||
+      autoStartTimer !== undefined || autoStartTask !== undefined ||
+      (runtime.state.phase !== 'idle' && runtime.state.phase !== 'error')) return
+    autoStartTimer = setTimeout(() => {
+      autoStartTimer = undefined
+      if (autoStartSuppressed || !vscode.workspace.isTrusted || !configuration.get().autoStart ||
+        (runtime.state.phase !== 'idle' && runtime.state.phase !== 'error')) return
+      const task = controller.start().then(() => {
+        autoStartDelayMs = 1_000
+      }).catch(error => {
+        logger.error('Automatic Harness startup failed', error)
+        autoStartDelayMs = Math.min(autoStartDelayMs * 2, 30_000)
+      }).finally(() => {
+        if (autoStartTask === task) autoStartTask = undefined
+        if (runtime.state.phase === 'idle' || runtime.state.phase === 'error') scheduleAutoStart(autoStartDelayMs)
+      })
+      autoStartTask = task
+    }, delayMs)
+  }
+  const allowAndStart = (): Promise<void> => {
+    autoStartSuppressed = false
+    clearAutoStartTimer()
+    return controller.start()
+  }
+  const stopAndSuppress = async (): Promise<void> => {
+    autoStartSuppressed = true
+    clearAutoStartTimer()
+    await controller.stop()
+  }
+
   context.subscriptions.push(
     logger,
     configuration,
     view,
     status,
-    runtime.onDidChangeState(updateStatus),
+    runtime.onDidChangeState(state => {
+      updateStatus()
+      if (state.phase === 'ready') autoStartDelayMs = 1_000
+      else if (state.phase === 'idle' || state.phase === 'error') scheduleAutoStart(state.phase === 'error' ? autoStartDelayMs : 250)
+    }),
+    configuration.onDidChange(next => {
+      if (!next.autoStart) {
+        autoStartSuppressed = true
+        clearAutoStartTimer()
+        return
+      }
+      autoStartSuppressed = false
+      scheduleAutoStart()
+    }),
+    { dispose: clearAutoStartTimer },
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, view, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.commands.registerCommand('dedgeDeepSeekHarness.openChat', () => view.focus()),
     vscode.commands.registerCommand('dedgeDeepSeekHarness.newSession', () => run(() => controller.newSession())),
     vscode.commands.registerCommand('dedgeDeepSeekHarness.selectSession', () => run(() => view.pickSession())),
     vscode.commands.registerCommand('dedgeDeepSeekHarness.manageSession', () => run(() => view.manageSession())),
-    vscode.commands.registerCommand('dedgeDeepSeekHarness.start', () => run(() => controller.start())),
-    vscode.commands.registerCommand('dedgeDeepSeekHarness.stop', () => run(() => controller.stop())),
-    vscode.commands.registerCommand('dedgeDeepSeekHarness.restart', () => run(() => controller.restart())),
+    vscode.commands.registerCommand('dedgeDeepSeekHarness.start', () => run(allowAndStart)),
+    vscode.commands.registerCommand('dedgeDeepSeekHarness.stop', () => run(stopAndSuppress)),
+    vscode.commands.registerCommand('dedgeDeepSeekHarness.restart', () => run(async () => {
+      autoStartSuppressed = false
+      clearAutoStartTimer()
+      await controller.restart()
+    })),
     vscode.commands.registerCommand('dedgeDeepSeekHarness.setApiKey', () => run(setApiKey)),
     vscode.commands.registerCommand('dedgeDeepSeekHarness.clearApiKey', () => run(async () => {
       const clear = await vscode.window.showWarningMessage('Clear the DeepSeek API key from VS Code SecretStorage?', { modal: true }, 'Clear')
@@ -173,9 +230,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('dedgeDeepSeekHarness.reviewChanges', () => run(() => review.open())),
     vscode.commands.registerCommand('dedgeDeepSeekHarness.diagnose', () => run(showDiagnostics)),
     vscode.commands.registerCommand('dedgeDeepSeekHarness.showLogs', () => logger.show()),
-    vscode.workspace.onDidGrantWorkspaceTrust(() => { updateStatus() }),
+    vscode.workspace.onDidGrantWorkspaceTrust(() => {
+      updateStatus()
+      autoStartSuppressed = false
+      scheduleAutoStart()
+    }),
   )
   updateStatus()
+  scheduleAutoStart()
 }
 
 export async function deactivate(): Promise<void> {

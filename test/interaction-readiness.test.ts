@@ -24,6 +24,7 @@ function snapshot(overrides: Partial<WorkbenchSnapshot> = {}): WorkbenchSnapshot
     },
     presetCatalog: { presets: [], authorable: false, hasDocument: false },
     permissionMode: 'workspace-write',
+    permissionChanging: false,
     contextWindowTokens: 1_000_000,
     ...overrides,
   }

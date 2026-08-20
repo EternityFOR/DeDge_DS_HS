@@ -41,7 +41,7 @@ export function renderRuntimeOverlay(configuration: HarnessConfiguration): strin
     '        sandbox: workspace-write',
     '        approval: ask',
     '        name: Workspace write',
-    '        description: Allow workspace and temporary-directory writes.',
+    '        description: Allow workspace and temporary-directory writes; on Windows, a denied external executable may require one-time sandbox approval.',
     '      danger-full-access:',
     '        sandbox: danger-full-access',
     '        approval: never',

@@ -46,6 +46,7 @@ const elements = {
   attachments: required('attachments'),
   notice: required('notice'),
   permissionLabel: required('permission-label'),
+  permissionMenu: requiredButton('permission-menu'),
   permissionOptions: required('permission-options'),
   modelLabel: required('model-label'),
   modelOptions: required('model-options'),
@@ -64,6 +65,12 @@ const elements = {
   configureContext: requiredButton('configure-context'),
   statusDot: required('status-dot'),
   statusText: required('status-text'),
+}
+
+const persistedWebviewState = vscode.getState()
+if (typeof persistedWebviewState === 'object' && persistedWebviewState !== null && 'draft' in persistedWebviewState && typeof persistedWebviewState.draft === 'string') {
+  elements.prompt.value = persistedWebviewState.draft
+  resizePrompt()
 }
 
 const popovers = [
@@ -89,7 +96,10 @@ elements.prompt.addEventListener('keydown', event => {
     send()
   }
 })
-elements.prompt.addEventListener('input', resizePrompt)
+elements.prompt.addEventListener('input', () => {
+  resizePrompt()
+  vscode.setState({ draft: elements.prompt.value })
+})
 elements.prompt.addEventListener('paste', event => { void handlePaste(event) })
 elements.composerBox.addEventListener('dragover', event => {
   if (!hasAttachableData(event.dataTransfer)) return
@@ -131,11 +141,13 @@ window.addEventListener('message', event => {
     sendPending = false
     if (message.accepted && elements.prompt.value === message.text) {
       elements.prompt.value = ''
+      vscode.setState({ draft: '' })
       resizePrompt()
     }
     if (state !== undefined) renderStatus(state)
   } else if (message.type === 'setDraft') {
     elements.prompt.value = message.text
+    vscode.setState({ draft: message.text })
     resizePrompt()
     elements.prompt.focus()
   } else if (message.type === 'notice') showNotice(message.message)
@@ -312,17 +324,30 @@ function renderPresetOptions(snapshot: WorkbenchSnapshot): void {
 }
 
 function renderPermissionOptions(snapshot: WorkbenchSnapshot): void {
-  const options = [
+  const fallback = [
     { id: 'read-only', label: 'Read only', short: 'Read only', description: 'No model-driven file mutations' },
-    { id: 'workspace-write', label: 'Workspace write', short: 'Workspace', description: 'Workspace and temporary-directory writes' },
+    { id: 'workspace-write', label: 'Workspace write', short: 'Workspace', description: 'Workspace writes; some Windows external tools require one-time approval' },
     { id: 'danger-full-access', label: 'Full access', short: 'Full access', description: 'Unrestricted writes without approval prompts' },
   ] as const
+  const options = snapshot.permissionOptions?.filter(option => option.value !== 'custom').map(option => ({
+    id: option.value,
+    label: option.name,
+    short: option.value === 'workspace-write' ? 'Workspace' : option.value === 'danger-full-access' ? 'Full access' : option.name,
+    description: option.description ?? '',
+  })) ?? fallback
   const current = options.find(option => option.id === snapshot.permissionMode) ?? options[1]
-  elements.permissionLabel.textContent = current.short
+  elements.permissionLabel.textContent = current?.short ?? snapshot.permissionMode
+  const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
+  const disabled = snapshot.permissionChanging || snapshot.phase !== 'connected' || active === undefined || active.running
+  elements.permissionMenu.disabled = disabled
+  elements.permissionMenu.title = snapshot.permissionChanging
+    ? 'Changing file permissions...'
+    : active?.running === true ? 'Stop the current response before changing file permissions' : 'File access permissions'
   elements.permissionOptions.replaceChildren(...options.map(option => menuOption({
     label: option.label,
     description: option.description,
     selected: option.id === snapshot.permissionMode,
+    disabled,
     handler: () => {
       post({ type: 'selectPermission', permission: option.id })
       closePopovers()

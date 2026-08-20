@@ -1,9 +1,10 @@
 import { Buffer } from 'node:buffer'
+import { setTimeout as delay } from 'node:timers/promises'
 import * as vscode from 'vscode'
 import type { ConfigurationService, HarnessConfiguration } from '../config/configuration.js'
 import { buildPrompt, type ContextAttachment, ContextCollector } from '../context/context-collector.js'
 import type { GatewayClient } from '../gateway/gateway-client.js'
-import { parseContextPressureProjection, type HostFrame, type MuxFrame, type SessionEvent, type SessionSummary } from '../gateway/protocol.js'
+import { parseContextPressureProjection, parsePermissionProjection, type HostFrame, type MuxFrame, type SessionEvent, type SessionSummary } from '../gateway/protocol.js'
 import { errorMessage, type Logger } from '../platform/logger.js'
 import type { CredentialStore } from '../security/credentials.js'
 import type { RuntimeManager } from '../runtime/runtime-manager.js'
@@ -22,6 +23,7 @@ export class WorkbenchController implements vscode.Disposable {
   private gateway: GatewayClient | undefined
   private runtimeSubscription: vscode.Disposable
   private configurationSubscription: vscode.Disposable
+  private startTask: Promise<void> | undefined
   private disposed = false
 
   readonly onDidChange = this.changed.event
@@ -59,7 +61,16 @@ export class WorkbenchController implements vscode.Disposable {
     return this.store.snapshot()
   }
 
-  async start(): Promise<void> {
+  start(): Promise<void> {
+    if (this.startTask !== undefined) return this.startTask
+    const task = this.startInternal().finally(() => {
+      if (this.startTask === task) this.startTask = undefined
+    })
+    this.startTask = task
+    return task
+  }
+
+  private async startInternal(): Promise<void> {
     if (this.disposed) throw new Error('The Harness workbench has been disposed.')
     this.sessionOperations.clear('cancelling')
     this.store.resetConnectionState()
@@ -124,6 +135,7 @@ export class WorkbenchController implements vscode.Disposable {
     this.store.setActive(sessionId)
     this.store.replaceHistory(sessionId, history.events ?? [])
     this.store.setContextPressure(sessionId, parseContextPressureProjection(history.projections?.values?.contextPressure))
+    this.store.setPermissions(sessionId, parsePermissionProjection(history.projections?.values?.permissions))
     await this.context.workspaceState.update('activeSessionId', sessionId)
     this.publish()
     await Promise.all([
@@ -152,6 +164,10 @@ export class WorkbenchController implements vscode.Disposable {
     if (session?.running !== true) return Promise.resolve()
     return this.sessionOperations.run(sessionId, 'cancelling', async () => {
       await this.requireGateway().cancel(sessionId)
+      if (!await this.waitForCancellation(sessionId, 5_000)) {
+        this.sessionOperations.finish(sessionId, 'cancelling')
+        throw new Error('Harness accepted the stop request but the active tool or model call has not stopped yet. You can press Stop again; see Output > DeepSeek Harness for details.')
+      }
     }, { retainOnSuccess: true })
   }
 
@@ -303,13 +319,31 @@ export class WorkbenchController implements vscode.Disposable {
 
   async selectPermission(mode: string): Promise<void> {
     if (mode !== 'read-only' && mode !== 'workspace-write' && mode !== 'danger-full-access') throw new Error(`Unsupported permission mode: ${mode}`)
-    const sessionId = this.store.snapshot().activeSessionId
-    if (sessionId !== undefined) {
-      const command = await this.requireGateway().executeCommand(sessionId, `/permission ${mode}`)
-      if (command.result?.kind === 'error') throw new Error(command.result.text ?? 'Harness rejected the permission change.')
+    const snapshot = this.store.snapshot()
+    const sessionId = snapshot.activeSessionId
+    if (snapshot.permissionChanging) return
+    if (snapshot.sessions.find(session => session.id === sessionId)?.running === true) {
+      throw new Error('Finish or stop the current response before changing file permissions.')
     }
-    await this.configuration.update('permissionMode', mode)
+    this.store.setPermissionChanging(true)
     this.publish()
+    try {
+      if (sessionId !== undefined) {
+        const gateway = this.requireGateway()
+        const command = await gateway.executeCommand(sessionId, `/permission ${mode}`)
+        if (command.result?.kind === 'error') throw new Error(command.result.text ?? 'Harness rejected the permission change.')
+        const history = await gateway.history(sessionId)
+        const permissions = parsePermissionProjection(history.projections?.values?.permissions)
+        if (permissions === undefined || permissions.currentValue !== mode) {
+          throw new Error(`Harness did not apply the requested permission mode (${mode}).`)
+        }
+        this.store.setPermissions(sessionId, permissions)
+      }
+      await this.configuration.update('permissionMode', mode)
+    } finally {
+      this.store.setPermissionChanging(false)
+      this.publish()
+    }
   }
 
   async restart(): Promise<void> {
@@ -392,6 +426,10 @@ export class WorkbenchController implements vscode.Disposable {
       this.store.setContextPressure(frame.sessionId, parseContextPressureProjection(frame.value))
       return this.publish()
     }
+    if (frame.type === 'session/projection' && frame.key === 'permissions') {
+      this.store.setPermissions(frame.sessionId, parsePermissionProjection(frame.value))
+      return this.publish()
+    }
     if (frame.type === 'approval/requested') {
       const approval: PendingApproval = { id: frame.approvalId, rpcId, sessionId: frame.sessionId, toolName: frame.toolName, ...(frame.reason === undefined ? {} : { reason: frame.reason }) }
       this.store.addApproval(approval)
@@ -443,6 +481,25 @@ export class WorkbenchController implements vscode.Disposable {
 
   private publish(): void {
     if (!this.disposed) this.changed.fire(this.store.snapshot())
+  }
+
+  private async waitForCancellation(sessionId: string, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (this.store.snapshot().sessions.find(session => session.id === sessionId)?.running !== true) return true
+      await delay(250)
+    }
+    try {
+      const sessions = await this.requireGateway().listSessions()
+      this.store.replaceSessions(sessions.items ?? [])
+      const stopped = this.store.snapshot().sessions.find(session => session.id === sessionId)?.running !== true
+      if (stopped) this.sessionOperations.finish(sessionId, 'cancelling')
+      this.publish()
+      return stopped
+    } catch (error) {
+      this.logger.warn(`Could not verify stop state for session ${sessionId}: ${errorMessage(error)}`)
+      return false
+    }
   }
 }
 

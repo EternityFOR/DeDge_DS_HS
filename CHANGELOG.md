@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-20
+
+### Fixed
+
+- 权限菜单读取当前 Harness session 的官方 `permissions` projection，切换后重新校验实际生效值，并在切换期间锁定相关控件。
+- 停止请求等待 Harness 的实际 idle 状态；事件丢失时主动回查，避免按钮永久停留在“停止中”。
+- Codex/Claude 导入的未发送草稿和 handoff 附件保存到 VS Code workspace state，重启窗口后自动恢复。
+- Full access 切换增加确认；workspace-write 在 Windows 下明确提示外部工具可能需要一次性 sandbox approval。
+
 ## [0.1.2] - 2026-08-17
 
 ### Added
@@ -62,6 +71,7 @@
 - Gateway 固定监听随机 `127.0.0.1`，子进程使用参数数组、`shell: false` 和 `windowsHide: true`。
 - 发布审计拒绝 session dump、私钥、常见 provider token、绝对本机路径、Mojibake 和开发期文件进入公开源或 VSIX。
 
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.3
 [0.1.2]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.2
 [0.1.1]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.1

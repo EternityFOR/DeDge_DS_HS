@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as vscode from 'vscode'
@@ -12,7 +13,16 @@ import type { RuntimeResolver } from './bundled-runtime.js'
 import { renderRuntimeOverlay } from './overlay.js'
 import { terminateProcessTree } from './process-tree.js'
 import type { RuntimeLaunch, RuntimeState } from './types.js'
-import { clearGatewayLease, defaultGatewayLeasePath, writeGatewayLease } from './gateway-lease.js'
+import {
+  clearGatewayLease,
+  defaultGatewayLeasePath,
+  isProcessRunning,
+  readGatewayLease,
+  tryAcquireGatewayStartupLock,
+  writeGatewayLease,
+  type GatewayLease,
+  type GatewayStartupLock,
+} from './gateway-lease.js'
 import { checkWindowsCompatibility, describeWindowsExitCode } from './windows-compat.js'
 
 const URL_PATTERN = /dsh web:\s+(http:\/\/127\.0\.0\.1:\d+)/u
@@ -25,6 +35,8 @@ export class RuntimeManager implements vscode.Disposable {
   private stopTask: Promise<void> | undefined
   private launchIdentity: string | undefined
   private readonly gatewayLease = defaultGatewayLeasePath()
+  private ownedLeasePid: number | undefined
+  private attachedLeaseMonitor: ReturnType<typeof setInterval> | undefined
   private disposed = false
 
   readonly onDidChangeState = this.changed.event
@@ -80,121 +92,134 @@ export class RuntimeManager implements vscode.Disposable {
   }
 
   private async startInternal(): Promise<string> {
+    if (this.stateValue.phase === 'ready' && this.stateValue.url !== undefined) return this.stateValue.url
     const configuration = this.configuration.get()
     const workspace = workspaceDirectory()
     const apiKey = await this.credentials.getApiKey()
     this.setState({ phase: 'resolving' })
 
-    await checkWindowsCompatibility(workspace, this.layout, this.logger).catch(error => this.fail(error))
+    const shared = await this.waitForSharedRuntimeOrLock(configuration.startTimeoutMs)
+    if ('lease' in shared) return this.attachSharedRuntime(shared.lease)
 
-    let launch: RuntimeLaunch
     try {
-      launch = await this.resolver.resolve(configuration)
-    } catch (error) {
-      return this.fail(error)
-    }
-    if (this.disposed) throw new Error('The Harness runtime manager was disposed before launch.')
+      await checkWindowsCompatibility(workspace, this.layout, this.logger).catch(error => this.fail(error))
 
-    const identity = JSON.stringify({ workspace, launch: launch.diagnostics, configuration, hasApiKey: apiKey !== undefined })
-    if (this.stateValue.phase === 'ready' && this.launchIdentity === identity && this.stateValue.url !== undefined) {
-      return this.stateValue.url
-    }
-    if (this.child !== undefined) await this.stopInternal()
-    this.launchIdentity = identity
-
-    const home = versionedHome(this.layout, launch.version)
-    const generatedDir = path.join(this.layout.generated, launch.version)
-    const overlay = path.join(generatedDir, 'vscode.patch.yml')
-    await Promise.all([mkdir(home, { recursive: true }), mkdir(generatedDir, { recursive: true })])
-    await writeAtomic(overlay, renderRuntimeOverlay(configuration))
-
-    const args = [...launch.args, 'web', '--patch', overlay, '--host', '127.0.0.1', '--port', '0']
-    const env: NodeJS.ProcessEnv = {
-      ...launch.environment,
-      DSH_HOME: home,
-      DSH_CWD: workspace,
-      DSH_PERMISSION_MODE: configuration.permissionMode,
-      DSH_TELEMETRY_DISABLED: '1',
-      ...apiKey === undefined || apiKey === '' ? {} : { DEEPSEEK_API_KEY: apiKey },
-      DEEPSEEK_BASE_URL: configuration.baseUrl,
-    }
-    this.logger.info(`Starting ${launch.source} Harness ${launch.version} in ${workspace}`)
-    this.setState({ phase: 'starting', version: launch.version })
-
-    if (this.disposed) throw new Error('The Harness runtime manager was disposed before launch.')
-
-    const child = spawn(launch.command, args, {
-      cwd: workspace,
-      env,
-      shell: false,
-      windowsHide: true,
-      detached: process.platform !== 'win32',
-    })
-    this.child = child
-
-    const ready = new Promise<string>((resolve, reject) => {
-      let settled = false
-      let stdoutBuffer = ''
-      const timeout = setTimeout(() => settle(new Error(`Harness did not become ready within ${configuration.startTimeoutMs} ms.`)), configuration.startTimeoutMs)
-
-      const settle = (result: string | Error): void => {
-        if (settled) return
-        settled = true
-        clearTimeout(timeout)
-        typeof result === 'string' ? resolve(result) : reject(result)
+      let launch: RuntimeLaunch
+      try {
+        launch = await this.resolver.resolve(configuration)
+      } catch (error) {
+        return this.fail(error)
       }
+      if (this.disposed) throw new Error('The Harness runtime manager was disposed before launch.')
 
-      child.stdout.on('data', (chunk: Buffer | string) => {
-        const text = String(chunk)
-        this.logger.raw(text)
-        stdoutBuffer += text
-        const lines = stdoutBuffer.split(/\r?\n/u)
-        stdoutBuffer = lines.pop() ?? ''
-        for (const line of lines) {
-          const url = URL_PATTERN.exec(line)?.[1]
-          if (url !== undefined) settle(url)
-        }
+      const identity = JSON.stringify({ workspace, launch: launch.diagnostics, configuration, hasApiKey: apiKey !== undefined })
+      if (this.stateValue.phase === 'ready' && this.launchIdentity === identity && this.stateValue.url !== undefined) {
+        return this.stateValue.url
+      }
+      if (this.child !== undefined) await this.stopInternal()
+      this.launchIdentity = identity
+
+      const home = versionedHome(this.layout, launch.version)
+      const generatedDir = path.join(this.layout.generated, launch.version)
+      const overlay = path.join(generatedDir, 'vscode.patch.yml')
+      await Promise.all([mkdir(home, { recursive: true }), mkdir(generatedDir, { recursive: true })])
+      await writeAtomic(overlay, renderRuntimeOverlay(configuration))
+
+      const args = [...launch.args, 'web', '--patch', overlay, '--host', '127.0.0.1', '--port', '0']
+      const env: NodeJS.ProcessEnv = {
+        ...launch.environment,
+        DSH_HOME: home,
+        DSH_CWD: workspace,
+        DSH_PERMISSION_MODE: configuration.permissionMode,
+        DSH_TELEMETRY_DISABLED: '1',
+        ...apiKey === undefined || apiKey === '' ? {} : { DEEPSEEK_API_KEY: apiKey },
+        DEEPSEEK_BASE_URL: configuration.baseUrl,
+      }
+      this.logger.info(`Starting ${launch.source} Harness ${launch.version} in ${workspace}`)
+      this.setState({ phase: 'starting', version: launch.version })
+
+      if (this.disposed) throw new Error('The Harness runtime manager was disposed before launch.')
+
+      const child = spawn(launch.command, args, {
+        cwd: workspace,
+        env,
+        shell: false,
+        windowsHide: true,
+        detached: process.platform !== 'win32',
       })
-      child.stderr.on('data', (chunk: Buffer | string) => this.logger.raw(String(chunk)))
-      child.once('error', error => settle(error))
-      child.once('exit', (code, signal) => {
-        if (this.child === child) this.child = undefined
+      this.child = child
+      this.ownedLeasePid = child.pid
+
+      const ready = new Promise<string>((resolve, reject) => {
+        let settled = false
+        let stdoutBuffer = ''
+        const timeout = setTimeout(() => settle(new Error(`Harness did not become ready within ${configuration.startTimeoutMs} ms.`)), configuration.startTimeoutMs)
+
+        const settle = (result: string | Error): void => {
+          if (settled) return
+          settled = true
+          clearTimeout(timeout)
+          typeof result === 'string' ? resolve(result) : reject(result)
+        }
+
+        child.stdout.on('data', (chunk: Buffer | string) => {
+          const text = String(chunk)
+          this.logger.raw(text)
+          stdoutBuffer += text
+          const lines = stdoutBuffer.split(/\r?\n/u)
+          stdoutBuffer = lines.pop() ?? ''
+          for (const line of lines) {
+            const url = URL_PATTERN.exec(line)?.[1]
+            if (url !== undefined) settle(url)
+          }
+        })
+        child.stderr.on('data', (chunk: Buffer | string) => this.logger.raw(String(chunk)))
+        child.once('error', error => settle(error))
+        child.once('exit', (code, signal) => {
+          if (this.child === child) this.child = undefined
+          if (this.ownedLeasePid === child.pid) this.ownedLeasePid = undefined
+          if (child.pid !== undefined) {
+            void clearGatewayLease(this.gatewayLease, child.pid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
+          }
+          const windowsDetail = describeWindowsExitCode(code)
+          const message = `Harness exited (code=${String(code)}, signal=${String(signal)}).${windowsDetail === undefined ? '' : ` ${windowsDetail}`}`
+          if (!settled) settle(new Error(message))
+          else if (this.stateValue.phase !== 'stopping' && this.stateValue.phase !== 'idle') {
+            this.logger.error(message)
+            this.setState({ phase: 'error', version: launch.version, error: message })
+          }
+        })
+      })
+
+      try {
+        const url = await ready
         if (child.pid !== undefined) {
-          void clearGatewayLease(this.gatewayLease, child.pid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
+          await writeGatewayLease(this.gatewayLease, { url, pid: child.pid, version: launch.version, workspace })
+            .catch(error => this.logger.error('Failed to publish the Harness gateway lease', error))
         }
-        const windowsDetail = describeWindowsExitCode(code)
-        const message = `Harness exited (code=${String(code)}, signal=${String(signal)}).${windowsDetail === undefined ? '' : ` ${windowsDetail}`}`
-        if (!settled) settle(new Error(message))
-        else if (this.stateValue.phase !== 'stopping' && this.stateValue.phase !== 'idle') {
-          this.logger.error(message)
-          this.setState({ phase: 'error', version: launch.version, error: message })
-        }
-      })
-    })
-
-    try {
-      const url = await ready
-      if (child.pid !== undefined) {
-        await writeGatewayLease(this.gatewayLease, { url, pid: child.pid, version: launch.version, workspace })
-          .catch(error => this.logger.error('Failed to publish the Harness gateway lease', error))
+        this.setState({ phase: 'ready', version: launch.version, url, ...(child.pid === undefined ? {} : { pid: child.pid }) })
+        return url
+      } catch (error) {
+        await terminateProcessTree(child).catch(cause => this.logger.error('Failed to clean up a failed runtime start', cause))
+        if (this.child === child) this.child = undefined
+        if (this.ownedLeasePid === child.pid) this.ownedLeasePid = undefined
+        return this.fail(error, launch.version)
       }
-      this.setState({ phase: 'ready', version: launch.version, url, ...(child.pid === undefined ? {} : { pid: child.pid }) })
-      return url
-    } catch (error) {
-      await terminateProcessTree(child).catch(cause => this.logger.error('Failed to clean up a failed runtime start', cause))
-      if (this.child === child) this.child = undefined
-      return this.fail(error, launch.version)
+    } finally {
+      await shared.lock.release().catch(error => this.logger.error('Failed to release the Harness startup lock', error))
     }
   }
 
   private async stopInternal(): Promise<void> {
+    this.stopAttachedLeaseMonitor()
     const child = this.child
     this.child = undefined
     this.launchIdentity = undefined
     if (child === undefined) {
-      if (this.stateValue.pid !== undefined) {
-        await clearGatewayLease(this.gatewayLease, this.stateValue.pid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
+      if (this.ownedLeasePid !== undefined) {
+        await clearGatewayLease(this.gatewayLease, this.ownedLeasePid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
       }
+      this.ownedLeasePid = undefined
       this.setState({ phase: 'idle' })
       return
     }
@@ -203,7 +228,68 @@ export class RuntimeManager implements vscode.Disposable {
     if (child.pid !== undefined) {
       await clearGatewayLease(this.gatewayLease, child.pid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
     }
+    this.ownedLeasePid = undefined
     this.setState({ phase: 'idle' })
+  }
+
+  private async waitForSharedRuntimeOrLock(timeoutMs: number): Promise<{ readonly lease: GatewayLease } | { readonly lock: GatewayStartupLock }> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (this.disposed) throw new Error('The Harness runtime manager was disposed before launch.')
+      const lease = await this.readLiveGatewayLease()
+      if (lease !== undefined) return { lease }
+      const lock = await tryAcquireGatewayStartupLock(this.gatewayLease)
+      if (lock !== undefined) {
+        const racedLease = await this.readLiveGatewayLease()
+        if (racedLease === undefined) return { lock }
+        await lock.release()
+        return { lease: racedLease }
+      }
+      await delay(250)
+    }
+    throw new Error(`Another VS Code window did not finish starting DeepSeek Harness within ${timeoutMs} ms.`)
+  }
+
+  private async readLiveGatewayLease(): Promise<GatewayLease | undefined> {
+    try {
+      const lease = await readGatewayLease(this.gatewayLease)
+      if (!isProcessRunning(lease.pid) || !await probeGateway(lease.url)) return undefined
+      return lease
+    } catch {
+      return undefined
+    }
+  }
+
+  private attachSharedRuntime(lease: GatewayLease): string {
+    this.child = undefined
+    this.ownedLeasePid = undefined
+    this.launchIdentity = undefined
+    this.setState({ phase: 'ready', version: lease.version, url: lease.url, pid: lease.pid })
+    this.startAttachedLeaseMonitor(lease)
+    this.logger.info(`Attached to shared Harness ${lease.version} at ${lease.url}`)
+    return lease.url
+  }
+
+  private startAttachedLeaseMonitor(expected: GatewayLease): void {
+    this.stopAttachedLeaseMonitor()
+    this.attachedLeaseMonitor = setInterval(() => {
+      void readGatewayLease(this.gatewayLease).then(current => {
+        if (this.child !== undefined || this.stateValue.phase !== 'ready' || this.stateValue.pid !== expected.pid) return
+        if (current.pid === expected.pid && current.url === expected.url && isProcessRunning(current.pid)) return
+        this.stopAttachedLeaseMonitor()
+        this.setState({ phase: 'idle' })
+      }).catch(() => {
+        if (this.child !== undefined || this.stateValue.phase !== 'ready' || this.stateValue.pid !== expected.pid) return
+        this.stopAttachedLeaseMonitor()
+        this.setState({ phase: 'idle' })
+      })
+    }, 2_000)
+    this.attachedLeaseMonitor.unref()
+  }
+
+  private stopAttachedLeaseMonitor(): void {
+    if (this.attachedLeaseMonitor !== undefined) clearInterval(this.attachedLeaseMonitor)
+    this.attachedLeaseMonitor = undefined
   }
 
   private fail(error: unknown, version?: string): never {
@@ -226,6 +312,24 @@ function workspaceDirectory(): string {
     if (folder !== undefined) return folder.uri.fsPath
   }
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd()
+}
+
+async function probeGateway(baseUrl: string): Promise<boolean> {
+  try {
+    const response = await fetch(new URL('/api/host.describe', baseUrl), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId: randomUUID(), method: 'host.describe', payload: {} }),
+      signal: AbortSignal.timeout(2_000),
+    })
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds))
 }
 
 async function writeAtomic(target: string, content: string): Promise<void> {

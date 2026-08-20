@@ -1,4 +1,4 @@
-import { isRecord, type ContextPressureProjection, type HistoryEntry, type ModelCatalog, type PresetCatalog, type SessionEvent, type SessionSummary } from '../gateway/protocol.js'
+import { isRecord, type ContextPressureProjection, type HistoryEntry, type ModelCatalog, type PermissionProjection, type PresetCatalog, type SessionEvent, type SessionSummary } from '../gateway/protocol.js'
 import type { RuntimeState } from '../runtime/types.js'
 import type { PendingApproval, PendingQuestion, SessionOperation, WorkbenchMessage, WorkbenchPhase, WorkbenchSession, WorkbenchSnapshot } from './types.js'
 import { projectUserPrompt } from './prompt-projection.js'
@@ -26,6 +26,8 @@ export class SessionStore {
   private modelCatalog: { readonly sessionId: string; readonly value: ModelCatalog } | undefined
   private presetCatalog: PresetCatalog | undefined
   private readonly contextPressure = new Map<string, ContextPressureProjection>()
+  private readonly permissions = new Map<string, PermissionProjection>()
+  private permissionChanging = false
   private readonly sessionOperations = new Map<string, SessionOperation>()
   private configuration: StoreConfiguration
 
@@ -43,6 +45,7 @@ export class SessionStore {
     this.modelCatalog = undefined
     this.presetCatalog = undefined
     this.contextPressure.clear()
+    this.permissions.clear()
   }
 
   clearPendingInteractions(): void {
@@ -126,6 +129,15 @@ export class SessionStore {
     else this.contextPressure.set(sessionId, value)
   }
 
+  setPermissions(sessionId: string, value: PermissionProjection | undefined): void {
+    if (value === undefined) this.permissions.delete(sessionId)
+    else this.permissions.set(sessionId, value)
+  }
+
+  setPermissionChanging(value: boolean): void {
+    this.permissionChanging = value
+  }
+
   replaceHistory(sessionId: string, entries: readonly HistoryEntry[]): void {
     const bySeq = new Map<number, HistoryEntry>()
     for (const entry of entries) bySeq.set(entry.event.seq, entry)
@@ -171,6 +183,7 @@ export class SessionStore {
     const currentModel = activeModelCatalog?.current
     const activeSession = this.activeSessionId === undefined ? undefined : this.sessions.get(this.activeSessionId)
     const activeContextPressure = this.activeSessionId === undefined ? undefined : this.contextPressure.get(this.activeSessionId)
+    const activePermissions = this.activeSessionId === undefined ? undefined : this.permissions.get(this.activeSessionId)
     return {
       phase: this.phase,
       runtime: this.runtime,
@@ -181,6 +194,9 @@ export class SessionStore {
       approvals: [...this.approvals.values()].filter(item => item.sessionId === this.activeSessionId),
       questions: [...this.questions.values()].filter(item => item.sessionId === this.activeSessionId),
       ...this.configuration,
+      permissionMode: activePermissions?.currentValue ?? this.configuration.permissionMode,
+      ...(activePermissions === undefined ? {} : { permissionOptions: activePermissions.options }),
+      permissionChanging: this.permissionChanging,
       provider: currentModel?.provider ?? this.configuration.provider,
       model: currentModel?.model ?? this.configuration.model,
       reasoningEffort: activeModelCatalog === undefined ? this.configuration.reasoningEffort : currentModel?.reasoningEffort ?? '',

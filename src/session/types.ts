@@ -1,5 +1,5 @@
 import type { RuntimeState } from '../runtime/types.js'
-import type { ContextPressureProjection, ModelCatalog, PresetCatalog } from '../gateway/protocol.js'
+import type { ContextPressureProjection, ModelCatalog, PermissionProjection, PresetCatalog } from '../gateway/protocol.js'
 
 export type WorkbenchPhase = 'idle' | 'connecting' | 'connected' | 'error'
 export type SessionOperation = 'archiving' | 'deleting' | 'cancelling'
@@ -72,6 +72,8 @@ export interface WorkbenchSnapshot {
   readonly modelCatalog?: ModelCatalog
   readonly presetCatalog?: PresetCatalog
   readonly permissionMode: string
+  readonly permissionOptions?: PermissionProjection['options']
+  readonly permissionChanging: boolean
   readonly contextWindowTokens: number
   readonly contextPressure?: ContextPressureProjection
   readonly error?: string

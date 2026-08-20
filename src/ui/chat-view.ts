@@ -8,6 +8,9 @@ import type { WorkbenchSession } from '../session/types.js'
 import { isRecord } from '../gateway/protocol.js'
 import type { HostToWebviewMessage, WebviewToHostMessage } from './webview-protocol.js'
 import type { StagedHandoff } from '../handoff/types.js'
+import { parsePendingHandoffState, type PendingHandoffState } from '../handoff/pending-handoff.js'
+
+const PENDING_HANDOFF_KEY = 'pendingHandoff.v1'
 
 export interface ChatViewActions {
   readonly setApiKey: () => Promise<void>
@@ -29,6 +32,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private attachments: ContextAttachment[] = []
   private readonly managingSessions = new Set<string>()
   private readonly controllerSubscription: vscode.Disposable
+  private pendingHandoff: PendingHandoffState | undefined
+  private restoredHandoffSessionId: string | undefined
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -37,7 +42,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     private readonly logger: Logger,
     private readonly actions: ChatViewActions,
   ) {
-    this.controllerSubscription = controller.onDidChange(() => { void this.postState() })
+    this.pendingHandoff = parsePendingHandoffState(context.workspaceState.get<unknown>(PENDING_HANDOFF_KEY))
+    this.controllerSubscription = controller.onDidChange(() => {
+      void this.restorePendingHandoff().then(() => this.postState())
+    })
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -200,11 +208,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   private async stageHandoff(draft: StagedHandoff | undefined): Promise<void> {
     if (draft === undefined) return
+    const sessionId = this.controller.snapshot().activeSessionId
+    if (sessionId === undefined) throw new Error('The imported handoff did not create an active Harness session.')
+    const pending: PendingHandoffState = { version: 1, sessionId, draft }
+    this.pendingHandoff = pending
+    await this.context.workspaceState.update(PENDING_HANDOFF_KEY, pending)
     const attachment = this.controller.attachHandoff(draft.attachmentName, draft.attachmentText)
     this.attachments = [attachment]
     await this.focus()
     await this.postState()
-    await this.post({ type: 'setDraft', text: draft.prompt })
+    if (await this.post({ type: 'setDraft', text: draft.prompt })) this.restoredHandoffSessionId = sessionId
     const source = draft.sourcePlatform === 'codex' ? 'Codex' : 'Claude Code'
     void vscode.window.setStatusBarMessage(`DeepSeek Harness: ${source} handoff loaded as an unsent draft.`, 4_000)
   }
@@ -222,6 +235,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       return
     }
     if (message.type === 'ready') {
+      await this.restorePendingHandoff()
       await this.postState()
       return
     }
@@ -231,6 +245,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         await this.controller.send(message.text, attachments)
         const sentIds = new Set(attachments.map(item => item.id))
         this.attachments = this.attachments.filter(item => !sentIds.has(item.id))
+        if (this.pendingHandoff?.sessionId === this.controller.snapshot().activeSessionId) await this.clearPendingHandoff()
         await this.post({ type: 'sendSettled', accepted: true, text: message.text })
         await this.postState()
       } catch (error) {
@@ -273,7 +288,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       for (const file of message.files) this.upsertAttachment(this.controller.attachTextFile(file.name, file.text))
     })
     if (message.type === 'removeAttachment') {
+      const removedPendingHandoff = this.pendingHandoff !== undefined && this.attachments.some(item => item.id === message.id && item.label === this.pendingHandoff?.draft.attachmentName)
       this.attachments = this.attachments.filter(item => item.id !== message.id)
+      if (removedPendingHandoff) await this.clearPendingHandoff()
       await this.postState()
       return
     }
@@ -281,7 +298,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (message.type === 'answerQuestions') return this.run(() => this.controller.answerQuestions(message.rpcId, message.answers))
     if (message.type === 'selectModel') return this.run(() => this.controller.selectModel(message.provider, message.model, message.reasoningEffort))
     if (message.type === 'selectPreset') return this.run(() => this.controller.selectPreset(message.preset))
-    if (message.type === 'selectPermission') return this.run(() => this.controller.selectPermission(message.permission))
+    if (message.type === 'selectPermission') return this.run(async () => {
+      if (message.permission === 'danger-full-access') {
+        const confirmed = await vscode.window.showWarningMessage(
+          'Enable Full access for this session? Commands will run without the workspace file sandbox or approval prompts, including external executables such as Git.',
+          { modal: true },
+          'Enable Full Access',
+        )
+        if (confirmed !== 'Enable Full Access') return
+      }
+      await this.controller.selectPermission(message.permission)
+    })
     if (message.type === 'showLogs') return this.logger.show()
     if (message.type === 'reviewChanges') return this.run(() => this.review.open())
     if (message.type === 'diagnose') return this.run(this.actions.diagnose)
@@ -290,6 +317,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private upsertAttachment(attachment: ContextAttachment): void {
     this.attachments = [...this.attachments.filter(item => item.id !== attachment.id), attachment]
     void this.postState()
+  }
+
+  private async restorePendingHandoff(): Promise<void> {
+    const pending = this.pendingHandoff
+    const activeSessionId = this.controller.snapshot().activeSessionId
+    if (pending === undefined || activeSessionId !== pending.sessionId) return
+    const attachment = this.controller.attachHandoff(pending.draft.attachmentName, pending.draft.attachmentText)
+    this.attachments = [attachment]
+    if (this.restoredHandoffSessionId === pending.sessionId) return
+    if (await this.post({ type: 'setDraft', text: pending.draft.prompt })) this.restoredHandoffSessionId = pending.sessionId
+  }
+
+  private async clearPendingHandoff(): Promise<void> {
+    this.pendingHandoff = undefined
+    this.restoredHandoffSessionId = undefined
+    await this.context.workspaceState.update(PENDING_HANDOFF_KEY, undefined)
   }
 
   private async run(action: () => Promise<unknown>): Promise<void> {

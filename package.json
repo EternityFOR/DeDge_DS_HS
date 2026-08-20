@@ -2,7 +2,7 @@
   "name": "dedge-deepseek-harness-vscode",
   "displayName": "DeDge DeepSeek Harness",
   "description": "Self-contained DeepSeek Harness coding agent for VS Code with a Windows-safe runtime and isolated Codex/Claude handoffs.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "diractive-edge",
   "private": true,
   "packageManager": "pnpm@11.21.0",
@@ -70,6 +70,7 @@
     "powershell"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onView:dedgeDeepSeekHarness.chat",
     "onCommand:dedgeDeepSeekHarness.openChat",
     "onCommand:dedgeDeepSeekHarness.newSession",
@@ -319,7 +320,7 @@
         "dedgeDeepSeekHarness.autoStart": {
           "type": "boolean",
           "default": true,
-          "description": "Start the bundled runtime when the workbench is first opened."
+          "description": "Keep one shared bundled runtime available after VS Code finishes starting, even when the workbench is closed."
         },
         "dedgeDeepSeekHarness.context.maxBytes": {
           "type": "number",

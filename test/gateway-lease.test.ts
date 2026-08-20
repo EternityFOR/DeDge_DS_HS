@@ -2,7 +2,13 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { clearGatewayLease, defaultGatewayLeasePath, writeGatewayLease } from '../src/runtime/gateway-lease.js'
+import {
+  clearGatewayLease,
+  defaultGatewayLeasePath,
+  readGatewayLease,
+  tryAcquireGatewayStartupLock,
+  writeGatewayLease,
+} from '../src/runtime/gateway-lease.js'
 
 const temporaryDirectories: string[] = []
 
@@ -47,5 +53,46 @@ describe('Harness gateway lease', () => {
       version: '0.1.0-rc.6',
       workspace: 'D:\\work',
     })).rejects.toThrow('127.0.0.1')
+  })
+
+  it('reads and validates a normalized gateway lease', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'dedge-dsh-lease-'))
+    temporaryDirectories.push(directory)
+    const target = path.join(directory, 'gateway-lease.json')
+    await writeGatewayLease(target, {
+      url: 'http://127.0.0.1:4321/api/ignored?value=1',
+      pid: 77,
+      version: '0.1.0-rc.6',
+      workspace: 'D:\\work',
+    })
+    await expect(readGatewayLease(target)).resolves.toEqual({
+      url: 'http://127.0.0.1:4321/',
+      pid: 77,
+      version: '0.1.0-rc.6',
+      workspace: 'D:\\work',
+    })
+    await writeGatewayLease(target, {
+      url: 'http://127.0.0.1:4322',
+      pid: 78,
+      version: '0.1.0-rc.6',
+      workspace: 'D:\\other',
+    })
+    await expect(readGatewayLease(target)).resolves.toMatchObject({ url: 'http://127.0.0.1:4322/', pid: 78 })
+  })
+
+  it('serializes startup across VS Code extension hosts and recovers a stale owner', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'dedge-dsh-lease-'))
+    temporaryDirectories.push(directory)
+    const target = path.join(directory, 'gateway-lease.json')
+    const first = await tryAcquireGatewayStartupLock(target, 101, () => false)
+    expect(first).toBeDefined()
+    await expect(tryAcquireGatewayStartupLock(target, 202, pid => pid === 101)).resolves.toBeUndefined()
+
+    const replacement = await tryAcquireGatewayStartupLock(target, 202, () => false)
+    expect(replacement).toBeDefined()
+    await first?.release()
+    await expect(tryAcquireGatewayStartupLock(target, 303, pid => pid === 202)).resolves.toBeUndefined()
+    await replacement?.release()
+    await expect(tryAcquireGatewayStartupLock(target, 303, () => false)).resolves.toBeDefined()
   })
 })

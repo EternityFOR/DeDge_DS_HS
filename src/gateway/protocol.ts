@@ -111,6 +111,11 @@ export interface ContextPressureProjection {
   readonly contextWindow?: number
 }
 
+export interface PermissionProjection {
+  readonly options: readonly { readonly value: string; readonly name: string; readonly description?: string }[]
+  readonly currentValue: string
+}
+
 export interface WorkspaceRegistry {
   readonly archivedSessionIds: readonly string[]
 }
@@ -175,6 +180,21 @@ export function parseServerResponse(value: unknown): ServerResponse {
 export function parseServerRequest(value: unknown): ServerRequest {
   if (!isRecord(value) || value.type !== 'server-request' || typeof value.rpcId !== 'string') throw new Error('Malformed Harness event envelope.')
   return { type: 'server-request', rpcId: value.rpcId, payload: value.payload }
+}
+
+export function parsePermissionProjection(value: unknown): PermissionProjection | undefined {
+  if (!isRecord(value) || typeof value.currentValue !== 'string' || !Array.isArray(value.options)) return undefined
+  const options: { value: string; name: string; description?: string }[] = []
+  for (const option of value.options) {
+    if (!isRecord(option) || typeof option.value !== 'string' || typeof option.name !== 'string') return undefined
+    options.push({
+      value: option.value,
+      name: option.name,
+      ...(typeof option.description === 'string' ? { description: option.description } : {}),
+    })
+  }
+  if (options.length === 0) return undefined
+  return { options, currentValue: value.currentValue }
 }
 
 export function parseMuxFrame(value: unknown): MuxFrame {
