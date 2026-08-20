@@ -182,8 +182,8 @@ export class HandoffService {
   private async pickTarget(source: AgentPlatform): Promise<AgentPlatform | undefined> {
     const items = ([
       { platform: 'deepseek-harness', label: 'DeepSeek Harness', description: 'Create an isolated DSH session' },
-      { platform: 'codex', label: 'Codex', description: 'Start the native CLI in a new VS Code terminal' },
-      { platform: 'claude', label: 'Claude Code', description: 'Start the native CLI in a new VS Code terminal' },
+      { platform: 'codex', label: 'Codex', description: 'Copy a take-over prompt to the clipboard, or launch the CLI' },
+      { platform: 'claude', label: 'Claude Code', description: 'Copy a take-over prompt to the clipboard, or launch the CLI' },
     ] as const).filter(item => item.platform !== source)
     return (await vscode.window.showQuickPick(items, { title: 'Continue in', matchOnDescription: true }))?.platform
   }

@@ -66,6 +66,7 @@ let attachments: readonly ContextAttachment[] = []
 let sessionTabsSignature = ''
 let noticeTimer: number | undefined
 let sendPending = false
+let steerPendingText: string | undefined
 let pasteFileThreshold = 8_192
 let scrollBottomButton: HTMLButtonElement | undefined
 let stickToBottom = true
@@ -125,6 +126,9 @@ const elements = {
   statusText: required('status-text'),
   skillPopover: required('skill-popover'),
   compactThinkingButton: requiredButton('compact-thinking'),
+  steerNotice: required('steer-notice'),
+  steerNoticeText: required('steer-notice-text'),
+  steerNoticeClose: requiredButton('steer-notice-close'),
 }
 
 const persistedWebviewState = vscode.getState()
@@ -158,6 +162,11 @@ bindAction('compact', { type: 'compact' })
 bindAction('configure-context', { type: 'configureContextWindow' })
 bindAction('cancel', { type: 'cancel' })
 requiredButton('send').addEventListener('click', send)
+elements.steerNoticeClose.addEventListener('click', () => {
+  steerPendingText = undefined
+  elements.steerNotice.classList.add('hidden')
+})
+
 elements.compactThinkingButton.addEventListener('click', () => {
   compactThinking = !compactThinking
   applyCompactThinkingButton()
@@ -348,6 +357,7 @@ function render(): void {
   renderConversation(state)
   renderAttachments()
   renderStatus(state)
+  updateSteerNotice(state)
   vscode.setState({ activeSessionId: state.activeSessionId })
 }
 
@@ -661,6 +671,17 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     conversation.scrollTop = Math.max(0, conversation.scrollHeight - conversation.clientHeight)
   }
   updateScrollBottomButton()
+}
+
+function updateSteerNotice(snapshot: WorkbenchSnapshot): void {
+  if (steerPendingText === undefined) return
+  const delivered = snapshot.messages.some(message => message.role === 'user' && message.text === steerPendingText)
+  if (delivered) {
+    steerPendingText = undefined
+    elements.steerNotice.classList.add('hidden')
+    return
+  }
+  elements.steerNotice.classList.remove('hidden')
 }
 
 function updateScrollBottomButton(): void {
@@ -1198,6 +1219,11 @@ function send(): void {
   historyIndex = -1
   renderStatus(state)
   const steer = steerAvailable(state)
+  if (steer) {
+    steerPendingText = value
+    elements.steerNoticeText.textContent = 'Steer message queued - it will be delivered after the current reasoning or tool step finishes.'
+    elements.steerNotice.classList.remove('hidden')
+  }
   post({ type: 'send', text: value, ...(steer ? { mode: 'steer' } : {}) })
   elements.prompt.focus()
 }

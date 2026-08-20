@@ -113,8 +113,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       },
       {
         label: '$(arrow-swap) Hand off current DeepSeek session',
-        description: 'Continue in native Codex or Claude Code',
-        detail: 'Creates a separate target session and never writes DeepSeek formatting into the source platform history.',
+        description: 'Continue in Codex or Claude Code',
+        detail: 'Copies a take-over prompt to the clipboard for a new session in your extension, or launches the CLI; the source session stays untouched.',
         action: 'handoff-current',
       },
     )
@@ -556,6 +556,11 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .skill-option-desc { font-size: 10px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .skill-option:hover .skill-option-desc { color: inherit; opacity: .8; }
     .skill-empty { padding: 6px 8px; font-size: 11px; color: var(--vscode-descriptionForeground); }
+    .steer-notice { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; padding: 6px 8px; border: 1px solid var(--vscode-inputValidation-warningBorder); border-radius: 3px; background: var(--vscode-inputValidation-warningBackground); color: var(--vscode-inputValidation-warningForeground); font-size: 11px; line-height: 1.35; }
+    .steer-notice > span { flex: 1 1 auto; min-width: 0; }
+    .steer-notice button { display: grid; place-items: center; flex: 0 0 16px; width: 16px; height: 16px; padding: 0; background: transparent; color: inherit; cursor: pointer; border-radius: 3px; }
+    .steer-notice button:hover { background: var(--vscode-toolbar-hoverBackground); }
+    .steer-notice svg { width: 12px; height: 12px; }
     .turn-hidden { display: none !important; }
     .turn-badge { display: inline-flex; align-items: center; margin-left: 6px; padding: 1px 6px; border: 1px solid var(--vscode-panel-border); border-radius: 8px; color: var(--vscode-descriptionForeground); font-size: 10px; cursor: pointer; }
     .turn-badge:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
@@ -628,6 +633,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     <main id="conversation" class="conversation"><div class="empty">DeepSeek Harness</div></main>
     <footer class="composer">
       <div id="attachments" class="attachments"></div>
+      <div id="steer-notice" class="steer-notice hidden"><span id="steer-notice-text">Steer message queued.</span><button id="steer-notice-close" title="Dismiss" aria-label="Dismiss"><i data-lucide="x"></i></button></div>
       <div id="composer-box" class="composer-box">
         <textarea id="prompt" rows="4" placeholder="Message DeepSeek Harness; type @ to reference a skill"></textarea>
         <div id="skill-popover" class="skill-popover hidden" role="listbox" aria-label="Skills"></div>
