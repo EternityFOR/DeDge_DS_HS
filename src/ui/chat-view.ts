@@ -216,7 +216,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const pending: PendingHandoffState = { version: 1, sessionId, draft }
     this.pendingHandoff = pending
     await this.context.workspaceState.update(PENDING_HANDOFF_KEY, pending)
-    const attachment = this.controller.attachHandoff(draft.attachmentName, draft.attachmentText)
+    const attachment = await this.controller.attachHandoff(draft.attachmentName, draft.attachmentText)
     this.attachments = [attachment]
     await this.focus()
     await this.postState()
@@ -290,7 +290,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       for (const value of message.uris) this.upsertAttachment(await this.controller.attachUri(vscode.Uri.parse(value, true)))
     })
     if (message.type === 'attachTextFiles') return this.run(async () => {
-      for (const file of message.files) this.upsertAttachment(this.controller.attachTextFile(file.name, file.text))
+      for (const file of message.files) this.upsertAttachment(await this.controller.attachTextFile(file.name, file.text))
     })
     if (message.type === 'attachImageFiles') return this.run(async () => {
       for (const file of message.files) this.upsertAttachment(await this.controller.attachImageData(file.name, file.dataUrl))
@@ -334,7 +334,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const pending = this.pendingHandoff
     const activeSessionId = this.controller.snapshot().activeSessionId
     if (pending === undefined || activeSessionId !== pending.sessionId) return
-    const attachment = this.controller.attachHandoff(pending.draft.attachmentName, pending.draft.attachmentText)
+    const attachment = await this.controller.attachHandoff(pending.draft.attachmentName, pending.draft.attachmentText)
     this.attachments = [attachment]
     if (this.restoredHandoffSessionId === pending.sessionId) return
     if (await this.post({ type: 'setDraft', text: pending.draft.prompt })) this.restoredHandoffSessionId = pending.sessionId

@@ -69,6 +69,7 @@ describe('runtime overlay rendering', () => {
       visionBaseUrl: '',
       visionModel: 'qwen-vl-plus',
       visionMaxBytes: 4_194_304,
+      pasteFileThreshold: 8_192,
     }
 
     const overlay = renderRuntimeOverlay(configuration)

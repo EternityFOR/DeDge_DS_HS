@@ -1,5 +1,7 @@
 import { Buffer } from 'node:buffer'
 import { setTimeout as delay } from 'node:timers/promises'
+import { readdir, rm, stat } from 'node:fs/promises'
+import * as path from 'node:path'
 import * as vscode from 'vscode'
 import type { ConfigurationService, HarnessConfiguration } from '../config/configuration.js'
 import { buildPrompt, type ContextAttachment, ContextCollector } from '../context/context-collector.js'
@@ -24,6 +26,7 @@ export class WorkbenchController implements vscode.Disposable {
   private readonly sessionOperations: SessionOperationCoordinator
   private gateway: GatewayClient | undefined
   private suppressAutoCreate = false
+  private readonly deletedSessions = new Set<string>()
   private skillCatalogCache: { readonly key: string; readonly at: number; readonly items: Promise<SkillSummary[]> } | undefined
   private runtimeSubscription: vscode.Disposable
   private configurationSubscription: vscode.Disposable
@@ -53,6 +56,8 @@ export class WorkbenchController implements vscode.Disposable {
         this.publish()
       },
     })
+    const deleted = this.context.workspaceState.get<readonly string[]>('deletedSessions.v1')
+    if (Array.isArray(deleted)) for (const id of deleted) this.deletedSessions.add(id)
     this.runtimeSubscription = runtime.onDidChangeState(state => {
       this.store.setRuntime(state)
       this.publish()
@@ -102,7 +107,7 @@ export class WorkbenchController implements vscode.Disposable {
         }
       }
       const workspaces = await gateway.listWorkspaces()
-      this.store.replaceSessions(sessions)
+      this.store.replaceSessions(sessions.filter(item => !this.deletedSessions.has(item.sessionId)))
       this.store.replaceArchivedSessions(workspaces.archivedSessionIds ?? [])
       await this.refreshPresetCatalog(gateway)
       const remembered = this.context.workspaceState.get<string>('activeSessionId')
@@ -218,26 +223,37 @@ export class WorkbenchController implements vscode.Disposable {
     }
     const runtimeVersion = this.runtime.state.version
     if (runtimeVersion === undefined) throw new Error('The Harness runtime version is unavailable; deletion was refused.')
-    const sourcePath = await this.sessionTrash.locate(runtimeVersion, sessionId)
+    let sourcePath: string | undefined
+    try {
+      sourcePath = await this.sessionTrash.locate(runtimeVersion, sessionId)
+    } catch (error) {
+      this.logger.warn(`No persisted data found for session ${sessionId}; falling back to archive removal. ${errorMessage(error)}`)
+    }
     if (snapshot.activeSessionId === sessionId) await this.context.workspaceState.update('activeSessionId', undefined)
+    this.deletedSessions.add(sessionId)
+    await this.context.workspaceState.update('deletedSessions.v1', [...this.deletedSessions])
     this.suppressAutoCreate = true
     try {
-      await this.stop()
-      let trashed
-      try {
-        trashed = await this.sessionTrash.moveToTrash(runtimeVersion, sessionId, sourcePath)
-      } catch (error) {
-        await this.start().catch(restartError => this.logger.error('Harness restart after failed session deletion also failed', restartError))
-        throw error
+      if (sourcePath === undefined) {
+        const archived = await this.requireGateway().archiveSession(sessionId)
+        this.store.replaceArchivedSessions(archived.archivedSessionIds)
       }
-      this.logger.info(`Moved session "${session.title}" (${session.id}) to recovery storage: ${trashed.directory}`)
+      await this.stop()
+      if (sourcePath !== undefined) {
+        const trashed = await this.sessionTrash.moveToTrash(runtimeVersion, sessionId, sourcePath)
+        this.logger.info(`Moved session "${session.title}" (${session.id}) to recovery storage: ${trashed.directory}`)
+        this.deletedSessions.delete(sessionId)
+        await this.context.workspaceState.update('deletedSessions.v1', [...this.deletedSessions])
+      }
       this.store.removeSession(sessionId)
       this.publish()
       await this.start()
     } finally {
       this.suppressAutoCreate = false
     }
-    return 'Session moved to recovery storage.'
+    return sourcePath === undefined
+      ? 'Session removed from the workbench (no persisted data was found on disk).'
+      : 'Session moved to recovery storage.'
   }
 
   async attachSelection(): Promise<ContextAttachment | undefined> {
@@ -256,8 +272,37 @@ export class WorkbenchController implements vscode.Disposable {
     return this.contextCollector.collectUri(uri, this.configuration.get().contextMaxBytes)
   }
 
-  attachTextFile(name: string, text: string): ContextAttachment {
-    return this.contextCollector.collectTextFile(name, text, this.configuration.get().contextMaxBytes)
+  async attachTextFile(name: string, text: string): Promise<ContextAttachment> {
+    const directory = this.pastedDirectory()
+    const attachment = await this.contextCollector.collectTextFile(
+      name,
+      text,
+      this.configuration.get().contextMaxBytes,
+      directory,
+      this.configuration.get().pasteFileThreshold,
+    )
+    void this.cleanupPastedFiles(directory)
+    return attachment
+  }
+
+  private pastedDirectory(): string {
+    return path.join(this.context.globalStorageUri.fsPath, 'tmp', 'pasted')
+  }
+
+  private async cleanupPastedFiles(directory: string): Promise<void> {
+    try {
+      const entries = await readdir(directory)
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000
+      for (const entry of entries) {
+        const candidate = path.join(directory, entry)
+        const info = await stat(candidate).catch(() => undefined)
+        if (info !== undefined && info.isFile() && info.mtimeMs < cutoff) {
+          await rm(candidate, { force: true }).catch(() => undefined)
+        }
+      }
+    } catch {
+      // The directory may not exist yet; nothing to clean.
+    }
   }
 
   async attachImageData(name: string, dataUrl: string): Promise<ContextAttachment> {
@@ -346,7 +391,7 @@ export class WorkbenchController implements vscode.Disposable {
     return items
   }
 
-  attachHandoff(name: string, text: string): ContextAttachment {
+  attachHandoff(name: string, text: string): Promise<ContextAttachment> {
     return this.contextCollector.collectTextFile(name, text, Math.max(1, Buffer.byteLength(text, 'utf8')))
   }
 

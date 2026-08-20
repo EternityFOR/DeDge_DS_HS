@@ -21,6 +21,7 @@ export interface HarnessConfiguration {
   readonly autoStart: boolean
   readonly contextMaxBytes: number
   readonly contextWindowTokens: number
+  readonly pasteFileThreshold: number
   readonly codexHome: string
   readonly claudeHome: string
   readonly codexCommand: string
@@ -68,6 +69,7 @@ export class ConfigurationService implements vscode.Disposable {
       autoStart: config.get<boolean>('autoStart', true),
       contextMaxBytes: bounded(config.get<number>('context.maxBytes'), 1_024, 131_072, 32_768),
       contextWindowTokens: bounded(config.get<number>('context.windowTokens'), 16_384, 16_000_000, DEFAULT_CONTEXT_WINDOW_TOKENS),
+      pasteFileThreshold: bounded(config.get<number>('context.pasteFileThreshold'), 2_048, 131_072, 8_192),
       codexHome: nonEmpty(config.get<string>('handoff.codexHome'), '${userHome}/.codex'),
       claudeHome: nonEmpty(config.get<string>('handoff.claudeHome'), '${userHome}/.claude'),
       codexCommand: config.get<string>('handoff.codexCommand', '').trim(),

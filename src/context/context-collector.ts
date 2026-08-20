@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
-import { open } from 'node:fs/promises'
+import { mkdir, open, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as vscode from 'vscode'
 import { imageExtensionMimeType, mimeTypeForDataUrl, stripDataUrlPrefix } from '../vision/vision-client.js'
@@ -131,11 +131,29 @@ export class ContextCollector {
     }
   }
 
-  collectTextFile(name: string, value: string, maxBytes: number): ContextAttachment {
+  async collectTextFile(name: string, value: string, maxBytes: number, pastedDirectory?: string, pasteFileThreshold?: number): Promise<ContextAttachment> {
     if (value.includes('\u0000')) throw new Error(`${name} appears to be binary and cannot be attached.`)
     const label = path.basename(name.trim()) || 'pasted-file.txt'
-    const limited = limitUtf8(value, maxBytes)
     const digest = createHash('sha256').update(label).update('\u0000').update(value).digest('hex').slice(0, 16)
+    const byteLength = Buffer.byteLength(value, 'utf8')
+    if (pastedDirectory !== undefined && pasteFileThreshold !== undefined && byteLength > pasteFileThreshold) {
+      await mkdir(pastedDirectory, { recursive: true })
+      const target = path.join(pastedDirectory, `${Date.now()}-${digest}.txt`)
+      await writeFile(target, value, 'utf8')
+      return {
+        id: `pasted-file:${digest}`,
+        kind: 'file',
+        label,
+        text: [
+          `Pasted content saved to a file:`,
+          target,
+          '',
+          `(${byteLength} bytes; read the file when you need its content instead of pasting it inline)`,
+        ].join('\n'),
+        truncated: false,
+      }
+    }
+    const limited = limitUtf8(value, maxBytes)
     return {
       id: `inline-file:${digest}`,
       kind: 'file',

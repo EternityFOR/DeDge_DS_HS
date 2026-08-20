@@ -58,13 +58,35 @@ export class HandoffService {
           .catch(error => this.logger.warn(`Could not rename the imported ${label} session: ${errorMessage(error)}`))
       }
       staged = createStagedHandoff(value)
-    } else if (this.configuration.get().handoffLaunchMode === 'cli') {
-      await launchHandoffTarget(target, stored, this.configuration.get())
     } else {
       const label = platformName(target)
-      await vscode.env.clipboard.writeText(renderTargetPrompt(value))
-      void vscode.window.showInformationMessage(`${label} take-over prompt copied to the clipboard. Open a new ${label} session in your ${label} VS Code extension and paste it to continue.`)
-      this.logger.info(`Copied ${label} handoff ${value.id} take-over prompt to the clipboard`)
+      const defaultClipboard = this.configuration.get().handoffLaunchMode !== 'cli'
+      const mode = await vscode.window.showQuickPick([
+        {
+          label: '$(clippy) Copy take-over prompt to clipboard',
+          description: 'Paste it into a new session in your VS Code extension',
+          detail: 'Recommended: no terminal is spawned and the original sessions stay untouched.',
+          mode: 'clipboard',
+          ...(defaultClipboard ? { picked: true } : {}),
+        },
+        {
+          label: '$(terminal) Launch CLI session with the prompt',
+          description: 'Spawns the native CLI or extension executable directly',
+          mode: 'cli',
+          ...(defaultClipboard ? {} : { picked: true }),
+        },
+      ], {
+        title: `Hand off to ${label}`,
+        placeHolder: 'Choose how to continue the task on the target platform',
+      })
+      if (mode === undefined) return undefined
+      if (mode.mode === 'cli') {
+        await launchHandoffTarget(target, stored, this.configuration.get())
+      } else {
+        await vscode.env.clipboard.writeText(renderTargetPrompt(value))
+        void vscode.window.showInformationMessage(`${label} take-over prompt copied to the clipboard. Open a new ${label} session in your ${label} VS Code extension and paste it to continue.`)
+        this.logger.info(`Copied ${label} handoff ${value.id} take-over prompt to the clipboard`)
+      }
     }
     this.logger.info(`Created isolated handoff ${value.id}: ${platformName(source.platform)} -> ${platformName(target)}`)
     return staged

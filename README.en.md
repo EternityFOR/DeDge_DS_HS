@@ -6,7 +6,7 @@ A self-contained DeepSeek Harness workbench for VS Code. Platform-specific VSIX 
 
 [Marketplace](https://marketplace.visualstudio.com/items?itemName=diractive-edge.dedge-deepseek-harness-vscode) | [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) | [Changelog](CHANGELOG.md) | [Privacy](PRIVACY.md) | [Security](SECURITY.md) | [Support](SUPPORT.md)
 
-> The current version is `0.1.6`. Release artifacts are primarily verified on Windows 10/11 x64. DeepSeek Harness remains a developer preview, so review the changelog and known limitations before upgrading.
+> The current version is `0.1.7`. Release artifacts are primarily verified on Windows 10/11 x64. DeepSeek Harness remains a developer preview, so review the changelog and known limitations before upgrading.
 
 ## Highlights
 
@@ -25,7 +25,7 @@ Search for **DeDge DeepSeek Harness** in VS Code Extensions and verify the publi
 For a pinned build, download the package matching the extension host platform from [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases), then choose **Extensions: Install from VSIX...**.
 
 ```powershell
-code --install-extension .\dedge-deepseek-harness-vscode-0.1.6-win32-x64.vsix
+code --install-extension .\dedge-deepseek-harness-vscode-0.1.7-win32-x64.vsix
 ```
 
 Remote SSH, WSL, and Dev Containers use the remote extension host platform and architecture, not the local UI platform. Platform VSIX packages are not interchangeable.
@@ -62,11 +62,11 @@ See [Session handoff](docs/session-handoff.md) for the full boundary.
 
 | Component | Pinned version |
 | --- | --- |
-| DeepSeek Harness | `0.1.0-rc.6` |
+| DeepSeek Harness | `0.1.0-rc.7` |
 | Node.js | `22.22.3` |
 | pnpm | `11.21.0` |
 
-`0.1.0-rc.6` is the bundled upstream DeepSeek Harness version; it is separate from the extension version `0.1.6`.
+`0.1.0-rc.7` is the bundled upstream DeepSeek Harness version; it is separate from the extension version `0.1.7`.
 
 The source and CI support native Windows x64, Linux x64, and macOS runners. Only packages explicitly attached to a GitHub Release or published to Marketplace are release artifacts.
 

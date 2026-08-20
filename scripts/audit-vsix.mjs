@@ -58,25 +58,22 @@ export function auditVsix(file, target) {
     if (!names.has(name)) throw new Error(`VSIX is missing required file: ${name}`)
   }
 
-  const nativePty = target.startsWith('linux-')
-    ? 'extension/dist/runtime/node_modules/node-pty/build/Release/pty.node'
-    : `extension/dist/runtime/node_modules/node-pty/prebuilds/${target}/pty.node`
+  const ptyRoot = 'extension/dist/runtime/node_modules/node-pty'
+  const nativePty = target.startsWith('win32-')
+    ? `${ptyRoot}/prebuilds/${target}/conpty.node`
+    : `${ptyRoot}/prebuilds/${target}/pty.node`
   if (!names.has(nativePty)) throw new Error(`VSIX is missing the ${target} node-pty binary: ${nativePty}`)
   if (target.startsWith('win32-')) {
     for (const relative of [
       'conpty.node',
       'conpty_console_list.node',
-      'pty.node',
-      'winpty-agent.exe',
-      'winpty.dll',
-      'conpty/conpty.dll',
       'conpty/OpenConsole.exe',
     ]) {
-      const native = `extension/dist/runtime/node_modules/node-pty/prebuilds/${target}/${relative}`
+      const native = `${ptyRoot}/prebuilds/${target}/${relative}`
       if (!names.has(native)) throw new Error(`VSIX is missing the ${target} node-pty file: ${native}`)
     }
   } else if (target.startsWith('darwin-')) {
-    const helper = `extension/dist/runtime/node_modules/node-pty/prebuilds/${target}/spawn-helper`
+    const helper = `${ptyRoot}/prebuilds/${target}/spawn-helper`
     if (!names.has(helper)) throw new Error(`VSIX is missing the ${target} node-pty helper: ${helper}`)
   }
 

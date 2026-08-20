@@ -19,14 +19,14 @@ describe('UTF-8 context limits', () => {
       .toBe('<editor_context kind="file" label="src/a.ts">\nconst x = 1\n</editor_context>\n\nExplain')
   })
 
-  it('converts pasted text files into bounded attachments and rejects binary content', () => {
+  it('converts pasted text files into bounded attachments and rejects binary content', async () => {
     const collector = new ContextCollector()
-    expect(collector.collectTextFile('folder/example.txt', 'hello world', 5)).toMatchObject({
+    expect(await collector.collectTextFile('folder/example.txt', 'hello world', 5)).toMatchObject({
       kind: 'file',
       label: 'example.txt',
       truncated: true,
     })
-    expect(() => collector.collectTextFile('binary.bin', 'a\u0000b', 32)).toThrow('binary')
+    await expect(collector.collectTextFile('binary.bin', 'a\u0000b', 32)).rejects.toThrow('binary')
   })
 })
 

@@ -238,6 +238,11 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
   for (const { event } of entries) {
     const data = isRecord(event.data) ? event.data : {}
     if (event.type === 'user/message') {
+      // Messages injected by plugins (system snapshots, tool notifications,
+      // command echoes) are not user turns: they would otherwise show as
+      // "You" and break turn folding boundaries.
+      const source = isRecord(data.source) ? data.source : undefined
+      if (source !== undefined && source.kind !== 'user') continue
       const rawText = contentText(data.content)
       if (rawText !== '') {
         const projected = projectUserPrompt(rawText)

@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as vscode from 'vscode'
 import type { ConfigurationService, HarnessConfiguration } from '../config/configuration.js'
@@ -120,6 +120,7 @@ export class RuntimeManager implements vscode.Disposable {
       this.launchIdentity = identity
 
       const home = versionedHome(this.layout, launch.version)
+      await migrateHarnessHomeIfNeeded(this.layout, home, launch.version, this.logger).catch(error => this.logger.warn(`Harness home migration skipped: ${errorMessage(error)}`))
       const generatedDir = path.join(this.layout.generated, launch.version)
       const overlay = path.join(generatedDir, 'vscode.patch.yml')
       await Promise.all([mkdir(home, { recursive: true }), mkdir(generatedDir, { recursive: true })])
@@ -337,4 +338,35 @@ async function writeAtomic(target: string, content: string): Promise<void> {
   await writeFile(temporary, content, 'utf8')
   await rm(target, { force: true })
   await rename(temporary, target)
+}
+
+async function migrateHarnessHomeIfNeeded(layout: StorageLayout, target: string, version: string, logger: Logger): Promise<void> {
+  try {
+    await stat(target)
+    return
+  } catch {
+    // target home does not exist yet
+  }
+  let entries
+  try {
+    entries = await readdir(layout.harnessHomes)
+  } catch {
+    return
+  }
+  const targetName = version.replace(/[^a-zA-Z0-9._-]/gu, '_') || 'unknown'
+  const candidates = entries.filter(name => name !== targetName).sort()
+  const sourceName = candidates[candidates.length - 1]
+  if (sourceName === undefined) return
+  const source = path.join(layout.harnessHomes, sourceName)
+  await mkdir(target, { recursive: true })
+  for (const part of ['sessions', 'storages', 'settings.yaml', '.anonymous-user-id']) {
+    const from = path.join(source, part)
+    try {
+      await stat(from)
+    } catch {
+      continue
+    }
+    await cp(from, path.join(target, part), { recursive: true })
+  }
+  logger.info(`Migrated Harness home data from ${sourceName} to ${version}`)
 }

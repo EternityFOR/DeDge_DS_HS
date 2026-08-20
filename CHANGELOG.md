@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-08-20
+
+### Added
+
+- 升级内置 DeepSeek Harness 运行时到官方 `0.1.0-rc.7`（已实测可读取 rc.6 的会话数据；升级时自动把旧版本 home 的会话迁移到新版本目录）。
+- 长文本粘贴自动落盘：粘贴内容超过 `context.pasteFileThreshold`（默认 8 KB）时写入插件存储目录，提示中只给文件路径，模型按需读取，不再撑满上下文。
+- 交接到 Codex/Claude 时弹窗选择交付方式（复制接手 prompt / 启动 CLI），文案说明两种方式的区别。
+
+### Fixed
+
+- 删除会话找不到磁盘数据时不再报错：自动改用官方归档移除并从工作台移除，避免"Could not locate persisted data"和删不掉的空白会话。
+- 插件注入的消息（系统快照、工具通知、命令回显）不再显示为 "You"，按轮次折叠的边界恢复正确。
+
 ## [0.1.6] - 2026-08-20
 
 ### Added
@@ -120,7 +133,8 @@
 - Gateway 固定监听随机 `127.0.0.1`，子进程使用参数数组、`shell: false` 和 `windowsHide: true`。
 - 发布审计拒绝 session dump、私钥、常见 provider token、绝对本机路径、Mojibake 和开发期文件进入公开源或 VSIX。
 
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.7
 [0.1.6]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.6
 [0.1.5]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.5
 [0.1.4]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.4
