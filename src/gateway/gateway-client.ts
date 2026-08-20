@@ -55,8 +55,8 @@ export class GatewayClient implements vscode.Disposable {
     return this.call('session.rename', { sessionId, title }).then(parseRenameResult)
   }
 
-  history(sessionId: string, maxMessages = 80): Promise<SessionHistory> {
-    return this.call('session.history', { sessionId, maxMessages })
+  history(sessionId: string, maxMessages = 40, beforeSeq?: number): Promise<SessionHistory> {
+    return this.call('session.history', { sessionId, maxMessages, ...(beforeSeq === undefined ? {} : { beforeSeq }) })
   }
 
   prompt(sessionId: string, text: string, mode: 'queue' | 'steer' = 'queue'): Promise<{ readonly accepted?: boolean }> {

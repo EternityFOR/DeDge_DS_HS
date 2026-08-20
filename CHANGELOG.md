@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-08-20
+
+### Added
+
+- Added an embedded settings dialog for DeepSeek and Vision URL, model, and key configuration. Keys remain in VS Code SecretStorage and are never returned to the Webview.
+- Added a compact Vision model picker beside the composer model control, with compatible `/models` discovery and an inline configuration entry point.
+- Added paged loading of older session history when scrolling to the top.
+- Added a dedicated Git working-tree change review button.
+
+### Changed
+
+- Replaced the textarea corner resize affordance with an unambiguous horizontal handle above the input; dragging upward increases the height.
+- Swapped the compact-thinking and context-configuration button positions for a clearer composer layout.
+- Reduced the default long-paste-to-file threshold from 8 KB to 4 KB.
+
+### Fixed
+
+- Preserved message ordering while prepending older history pages and keeping the user's scroll offset.
+- Made task-level folding include intermediate reasoning, tool calls, and inserted messages without obscuring the first prompt or final response.
+
 ## [0.1.10] - 2026-08-20
 
 ### Added
@@ -164,7 +184,8 @@
 - Gateway 固定监听随机 `127.0.0.1`，子进程使用参数数组、`shell: false` 和 `windowsHide: true`。
 - 发布审计拒绝 session dump、私钥、常见 provider token、绝对本机路径、Mojibake 和开发期文件进入公开源或 VSIX。
 
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.10...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.11...HEAD
+[0.1.11]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.11
 [0.1.10]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.10
 [0.1.9]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.9
 [0.1.8]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.8

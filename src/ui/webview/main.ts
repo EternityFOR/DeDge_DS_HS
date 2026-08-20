@@ -9,6 +9,7 @@ import {
   Ellipsis,
   FileText,
   FoldVertical,
+  Image,
   KeyRound,
   LoaderCircle,
   Paperclip,
@@ -28,7 +29,7 @@ import type { ContextAttachment } from '../../context/context-collector.js'
 import type { SkillSummary } from '../../skills/skill-catalog.js'
 import type { WorkbenchMessage, WorkbenchSnapshot } from '../../session/types.js'
 import { modelControlsUnavailableReason, promptUnavailableReason, steerAvailable } from '../../session/interaction-readiness.js'
-import type { HostToWebviewMessage, WebviewToHostMessage } from '../webview-protocol.js'
+import type { HostToWebviewMessage, WebviewToHostMessage, WorkbenchSettings } from '../webview-protocol.js'
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewToHostMessage): void; setState(value: unknown): void; getState(): unknown }
 
@@ -39,6 +40,7 @@ const iconComponents = {
   'chevron-down': ChevronDown,
   'chevrons-down': ChevronsDown,
   'fold-vertical': FoldVertical,
+  'image': Image,
   'diff': Diff,
   'ellipsis': Ellipsis,
   'file-text': FileText,
@@ -66,7 +68,7 @@ let sessionTabsSignature = ''
 let noticeTimer: number | undefined
 let sendPending = false
 let steerPendingText: string | undefined
-let pasteFileThreshold = 8_192
+let pasteFileThreshold = 4_096
 let scrollBottomButton: HTMLButtonElement | undefined
 let stickToBottom = true
 const collapsedMessages = new Set<string>()
@@ -86,6 +88,10 @@ let pendingAttachments: readonly ContextAttachment[] = []
 let renderedSessionKey: string | undefined
 let emptyNode: HTMLElement | undefined
 let pendingAnchor: HTMLElement | undefined
+let historyLoader: HTMLButtonElement | undefined
+let historyLoadPending = false
+let historyLoadScrollHeight = 0
+let currentSettings: WorkbenchSettings | undefined
 let pendingSignature = ''
 let controlsSignature = ''
 let attachmentsSignature = ''
@@ -101,6 +107,7 @@ const elements = {
   sessionTabs: required('session-tabs'),
   conversation: required('conversation'),
   prompt: requiredTextArea('prompt'),
+  composerResize: required('composer-resize'),
   composerBox: required('composer-box'),
   attachments: required('attachments'),
   notice: required('notice'),
@@ -129,6 +136,21 @@ const elements = {
   steerNotice: required('steer-notice'),
   steerNoticeText: required('steer-notice-text'),
   steerNoticeClose: requiredButton('steer-notice-close'),
+  settingsDialog: required('settings-dialog'),
+  settingsCancel: requiredButton('settings-cancel'),
+  settingsSave: requiredButton('settings-save'),
+  settingBaseUrl: requiredInput('setting-base-url'),
+  settingApiKey: requiredInput('setting-api-key'),
+  settingVisionUrl: requiredInput('setting-vision-url'),
+  settingVisionModel: requiredInput('setting-vision-model'),
+  settingVisionKey: requiredInput('setting-vision-key'),
+  settingPasteThreshold: requiredInput('setting-paste-threshold'),
+  settingContextWindow: requiredInput('setting-context-window'),
+  settingCodexHome: requiredInput('setting-codex-home'),
+  settingClaudeHome: requiredInput('setting-claude-home'),
+  settingHandoffMode: requiredSelect('setting-handoff-mode'),
+  settingSkillDirectories: requiredTextArea('setting-skill-directories'),
+  visionModelOptions: required('vision-model-options'),
 }
 
 const persistedWebviewState = vscode.getState()
@@ -150,12 +172,14 @@ const popovers = [
     renderReasoningOptions(state)
     renderPresetOptions(state)
   }),
+  popover('vision-model-menu', 'vision-model-popover', renderVisionModelOptions),
 ]
 
 bindAction('attach-selection', { type: 'attachSelection' })
 bindAction('attach-file', { type: 'attachFile' })
 bindAction('attach-problems', { type: 'attachDiagnostics' })
 bindAction('review', { type: 'reviewChanges' })
+bindAction('review-toolbar', { type: 'reviewChanges' })
 bindAction('handoff', { type: 'handoff' })
 bindAction('set-key', { type: 'openSettings' })
 bindAction('compact', { type: 'compact' })
@@ -166,6 +190,8 @@ elements.steerNoticeClose.addEventListener('click', () => {
   steerPendingText = undefined
   elements.steerNotice.classList.add('hidden')
 })
+elements.settingsCancel.addEventListener('click', () => elements.settingsDialog.classList.add('hidden'))
+elements.settingsSave.addEventListener('click', saveSettings)
 
 elements.compactThinkingButton.addEventListener('click', () => {
   compactThinking = !compactThinking
@@ -252,10 +278,7 @@ elements.prompt.addEventListener('input', () => {
   resizePrompt()
   vscode.setState({ draft: elements.prompt.value })
 })
-elements.prompt.addEventListener('pointerdown', event => {
-  const rect = elements.prompt.getBoundingClientRect()
-  if (event.clientX >= rect.right - 24 && event.clientY >= rect.bottom - 24) elements.prompt.dataset.manualResize = 'true'
-})
+elements.composerResize.addEventListener('pointerdown', startComposerResize)
 elements.prompt.addEventListener('paste', event => { void handlePaste(event) })
 elements.composerBox.addEventListener('dragover', event => {
   if (!hasAttachableData(event.dataTransfer)) return
@@ -286,6 +309,7 @@ elements.conversation.addEventListener('scroll', () => {
   if (conversation.scrollTop >= maxScroll - 24) stickToBottom = true
   else if (conversation.scrollTop < maxScroll - 96) stickToBottom = false
   updateScrollBottomButton()
+  if (conversation.scrollTop <= 24) requestOlderHistory()
 })
 let resizeFrame: number | undefined
 window.addEventListener('resize', () => {
@@ -322,6 +346,11 @@ window.addEventListener('message', event => {
     resizePrompt()
     elements.prompt.focus()
   } else if (message.type === 'notice') showNotice(message.message)
+  else if (message.type === 'settings') {
+    currentSettings = message.settings
+    renderVisionModelOptions()
+    if (message.open !== false) showSettings(message.settings, message.section)
+  }
   else if (message.type === 'skills') {
     skillCatalog = message.skills
     if (skillPopoverVisible) renderSkillPopover()
@@ -362,6 +391,12 @@ function render(): void {
   renderAttachments()
   renderStatus(state)
   updateSteerNotice(state)
+  if (historyLoadPending && !state.historyLoading) {
+    historyLoadPending = false
+    window.requestAnimationFrame(() => {
+      elements.conversation.scrollTop += Math.max(0, elements.conversation.scrollHeight - historyLoadScrollHeight)
+    })
+  }
   vscode.setState({ activeSessionId: state.activeSessionId })
 }
 
@@ -583,6 +618,11 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     stickToBottom = true
     emptyNode = undefined
     elements.conversation.replaceChildren()
+    historyLoader = document.createElement('button')
+    historyLoader.type = 'button'
+    historyLoader.className = 'history-loader hidden'
+    historyLoader.addEventListener('click', requestOlderHistory)
+    elements.conversation.append(historyLoader)
     pendingAnchor = document.createElement('div')
     pendingAnchor.className = 'pending-area'
     elements.conversation.append(pendingAnchor)
@@ -607,7 +647,9 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
   const messages = snapshot.messages ?? []
   const seen = new Set<string>()
   let streaming = false
-  for (const message of messages) {
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const message = messages[messageIndex]
+    if (message === undefined) continue
     seen.add(message.id)
     const signature = messageSignature(message)
     let node = messageElements.get(message.id)
@@ -615,7 +657,8 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
       node = renderMessage(message)
       messageElements.set(message.id, node)
       messageSignatures.set(message.id, signature)
-      elements.conversation.insertBefore(node, pendingAnchor)
+      const next = messages.slice(messageIndex + 1).map(item => messageElements.get(item.id)).find(item => item?.isConnected)
+      elements.conversation.insertBefore(node, next ?? pendingAnchor)
     } else if (signature !== messageSignatures.get(message.id)) {
       messageSignatures.set(message.id, signature)
       updateMessage(node, message)
@@ -629,6 +672,11 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     messageSignatures.delete(id)
   }
   renderTaskFolds(messages)
+  if (historyLoader !== undefined) {
+    historyLoader.classList.toggle('hidden', !snapshot.hasMoreHistory && !snapshot.historyLoading)
+    historyLoader.disabled = snapshot.historyLoading
+    historyLoader.textContent = snapshot.historyLoading ? 'Loading earlier messages...' : 'Load earlier messages'
+  }
 
   const approvals = snapshot.approvals
   const questions = snapshot.questions
@@ -660,7 +708,7 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
 function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
   const groups = new Map<string, WorkbenchMessage[]>()
   for (const message of messages) {
-    if (message.taskId === undefined || message.taskComplete !== true) continue
+    if (message.taskId === undefined) continue
     const items = groups.get(message.taskId) ?? []
     items.push(message)
     groups.set(message.taskId, items)
@@ -676,7 +724,12 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
     if (first === undefined || last === undefined || first.id === last.id) continue
     const middle = items.filter(item => item.id !== first.id && item.id !== last.id)
     const collapsed = compactThinking && !expandedTasks.has(taskId) && middle.length > 0
-    for (const item of items) messageElements.get(item.id)?.classList.toggle('task-middle-hidden', collapsed && middle.some(candidate => candidate.id === item.id))
+    for (const item of items) {
+      const node = messageElements.get(item.id)
+      const intermediate = middle.some(candidate => candidate.id === item.id)
+      node?.classList.toggle('task-middle-hidden', collapsed && intermediate)
+      node?.classList.toggle('task-intermediate', intermediate)
+    }
 
     let fold = taskFoldElements.get(taskId)
     if (fold === undefined) {
@@ -695,6 +748,7 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
     const tools = middle.filter(item => item.role === 'tool').length
     const inserted = middle.filter(item => item.role === 'user').length
     const details = [
+      items.some(item => item.taskComplete !== true) ? 'current task' : '',
       `${String(middle.length)} intermediate ${middle.length === 1 ? 'item' : 'items'}`,
       reasoning === 0 ? '' : `${String(reasoning)} reasoning`,
       tools === 0 ? '' : `${String(tools)} tools`,
@@ -1417,6 +1471,34 @@ function resizePrompt(): void {
   elements.prompt.style.height = `${Math.min(480, Math.max(88, elements.prompt.scrollHeight))}px`
 }
 
+function startComposerResize(event: PointerEvent): void {
+  event.preventDefault()
+  const startY = event.clientY
+  const startHeight = elements.prompt.getBoundingClientRect().height
+  elements.composerResize.setPointerCapture(event.pointerId)
+  const move = (moveEvent: PointerEvent): void => {
+    const maximum = Math.max(88, Math.min(480, window.innerHeight * 0.5))
+    const height = Math.max(88, Math.min(maximum, startHeight + startY - moveEvent.clientY))
+    elements.prompt.dataset.manualResize = 'true'
+    elements.prompt.style.height = `${String(Math.round(height))}px`
+  }
+  const finish = (): void => {
+    elements.composerResize.removeEventListener('pointermove', move)
+    elements.composerResize.removeEventListener('pointerup', finish)
+    elements.composerResize.removeEventListener('pointercancel', finish)
+  }
+  elements.composerResize.addEventListener('pointermove', move)
+  elements.composerResize.addEventListener('pointerup', finish)
+  elements.composerResize.addEventListener('pointercancel', finish)
+}
+
+function requestOlderHistory(): void {
+  if (state?.hasMoreHistory !== true || state.historyLoading || historyLoadPending) return
+  historyLoadPending = true
+  historyLoadScrollHeight = elements.conversation.scrollHeight
+  post({ type: 'loadOlderHistory' })
+}
+
 interface PopoverBinding {
   readonly button: HTMLButtonElement
   readonly popover: HTMLElement
@@ -1509,6 +1591,68 @@ function showNotice(message: string): void {
   }, 6_000)
 }
 
+function showSettings(settings: WorkbenchSettings, section?: 'connection' | 'vision' | 'context' | 'handoff' | 'skills'): void {
+  currentSettings = settings
+  elements.settingBaseUrl.value = settings.baseUrl
+  elements.settingApiKey.value = ''
+  elements.settingApiKey.placeholder = settings.hasApiKey ? 'Configured - leave blank to keep' : 'Enter API key'
+  elements.settingVisionUrl.value = settings.visionBaseUrl
+  elements.settingVisionModel.value = settings.visionModel
+  elements.settingVisionKey.value = ''
+  elements.settingVisionKey.placeholder = settings.hasVisionApiKey ? 'Configured - leave blank to keep' : 'Enter Vision API key'
+  elements.settingPasteThreshold.value = String(settings.pasteFileThreshold)
+  elements.settingContextWindow.value = String(settings.contextWindowTokens)
+  elements.settingCodexHome.value = settings.codexHome
+  elements.settingClaudeHome.value = settings.claudeHome
+  elements.settingHandoffMode.value = settings.handoffLaunchMode
+  elements.settingSkillDirectories.value = settings.skillDirectories.join('\n')
+  elements.settingsDialog.classList.remove('hidden')
+  if (section !== undefined) document.getElementById(`settings-${section}`)?.scrollIntoView({ block: 'start' })
+}
+
+function renderVisionModelOptions(): void {
+  const settings = currentSettings
+  if (settings === undefined) return
+  const models = settings.visionModels.length > 0 ? settings.visionModels : (settings.visionModel === '' ? [] : [settings.visionModel])
+  const options = models.map(model => menuOption({
+    label: model,
+    selected: model === settings.visionModel,
+    handler: () => {
+      post({ type: 'saveSettings', settings: { ...settings, visionModel: model } })
+      closePopovers()
+    },
+  }))
+  options.push(menuOption({ label: 'Configure vision...', selected: false, handler: () => { post({ type: 'openVisionSettings' }); closePopovers() } }))
+  elements.visionModelOptions.replaceChildren(...options)
+}
+
+function saveSettings(): void {
+  const previous = currentSettings
+  if (previous === undefined) return
+  const pasteFileThreshold = Math.max(1_024, Math.min(131_072, Number(elements.settingPasteThreshold.value) || previous.pasteFileThreshold))
+  const contextWindowTokens = Math.max(16_384, Math.min(16_000_000, Number(elements.settingContextWindow.value) || previous.contextWindowTokens))
+  post({
+    type: 'saveSettings',
+    settings: {
+      baseUrl: elements.settingBaseUrl.value.trim(),
+      hasApiKey: previous.hasApiKey,
+      visionBaseUrl: elements.settingVisionUrl.value.trim(),
+      visionModel: elements.settingVisionModel.value.trim(),
+      visionModels: previous.visionModels,
+      hasVisionApiKey: previous.hasVisionApiKey,
+      pasteFileThreshold,
+      contextWindowTokens,
+      codexHome: elements.settingCodexHome.value.trim(),
+      claudeHome: elements.settingClaudeHome.value.trim(),
+      handoffLaunchMode: elements.settingHandoffMode.value === 'cli' ? 'cli' : 'clipboard',
+      skillDirectories: elements.settingSkillDirectories.value.split(/\r?\n/u).map(value => value.trim()).filter(Boolean),
+      ...(elements.settingApiKey.value.trim() === '' ? {} : { apiKey: elements.settingApiKey.value.trim() }),
+      ...(elements.settingVisionKey.value.trim() === '' ? {} : { visionApiKey: elements.settingVisionKey.value.trim() }),
+    },
+  })
+  elements.settingsDialog.classList.add('hidden')
+}
+
 function commandButton(label: string, primary: boolean, handler: () => void): HTMLButtonElement {
   const button = document.createElement('button')
   button.className = `command${primary ? ' primary' : ''}`
@@ -1551,6 +1695,18 @@ function requiredButton(id: string): HTMLButtonElement {
 function requiredTextArea(id: string): HTMLTextAreaElement {
   const element = required(id)
   if (!(element instanceof HTMLTextAreaElement)) throw new Error(`Expected textarea: ${id}`)
+  return element
+}
+
+function requiredInput(id: string): HTMLInputElement {
+  const element = required(id)
+  if (!(element instanceof HTMLInputElement)) throw new Error(`Expected input: ${id}`)
+  return element
+}
+
+function requiredSelect(id: string): HTMLSelectElement {
+  const element = required(id)
+  if (!(element instanceof HTMLSelectElement)) throw new Error(`Expected select: ${id}`)
   return element
 }
 

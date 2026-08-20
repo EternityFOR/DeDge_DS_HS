@@ -10,6 +10,8 @@ function snapshot(overrides: Partial<WorkbenchSnapshot> = {}): WorkbenchSnapshot
     sessions: [{ id: 's-1', title: 'Session', running: false, blank: true }],
     activeSessionId: 's-1',
     messages: [],
+    hasMoreHistory: false,
+    historyLoading: false,
     approvals: [],
     questions: [],
     provider: 'deepseek-official',

@@ -2,7 +2,7 @@
   "name": "dedge-deepseek-harness-vscode",
   "displayName": "DeDge DeepSeek Harness",
   "description": "Self-contained DeepSeek Harness coding agent for VS Code with a Windows-safe runtime and isolated Codex/Claude handoffs.",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "publisher": "diractive-edge",
   "private": true,
   "packageManager": "pnpm@11.21.0",
@@ -343,9 +343,9 @@
         },
         "dedgeDeepSeekHarness.context.pasteFileThreshold": {
           "type": "number",
-          "minimum": 2048,
+          "minimum": 1024,
           "maximum": 131072,
-          "default": 8192,
+          "default": 4096,
           "description": "Pasted text larger than this many bytes is stored as a file in the extension storage; the prompt only receives the file path so the model can read it selectively."
         },
         "dedgeDeepSeekHarness.context.windowTokens": {

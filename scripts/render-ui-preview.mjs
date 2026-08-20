@@ -34,6 +34,8 @@ const state = {
     { id: 'u2', role: 'user', text: 'Also keep the inserted message inside this task.', status: 'complete', taskId: 'turn:1', taskComplete: true },
     { id: 'a1', role: 'assistant', text: 'The preview keeps the first prompt and final summary visible while folding all intermediate work.', status: 'complete', taskId: 'turn:1', taskComplete: true },
   ],
+  hasMoreHistory: true,
+  historyLoading: false,
   approvals: [],
   questions: [],
   provider: 'deepseek-official',

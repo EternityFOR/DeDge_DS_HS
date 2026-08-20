@@ -154,6 +154,47 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await vscode.commands.executeCommand('workbench.action.openSettings', setting)
   }
 
+  const getSettings = async () => {
+    const current = configuration.get()
+    return {
+      baseUrl: current.baseUrl,
+      hasApiKey: (await credentials.getApiKey())?.trim() !== '',
+      visionBaseUrl: current.visionBaseUrl,
+      visionModel: current.visionModel,
+      visionModels: await visionModels(current.visionBaseUrl, await credentials.getVisionApiKey()) as readonly string[],
+      hasVisionApiKey: (await credentials.getVisionApiKey())?.trim() !== '',
+      pasteFileThreshold: current.pasteFileThreshold,
+      contextWindowTokens: current.contextWindowTokens,
+      codexHome: current.codexHome,
+      claudeHome: current.claudeHome,
+      handoffLaunchMode: current.handoffLaunchMode,
+      skillDirectories: current.skillDirectories,
+    }
+  }
+  const saveSettings = async (settings: import('./ui/webview-protocol.js').WorkbenchSettings & { readonly apiKey?: string; readonly visionApiKey?: string }): Promise<void> => {
+    await configuration.update('baseUrl', settings.baseUrl)
+    await configuration.updateSetting('context.pasteFileThreshold', settings.pasteFileThreshold)
+    await configuration.updateSetting('vision.baseUrl', settings.visionBaseUrl)
+    await configuration.updateSetting('vision.model', settings.visionModel)
+    await configuration.updateSetting('handoff.codexHome', settings.codexHome)
+    await configuration.updateSetting('handoff.claudeHome', settings.claudeHome)
+    await configuration.updateSetting('handoff.launchMode', settings.handoffLaunchMode)
+    await configuration.updateSetting('skills.directories', [...settings.skillDirectories])
+    await configuration.updateContextWindowTokens(settings.contextWindowTokens)
+    if (settings.apiKey !== undefined && settings.apiKey.trim() !== '') await credentials.setApiKey(settings.apiKey.trim())
+    if (settings.visionApiKey !== undefined && settings.visionApiKey.trim() !== '') await credentials.setVisionApiKey(settings.visionApiKey.trim())
+  }
+
+  const visionModels = async (baseUrl: string, apiKey: string | undefined): Promise<string[]> => {
+    if (baseUrl.trim() === '' || apiKey?.trim() === undefined || apiKey.trim() === '') return []
+    try {
+      const response = await fetch(new URL('models', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`), { headers: { authorization: `Bearer ${apiKey.trim()}` } })
+      if (!response.ok) return []
+      const payload = await response.json() as { data?: unknown }
+      return Array.isArray(payload.data) ? payload.data.flatMap(item => typeof item === 'object' && item !== null && 'id' in item && typeof item.id === 'string' ? [item.id] : []).slice(0, 100) : []
+    } catch { return [] }
+  }
+
   const view = new ChatViewProvider(context, controller, review, logger, {
     setApiKey,
     diagnose: showDiagnostics,
@@ -162,8 +203,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     loadClaudeSession: () => handoff.loadIntoHarness('claude'),
     handoffCurrentSession: () => handoff.handoffCurrentHarness(),
     configureContextWindow,
-    openSettings,
-    ensureVisionConfigured: () => ensureVisionConfigured(),
+    getSettings,
+    saveSettings,
   })
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 20)
   status.name = 'DeepSeek Harness'

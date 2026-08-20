@@ -177,7 +177,7 @@ export class WorkbenchController implements vscode.Disposable {
     const gateway = this.requireGateway()
     const history = await gateway.history(sessionId)
     this.store.setActive(sessionId)
-    this.store.replaceHistory(sessionId, history.events ?? [])
+    this.store.replaceHistory(sessionId, history.events ?? [], history.hasMore === true)
     this.store.setContextPressure(sessionId, parseContextPressureProjection(history.projections?.values?.contextPressure))
     this.store.setPermissions(sessionId, parsePermissionProjection(history.projections?.values?.permissions))
     await this.context.workspaceState.update('activeSessionId', sessionId)
@@ -186,6 +186,23 @@ export class WorkbenchController implements vscode.Disposable {
       this.refreshModelCatalog(gateway, sessionId),
       this.refreshPresetCatalog(gateway),
     ])
+  }
+
+  async loadOlderHistory(): Promise<void> {
+    const snapshot = this.store.snapshot()
+    const sessionId = snapshot.activeSessionId
+    if (sessionId === undefined || !snapshot.hasMoreHistory || snapshot.historyLoading) return
+    const beforeSeq = snapshot.messages.reduce((minimum, message) => Math.min(minimum, message.seq ?? minimum), Number.MAX_SAFE_INTEGER)
+    if (!Number.isSafeInteger(beforeSeq)) return
+    this.store.setHistoryLoading(true)
+    this.publish()
+    try {
+      const history = await this.requireGateway().history(sessionId, 40, beforeSeq)
+      this.store.prependHistory(sessionId, history.events ?? [], history.hasMore === true)
+    } finally {
+      this.store.setHistoryLoading(false)
+      this.publish()
+    }
   }
 
   async send(text: string, attachments: readonly ContextAttachment[] = [], mode: 'queue' | 'steer' = 'queue'): Promise<void> {

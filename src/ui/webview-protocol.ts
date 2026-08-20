@@ -2,18 +2,35 @@ import type { ContextAttachment } from '../context/context-collector.js'
 import type { SkillSummary } from '../skills/skill-catalog.js'
 import type { QuestionAnswer, WorkbenchSnapshot } from '../session/types.js'
 
+export interface WorkbenchSettings {
+  readonly baseUrl: string
+  readonly hasApiKey: boolean
+  readonly visionBaseUrl: string
+  readonly visionModel: string
+  readonly visionModels: readonly string[]
+  readonly hasVisionApiKey: boolean
+  readonly pasteFileThreshold: number
+  readonly contextWindowTokens: number
+  readonly codexHome: string
+  readonly claudeHome: string
+  readonly handoffLaunchMode: 'clipboard' | 'cli'
+  readonly skillDirectories: readonly string[]
+}
+
 export type HostToWebviewMessage =
   | { readonly type: 'state'; readonly state: WorkbenchSnapshot; readonly attachments: readonly ContextAttachment[] }
   | { readonly type: 'sendSettled'; readonly accepted: boolean; readonly text: string }
   | { readonly type: 'setDraft'; readonly text: string }
   | { readonly type: 'notice'; readonly level: 'info' | 'warning' | 'error'; readonly message: string }
   | { readonly type: 'skills'; readonly skills: readonly SkillSummary[] }
+  | { readonly type: 'settings'; readonly settings: WorkbenchSettings; readonly open?: boolean; readonly section?: 'connection' | 'vision' | 'context' | 'handoff' | 'skills' }
 
 export type WebviewToHostMessage =
   | { readonly type: 'ready' }
   | { readonly type: 'send'; readonly text: string; readonly mode?: 'queue' | 'steer' }
   | { readonly type: 'newSession' }
   | { readonly type: 'selectSession'; readonly sessionId: string }
+  | { readonly type: 'loadOlderHistory' }
   | { readonly type: 'manageSession'; readonly sessionId: string }
   | { readonly type: 'cancel' }
   | { readonly type: 'compact' }
@@ -24,6 +41,8 @@ export type WebviewToHostMessage =
   | { readonly type: 'stop' }
   | { readonly type: 'setApiKey' }
   | { readonly type: 'openSettings' }
+  | { readonly type: 'openVisionSettings' }
+  | { readonly type: 'saveSettings'; readonly settings: WorkbenchSettings & { readonly apiKey?: string; readonly visionApiKey?: string } }
   | { readonly type: 'attachSelection' }
   | { readonly type: 'attachDiagnostics' }
   | { readonly type: 'attachFile' }

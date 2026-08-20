@@ -69,7 +69,7 @@ export class ConfigurationService implements vscode.Disposable {
       autoStart: config.get<boolean>('autoStart', true),
       contextMaxBytes: bounded(config.get<number>('context.maxBytes'), 1_024, 131_072, 32_768),
       contextWindowTokens: bounded(config.get<number>('context.windowTokens'), 16_384, 16_000_000, DEFAULT_CONTEXT_WINDOW_TOKENS),
-      pasteFileThreshold: bounded(config.get<number>('context.pasteFileThreshold'), 2_048, 131_072, 8_192),
+      pasteFileThreshold: bounded(config.get<number>('context.pasteFileThreshold'), 1_024, 131_072, 4_096),
       codexHome: nonEmpty(config.get<string>('handoff.codexHome'), '${userHome}/.codex'),
       claudeHome: nonEmpty(config.get<string>('handoff.claudeHome'), '${userHome}/.claude'),
       codexCommand: config.get<string>('handoff.codexCommand', '').trim(),
@@ -92,6 +92,10 @@ export class ConfigurationService implements vscode.Disposable {
 
   updateContextWindowTokens(value: number): Thenable<void> {
     return vscode.workspace.getConfiguration(PREFIX).update('context.windowTokens', value, vscode.ConfigurationTarget.Global)
+  }
+
+  updateSetting(key: string, value: unknown): Thenable<void> {
+    return vscode.workspace.getConfiguration(PREFIX).update(key, value, vscode.ConfigurationTarget.Global)
   }
 
   dispose(): void {

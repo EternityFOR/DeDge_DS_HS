@@ -66,6 +66,8 @@ export interface WorkbenchSnapshot {
   readonly sessions: readonly WorkbenchSession[]
   readonly activeSessionId?: string
   readonly messages: readonly WorkbenchMessage[]
+  readonly hasMoreHistory: boolean
+  readonly historyLoading: boolean
   readonly approvals: readonly PendingApproval[]
   readonly questions: readonly PendingQuestion[]
   readonly provider: string

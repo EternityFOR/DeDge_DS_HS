@@ -6,7 +6,7 @@ import { errorMessage, type Logger } from '../platform/logger.js'
 import type { WorkbenchController } from '../session/workbench-controller.js'
 import type { WorkbenchSession } from '../session/types.js'
 import { isRecord } from '../gateway/protocol.js'
-import type { HostToWebviewMessage, WebviewToHostMessage } from './webview-protocol.js'
+import type { HostToWebviewMessage, WebviewToHostMessage, WorkbenchSettings } from './webview-protocol.js'
 import type { StagedHandoff } from '../handoff/types.js'
 import { parsePendingHandoffState, type PendingHandoffState } from '../handoff/pending-handoff.js'
 
@@ -20,8 +20,8 @@ export interface ChatViewActions {
   readonly loadClaudeSession: () => Promise<StagedHandoff | undefined>
   readonly handoffCurrentSession: () => Promise<StagedHandoff | undefined>
   readonly configureContextWindow: () => Promise<void>
-  readonly openSettings: () => Promise<void>
-  readonly ensureVisionConfigured: () => Promise<boolean>
+  readonly getSettings: () => Promise<WorkbenchSettings>
+  readonly saveSettings: (settings: WorkbenchSettings & { readonly apiKey?: string; readonly visionApiKey?: string }) => Promise<void>
 }
 
 type SessionPickerAction = 'load-codex' | 'load-claude' | 'handoff-current'
@@ -38,6 +38,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private restoredHandoffSessionId: string | undefined
   private statePostTimer: ReturnType<typeof setTimeout> | undefined
   private statePostScheduled = false
+  private pendingImageFiles: readonly { readonly name: string; readonly dataUrl: string }[] = []
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -242,6 +243,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (message.type === 'ready') {
       await this.restorePendingHandoff()
       await this.postState()
+      await this.post({ type: 'settings', settings: await this.actions.getSettings(), open: false })
       return
     }
     if (message.type === 'send') {
@@ -263,6 +265,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
     if (message.type === 'newSession') return this.run(() => this.controller.newSession())
     if (message.type === 'selectSession') return this.run(() => this.controller.selectSession(message.sessionId))
+    if (message.type === 'loadOlderHistory') return this.run(() => this.controller.loadOlderHistory())
     if (message.type === 'manageSession') return this.run(() => this.manageSession(message.sessionId))
     if (message.type === 'cancel') return this.run(() => this.controller.cancel())
     if (message.type === 'compact') return this.run(async () => {
@@ -274,7 +277,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (message.type === 'restart') return this.run(() => this.controller.restart())
     if (message.type === 'stop') return this.run(() => this.controller.stop())
     if (message.type === 'setApiKey') return this.run(this.actions.setApiKey)
-    if (message.type === 'openSettings') return this.run(this.actions.openSettings)
+    if (message.type === 'openSettings') return this.showSettings()
+    if (message.type === 'openVisionSettings') return this.showSettings('vision')
+    if (message.type === 'saveSettings') return this.run(async () => {
+      await this.actions.saveSettings(message.settings)
+      const settings = await this.actions.getSettings()
+      await this.post({ type: 'settings', settings })
+      if (this.pendingImageFiles.length > 0 && settings.visionBaseUrl !== '' && settings.visionModel !== '' && settings.hasVisionApiKey) {
+        const pending = this.pendingImageFiles
+        this.pendingImageFiles = []
+        for (const file of pending) this.upsertAttachment(await this.controller.attachImageData(file.name, file.dataUrl))
+      }
+    })
     if (message.type === 'attachSelection') return this.run(async () => {
       const item = await this.controller.attachSelection()
       if (item !== undefined) this.upsertAttachment(item)
@@ -294,7 +308,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       for (const file of message.files) this.upsertAttachment(await this.controller.attachTextFile(file.name, file.text))
     })
     if (message.type === 'attachImageFiles') return this.run(async () => {
-      if (!await this.actions.ensureVisionConfigured()) return
+      const settings = await this.actions.getSettings()
+      if (settings.visionBaseUrl === '' || settings.visionModel === '' || !settings.hasVisionApiKey) {
+        this.pendingImageFiles = message.files
+        await this.post({ type: 'settings', settings, section: 'vision' })
+        return
+      }
       for (const file of message.files) this.upsertAttachment(await this.controller.attachImageData(file.name, file.dataUrl))
     })
     if (message.type === 'listSkills') return this.run(async () => {
@@ -373,6 +392,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
   }
 
+  private async showSettings(section?: 'connection' | 'vision' | 'context' | 'handoff' | 'skills'): Promise<void> {
+    await this.post({ type: 'settings', settings: await this.actions.getSettings(), ...(section === undefined ? {} : { section }) })
+  }
+
   private scheduleStatePost(): void {
     if (this.statePostScheduled) return
     this.statePostScheduled = true
@@ -400,9 +423,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 function parseWebviewMessage(value: unknown): WebviewToHostMessage {
   if (!isRecord(value) || typeof value.type !== 'string') throw new Error('Message requires a type.')
   const type = value.type
-  if (type === 'ready' || type === 'newSession' || type === 'cancel' || type === 'start' || type === 'restart' || type === 'stop'
+  if (type === 'ready' || type === 'newSession' || type === 'loadOlderHistory' || type === 'openVisionSettings' || type === 'cancel' || type === 'start' || type === 'restart' || type === 'stop'
     || type === 'setApiKey' || type === 'openSettings' || type === 'attachSelection' || type === 'attachDiagnostics' || type === 'attachFile'
     || type === 'compact' || type === 'configureContextWindow' || type === 'handoff' || type === 'showLogs' || type === 'reviewChanges' || type === 'diagnose') return { type }
+  if (type === 'saveSettings' && isRecord(value.settings)) return { type, settings: parseSettings(value.settings) }
   if (type === 'send' && typeof value.text === 'string') return { type, text: value.text, ...(value.mode === 'queue' || value.mode === 'steer' ? { mode: value.mode } : {}) }
   if (type === 'selectSession' && typeof value.sessionId === 'string' && value.sessionId.length <= 256) return { type, sessionId: value.sessionId }
   if (type === 'manageSession' && typeof value.sessionId === 'string' && value.sessionId.length <= 256) return { type, sessionId: value.sessionId }
@@ -430,6 +454,18 @@ function parseWebviewMessage(value: unknown): WebviewToHostMessage {
   if (type === 'selectPreset' && typeof value.preset === 'string') return { type, preset: value.preset }
   if (type === 'selectPermission' && typeof value.permission === 'string') return { type, permission: value.permission }
   throw new Error(`Unsupported webview message: ${type}`)
+}
+
+function parseSettings(value: Record<string, unknown>): WebviewToHostMessage extends { readonly type: 'saveSettings'; readonly settings: infer T } ? T : never {
+  const text = (key: string, fallback = ''): string => typeof value[key] === 'string' ? value[key] as string : fallback
+  const number = (key: string, fallback: number): number => typeof value[key] === 'number' && Number.isFinite(value[key]) ? value[key] as number : fallback
+  const directories = Array.isArray(value.skillDirectories) ? value.skillDirectories.filter(item => typeof item === 'string') as string[] : []
+  return {
+    baseUrl: text('baseUrl'), hasApiKey: value.hasApiKey === true, visionBaseUrl: text('visionBaseUrl'), visionModel: text('visionModel'), visionModels: Array.isArray(value.visionModels) ? value.visionModels.filter(item => typeof item === 'string') as string[] : [],
+    hasVisionApiKey: value.hasVisionApiKey === true, pasteFileThreshold: number('pasteFileThreshold', 4_096), contextWindowTokens: number('contextWindowTokens', 1_000_000),
+    codexHome: text('codexHome'), claudeHome: text('claudeHome'), handoffLaunchMode: text('handoffLaunchMode') === 'cli' ? 'cli' : 'clipboard', skillDirectories: directories,
+    ...(text('apiKey') === '' ? {} : { apiKey: text('apiKey') }), ...(text('visionApiKey') === '' ? {} : { visionApiKey: text('visionApiKey') }),
+  } as never
 }
 
 function parseTextFile(value: unknown): { readonly name: string; readonly text: string } {
@@ -498,6 +534,9 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .session-operation-icon { animation: session-operation-spin 900ms linear infinite; }
     @keyframes session-operation-spin { to { transform: rotate(360deg); } }
     .conversation { overflow: auto; min-height: 0; padding: 2px 10px 18px; }
+    .history-loader { display: block; min-height: 28px; margin: 4px auto; padding: 3px 9px; border-radius: 3px; color: var(--vscode-descriptionForeground); background: transparent; cursor: pointer; font-size: 11px; }
+    .history-loader:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+    .history-loader[disabled] { cursor: wait; opacity: .7; }
     .empty { display: grid; place-items: center; min-height: 100%; color: var(--vscode-descriptionForeground); text-align: center; padding: 24px; font-size: 12px; }
     .message { padding: 12px 2px; border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent); overflow-wrap: anywhere; }
     .message-head { display: flex; align-items: center; gap: 4px; min-height: 18px; margin-bottom: 3px; opacity: 0; transition: opacity 90ms ease; }
@@ -558,7 +597,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .empty { display: grid; place-items: center; gap: 10px; min-height: 100%; color: var(--vscode-descriptionForeground); text-align: center; padding: 24px; font-size: 12px; }
     .empty-title { font-size: 12px; }
     .chip button { display: grid; place-items: center; background: transparent; cursor: pointer; padding: 0; }
-    .composer-box { position: relative; display: grid; grid-template-rows: minmax(88px,auto) auto; gap: 5px; border: 1px solid var(--vscode-input-border); border-radius: 5px; background: var(--vscode-input-background); padding: 7px; transition: border-color 80ms ease, background 80ms ease; }
+    .composer-box { position: relative; display: grid; grid-template-rows: 9px minmax(88px,auto) auto; gap: 5px; border: 1px solid var(--vscode-input-border); border-radius: 5px; background: var(--vscode-input-background); padding: 7px; transition: border-color 80ms ease, background 80ms ease; }
     .icon-button.active { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
     .icon-button.active:hover { background: var(--vscode-button-hoverBackground); }
     .icon-button.steer { border: 1px dashed var(--vscode-charts-orange); color: var(--vscode-charts-orange); }
@@ -576,13 +615,18 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .steer-notice button:hover { background: var(--vscode-toolbar-hoverBackground); }
     .steer-notice svg { width: 12px; height: 12px; }
     .task-middle-hidden { display: none !important; }
-    .task-fold-summary { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 5px 8px; border-bottom: 1px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground); font-size: 11px; cursor: pointer; }
+    .task-intermediate { margin-left: 10px; padding-left: 8px; border-left-width: 1px !important; }
+    .task-fold-summary { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 30px; padding: 5px 8px; border: 0; border-bottom: 1px solid var(--vscode-panel-border,#3c3c3c); color: var(--vscode-descriptionForeground,#9d9d9d); background: var(--vscode-sideBar-background,#1e1e1e); font-size: 11px; text-align: left; cursor: pointer; }
     .task-fold-summary:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
+    .task-fold-summary:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
     .task-fold-summary svg { flex: 0 0 12px; width: 12px; height: 12px; }
     .task-fold-summary span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .composer-box:focus-within { border-color: var(--vscode-focusBorder); }
     .composer-box.drop-active { border-color: var(--vscode-focusBorder); background: var(--vscode-list-hoverBackground); }
-    textarea { resize: vertical; min-height: 88px; max-height: min(50vh,480px); width: 100%; border: 0; outline: 0; background: transparent; color: var(--vscode-input-foreground); padding: 2px; overflow-y: auto; }
+    .composer-resize { display: grid; place-items: center; height: 9px; margin: -5px -2px 0; color: var(--vscode-descriptionForeground); cursor: row-resize; touch-action: none; }
+    .composer-resize::before { content: ''; width: 34px; height: 2px; border-radius: 1px; background: currentColor; opacity: .55; }
+    .composer-resize:hover { color: var(--vscode-foreground); }
+    #prompt { resize: none; min-height: 88px; max-height: min(50vh,480px); width: 100%; border: 0; outline: 0; background: transparent; color: var(--vscode-input-foreground); padding: 2px; overflow-y: auto; }
     .composer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
     .composer-left, .composer-right { display: flex; align-items: center; gap: 3px; min-width: 0; }
     .composer-left { flex: 0 1 auto; }
@@ -626,6 +670,14 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .status-dot.busy { background: var(--vscode-progressBar-background); }
     .status-dot.error { background: var(--vscode-testing-iconFailed); }
     .notice { position: fixed; top: 8px; left: 10px; right: 10px; z-index: 50; max-height: min(96px,calc(100vh - 16px)); overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; padding: 8px 10px; border: 1px solid var(--vscode-inputValidation-errorBorder); background: var(--vscode-inputValidation-errorBackground); border-radius: 4px; box-shadow: 0 4px 18px rgba(0,0,0,.28); line-height: 1.35; }
+    .settings-dialog { position: fixed; inset: 7% 6%; z-index: 60; display: grid; grid-template-rows: auto minmax(0,1fr) auto; border: 1px solid var(--vscode-panel-border); background: var(--vscode-sideBar-background); box-shadow: 0 10px 30px rgba(0,0,0,.4); }
+    .settings-dialog h2 { margin: 0; padding: 12px 14px; font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border); }
+    .settings-body { overflow: auto; padding: 10px 14px; }
+    .settings-section { display: grid; gap: 6px; margin-bottom: 14px; }
+    .settings-section h3 { margin: 0; font-size: 11px; color: var(--vscode-descriptionForeground); }
+    .settings-section label { display: grid; gap: 3px; color: var(--vscode-descriptionForeground); font-size: 10px; }
+    .settings-section input { min-height: 26px; width: 100%; border: 1px solid var(--vscode-input-border); background: var(--vscode-input-background); padding: 4px 6px; }
+    .settings-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--vscode-panel-border); }
     .hidden { display: none !important; }
     @media (max-width: 420px) {
       .composer-bottom { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; }
@@ -645,12 +697,24 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 <body>
   <div class="app">
     <div id="notice" class="notice hidden"></div>
+    <section id="settings-dialog" class="settings-dialog hidden" aria-label="DeepSeek Harness settings">
+      <h2>DeepSeek Harness settings</h2>
+      <div class="settings-body">
+        <section id="settings-connection" class="settings-section"><h3>DeepSeek connection</h3><label>Base URL<input id="setting-base-url" type="url"></label><label>API key<input id="setting-api-key" type="password" placeholder="Leave blank to keep the stored key"></label></section>
+        <section id="settings-vision" class="settings-section"><h3>Vision</h3><label>Base URL<input id="setting-vision-url" type="url"></label><label>Model<input id="setting-vision-model"></label><label>API key<input id="setting-vision-key" type="password" placeholder="Leave blank to keep the stored key"></label></section>
+        <section id="settings-context" class="settings-section"><h3>Context</h3><label>Convert pasted text to an attachment at (bytes)<input id="setting-paste-threshold" type="number" min="2048" max="131072"></label><label>Context window (tokens)<input id="setting-context-window" type="number" min="16384" max="16000000"></label></section>
+        <section id="settings-handoff" class="settings-section"><h3>Handoff</h3><label>Codex home<input id="setting-codex-home"></label><label>Claude home<input id="setting-claude-home"></label><label>Delivery mode<select id="setting-handoff-mode"><option value="clipboard">Clipboard</option><option value="cli">CLI</option></select></label></section>
+        <section id="settings-skills" class="settings-section"><h3>Skills</h3><label>Directories (one per line)<textarea id="setting-skill-directories" rows="3"></textarea></label></section>
+      </div>
+      <div class="settings-actions"><button id="settings-cancel" class="command">Cancel</button><button id="settings-save" class="command primary">Save</button></div>
+    </section>
     <nav id="session-tabs" class="session-tabs" role="tablist" aria-label="DeepSeek Harness sessions"></nav>
     <main id="conversation" class="conversation"><div class="empty">DeepSeek Harness</div></main>
     <footer class="composer">
       <div id="attachments" class="attachments"></div>
       <div id="steer-notice" class="steer-notice hidden"><span id="steer-notice-text">Steer message queued.</span><button id="steer-notice-close" title="Dismiss" aria-label="Dismiss"><i data-lucide="x"></i></button></div>
       <div id="composer-box" class="composer-box">
+        <div id="composer-resize" class="composer-resize" role="separator" aria-orientation="horizontal" aria-label="Resize message input height" title="Drag up or down to resize the message input"></div>
         <textarea id="prompt" rows="4" placeholder="Message DeepSeek Harness; type @ to reference a skill"></textarea>
         <div id="skill-popover" class="skill-popover hidden" role="listbox" aria-label="Skills"></div>
         <div class="composer-bottom">
@@ -671,10 +735,11 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
               <button id="permission-menu" class="menu-button" title="Permission mode" aria-label="Permission mode" aria-expanded="false"><i data-lucide="shield-check"></i><span id="permission-label" class="menu-label permission-copy">Workspace</span><i class="chevron" data-lucide="chevron-down"></i></button>
               <div id="permission-popover" class="popover hidden" role="menu"><div id="permission-options" class="menu-options"></div></div>
             </div>
-            <button id="configure-context" class="icon-button" title="Configure context capacity and automatic compaction threshold" aria-label="Configure context capacity and automatic compaction threshold"><i data-lucide="settings-2"></i></button>
+            <button id="compact-thinking" class="icon-button" title="Compact completed tasks and collapse thinking/tool details" aria-label="Compact completed tasks and collapse thinking/tool details" aria-pressed="false"><i data-lucide="fold-vertical"></i></button>
+            <button id="review-toolbar" class="icon-button" title="Review Git working tree changes" aria-label="Review Git working tree changes"><i data-lucide="diff"></i></button>
           </div>
           <div class="composer-right">
-            <button id="compact-thinking" class="icon-button" title="Collapse thinking and tool details by default" aria-label="Collapse thinking and tool details by default" aria-pressed="false"><i data-lucide="fold-vertical"></i></button>
+            <button id="configure-context" class="icon-button" title="Configure context capacity and automatic compaction threshold" aria-label="Configure context capacity and automatic compaction threshold"><i data-lucide="settings-2"></i></button>
             <button id="compact" class="icon-button" title="Compact context" aria-label="Compact context"><i data-lucide="shrink"></i></button>
             <span id="context-meter-anchor" class="context-meter-anchor hidden">
               <span id="context-meter" class="context-meter" aria-label="Context window" role="img" tabindex="0">
@@ -689,6 +754,10 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
                 <section class="menu-section"><div class="menu-heading">Reasoning</div><div id="reasoning-options" class="menu-options"></div></section>
                 <section class="menu-section"><div class="menu-heading">Agent preset</div><div id="preset-options" class="menu-options"></div></section>
               </div>
+            </div>
+            <div class="menu-anchor">
+              <button id="vision-model-menu" class="icon-button" title="Vision model" aria-label="Vision model" aria-expanded="false"><i data-lucide="image"></i></button>
+              <div id="vision-model-popover" class="popover align-right hidden" role="menu"><div class="menu-heading">Vision model</div><div id="vision-model-options" class="menu-options"></div></div>
             </div>
             <button id="send" class="icon-button" title="Wait for Harness to connect" aria-label="Wait for Harness to connect" disabled><i data-lucide="send"></i></button>
             <button id="cancel" class="icon-button hidden" title="Stop" aria-label="Stop"><i data-lucide="square"></i></button>

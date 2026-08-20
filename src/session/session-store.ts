@@ -22,6 +22,8 @@ export class SessionStore {
   private readonly sessions = new Map<string, SessionSummary>()
   private readonly archivedSessionIds = new Set<string>()
   private readonly events = new Map<string, Map<number, HistoryEntry>>()
+  private readonly historyHasMore = new Map<string, boolean>()
+  private historyLoading = false
   private readonly approvals = new Map<string, PendingApproval>()
   private readonly questions = new Map<string, PendingQuestion>()
   private modelCatalog: { readonly sessionId: string; readonly value: ModelCatalog } | undefined
@@ -144,11 +146,24 @@ export class SessionStore {
     this.permissionChanging = value
   }
 
-  replaceHistory(sessionId: string, entries: readonly HistoryEntry[]): void {
+  replaceHistory(sessionId: string, entries: readonly HistoryEntry[], hasMore = false): void {
     const bySeq = new Map<number, HistoryEntry>()
     for (const entry of entries) bySeq.set(entry.event.seq, entry)
     this.events.set(sessionId, bySeq)
+    this.historyHasMore.set(sessionId, hasMore)
     this.applySessionMetadata(sessionId, entries.map(entry => entry.event))
+  }
+
+  prependHistory(sessionId: string, entries: readonly HistoryEntry[], hasMore: boolean): void {
+    const bySeq = this.events.get(sessionId) ?? new Map<number, HistoryEntry>()
+    for (const entry of entries) bySeq.set(entry.event.seq, entry)
+    this.events.set(sessionId, bySeq)
+    this.historyHasMore.set(sessionId, hasMore)
+    this.applySessionMetadata(sessionId, entries.map(entry => entry.event))
+  }
+
+  setHistoryLoading(value: boolean): void {
+    this.historyLoading = value
   }
 
   appendEvent(sessionId: string, event: SessionEvent, view?: unknown): void {
@@ -197,6 +212,8 @@ export class SessionStore {
       sessions,
       ...(this.activeSessionId === undefined ? {} : { activeSessionId: this.activeSessionId }),
       messages: projectMessages(activeEvents),
+      hasMoreHistory: this.activeSessionId === undefined ? false : (this.historyHasMore.get(this.activeSessionId) ?? false),
+      historyLoading: this.historyLoading,
       approvals: [...this.approvals.values()].filter(item => item.sessionId === this.activeSessionId),
       questions: [...this.questions.values()].filter(item => item.sessionId === this.activeSessionId),
       ...this.configuration,
