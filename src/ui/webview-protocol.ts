@@ -23,6 +23,7 @@ export type WebviewToHostMessage =
   | { readonly type: 'restart' }
   | { readonly type: 'stop' }
   | { readonly type: 'setApiKey' }
+  | { readonly type: 'openSettings' }
   | { readonly type: 'attachSelection' }
   | { readonly type: 'attachDiagnostics' }
   | { readonly type: 'attachFile' }

@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-08-20
+
+### Added
+
+- 思考折叠默认开启：Reasoning/Tool 默认收起为一行摘要（`Reasoning · 12K chars`），像紧凑模式一样开箱即用；按钮仍可随时切换。
+- 图片粘贴支持：粘贴截图/图片（剪贴板 item）会自动添加为图片附件，并在输入框上方显示可删除的缩略图。
+- 统一设置面板：底部设置按钮打开分类菜单（API Key、Vision Key、Vision 端点、Skill 目录、Handoff、运行时与模型），各配置项一键直达。
+- 删除/归档最后一个会话后不再自动新建：工作台显示空状态并提供 `Start new session` 按钮手动创建。
+- 删除会话后标签立即移除，避免"删除后 tab 仍在、再删报错"。
+
+### Fixed
+
+- 修复附件从不显示的问题：状态渲染未同步附件数据，导致粘贴的图片看不见也删不掉（同时影响所有附件 chips）。
+- 渲染对缺失的消息字段做防御，避免异常快照导致对话区白屏。
+
 ## [0.1.5] - 2026-08-20
 
 ### Added
@@ -105,7 +120,8 @@
 - Gateway 固定监听随机 `127.0.0.1`，子进程使用参数数组、`shell: false` 和 `windowsHide: true`。
 - 发布审计拒绝 session dump、私钥、常见 provider token、绝对本机路径、Mojibake 和开发期文件进入公开源或 VSIX。
 
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.6
 [0.1.5]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.5
 [0.1.4]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.4
 [0.1.3]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.3

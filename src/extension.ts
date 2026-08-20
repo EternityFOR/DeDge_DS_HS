@@ -105,6 +105,55 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     else void vscode.window.showInformationMessage(`Context window set to ${formatTokenCount(tokens)}. It will apply on the next runtime start.`)
   }
 
+  const openSettings = async (): Promise<void> => {
+    const picked = await vscode.window.showQuickPick([
+      {
+        label: '$(key) API key and base URL',
+        description: 'DeepSeek connection for the local runtime',
+        detail: 'Endpoint and key stored in SecretStorage; used by every Harness session.',
+        action: 'api',
+      },
+      {
+        label: '$(image) Vision API key',
+        description: 'Describes attached images before sending',
+        detail: 'OpenAI-compatible vision key stored in SecretStorage (Qwen-VL, GLM-4V, GPT-4o, Ollama...).',
+        action: 'vision-key',
+      },
+      {
+        label: '$(settings-gear) Vision endpoint and model',
+        description: 'vision.baseUrl / vision.model',
+        detail: 'Open the VS Code settings editor for the image recognition endpoint.',
+        action: 'vision-config',
+      },
+      {
+        label: '$(book) Skill directories',
+        description: 'skills.directories for @ references',
+        detail: 'Open the VS Code settings editor for the SKILL.md scan roots (default ~/.codex/skills).',
+        action: 'skills',
+      },
+      {
+        label: '$(arrow-swap) Handoff options',
+        description: 'Launch mode, Codex and Claude homes',
+        detail: 'Open the VS Code settings editor for cross-platform handoff behavior.',
+        action: 'handoff',
+      },
+      {
+        label: '$(gear) Runtime and model defaults',
+        description: 'Runtime mode, provider, model, context',
+        detail: 'Open the VS Code settings editor for the remaining DeepSeek Harness options.',
+        action: 'runtime',
+      },
+    ], { title: 'DeepSeek Harness settings', matchOnDescription: true, matchOnDetail: true })
+    if (picked === undefined) return
+    if (picked.action === 'api') return setApiKey()
+    if (picked.action === 'vision-key') return setVisionApiKey()
+    const setting = picked.action === 'vision-config' ? 'dedgeDeepSeekHarness.vision'
+      : picked.action === 'skills' ? 'dedgeDeepSeekHarness.skills'
+        : picked.action === 'handoff' ? 'dedgeDeepSeekHarness.handoff'
+          : 'dedgeDeepSeekHarness'
+    await vscode.commands.executeCommand('workbench.action.openSettings', setting)
+  }
+
   const view = new ChatViewProvider(context, controller, review, logger, {
     setApiKey,
     diagnose: showDiagnostics,
@@ -113,6 +162,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     loadClaudeSession: () => handoff.loadIntoHarness('claude'),
     handoffCurrentSession: () => handoff.handoffCurrentHarness(),
     configureContextWindow,
+    openSettings,
   })
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 20)
   status.name = 'DeepSeek Harness'

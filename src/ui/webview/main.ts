@@ -16,6 +16,7 @@ import {
   Send,
   Settings2,
   ShieldCheck,
+  SlidersHorizontal,
   Shrink,
   Square,
   TextQuote,
@@ -48,6 +49,7 @@ const iconComponents = {
   'send': Send,
   'settings-2': Settings2,
   'shield-check': ShieldCheck,
+  'sliders-horizontal': SlidersHorizontal,
   'shrink': Shrink,
   'square': Square,
   'text-quote': TextQuote,
@@ -66,7 +68,7 @@ let scrollBottomButton: HTMLButtonElement | undefined
 let stickToBottom = true
 const collapsedMessages = new Set<string>()
 const turnHidden = new Set<string>()
-let compactThinking = false
+let compactThinking = true
 let skillCatalog: readonly SkillSummary[] = []
 let skillPopoverVisible = false
 let skillHighlight = 0
@@ -127,8 +129,8 @@ if (typeof persistedWebviewState === 'object' && persistedWebviewState !== null 
   elements.prompt.value = persistedWebviewState.draft
   resizePrompt()
 }
-if (typeof persistedWebviewState === 'object' && persistedWebviewState !== null && 'compactThinking' in persistedWebviewState && persistedWebviewState.compactThinking === true) {
-  compactThinking = true
+if (typeof persistedWebviewState === 'object' && persistedWebviewState !== null && 'compactThinking' in persistedWebviewState && persistedWebviewState.compactThinking === false) {
+  compactThinking = false
 }
 applyCompactThinkingButton()
 
@@ -148,7 +150,7 @@ bindAction('attach-file', { type: 'attachFile' })
 bindAction('attach-problems', { type: 'attachDiagnostics' })
 bindAction('review', { type: 'reviewChanges' })
 bindAction('handoff', { type: 'handoff' })
-bindAction('set-key', { type: 'setApiKey' })
+bindAction('set-key', { type: 'openSettings' })
 bindAction('compact', { type: 'compact' })
 bindAction('configure-context', { type: 'configureContextWindow' })
 bindAction('cancel', { type: 'cancel' })
@@ -335,6 +337,7 @@ function scheduleRender(): void {
 function render(): void {
   if (pendingState === undefined) return
   state = pendingState
+  attachments = pendingAttachments
   renderSessionTabs(state)
   renderControls(state)
   renderContextMeter(state)
@@ -579,7 +582,7 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     elements.conversation.append(pendingAnchor)
   }
 
-  const messages = snapshot.messages
+  const messages = snapshot.messages ?? []
   const seen = new Set<string>()
   const turnCounts = new Map<string, number>()
   let countingTurn: string | undefined
@@ -626,9 +629,18 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     if (emptyNode === undefined) {
       emptyNode = document.createElement('div')
       emptyNode.className = 'empty'
+      const title = document.createElement('div')
+      title.className = 'empty-title'
+      const start = document.createElement('button')
+      start.type = 'button'
+      start.className = 'command primary'
+      start.textContent = 'Start new session'
+      start.addEventListener('click', () => post({ type: 'newSession' }))
+      emptyNode.append(title, start)
       elements.conversation.insertBefore(emptyNode, pendingAnchor)
     }
-    emptyNode.textContent = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)?.title ?? `DeepSeek Harness: ${snapshot.phase}`
+    const title = emptyNode.querySelector('.empty-title')
+    if (title !== null) title.textContent = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)?.title ?? `DeepSeek Harness: ${snapshot.phase}`
   } else if (emptyNode !== undefined) {
     emptyNode.remove()
     emptyNode = undefined
@@ -1017,8 +1029,16 @@ function renderAttachments(): void {
   elements.attachments.replaceChildren(...attachments.map(attachment => {
     const chip = document.createElement('div')
     chip.className = 'chip'
+    if (attachment.kind === 'image' && attachment.image !== undefined && attachment.image.dataBase64 !== '') {
+      const thumb = document.createElement('img')
+      thumb.className = 'attachment-thumb'
+      thumb.src = `data:${attachment.image.mimeType};base64,${attachment.image.dataBase64}`
+      thumb.alt = attachment.label
+      chip.append(thumb)
+    }
     const label = document.createElement('span')
-    label.textContent = `${attachment.label}${attachment.truncated ? ' [truncated]' : ''}`
+    const display = attachment.kind === 'image' ? attachment.label.replace(/^Image: /u, '') : attachment.label
+    label.textContent = `${display}${attachment.truncated ? ' [truncated]' : ''}`
     const remove = document.createElement('button')
     remove.title = 'Remove attachment'
     remove.setAttribute('aria-label', 'Remove attachment')
@@ -1246,6 +1266,14 @@ async function handlePaste(event: ClipboardEvent): Promise<void> {
     await attachBrowserFiles(data.files)
     return
   }
+  for (const item of Array.from(data.items)) {
+    if (item.kind !== 'file' || !item.type.startsWith('image/')) continue
+    const file = item.getAsFile()
+    if (file === null) continue
+    event.preventDefault()
+    await attachBrowserFiles([file])
+    return
+  }
   const uris = parseUriList(data.getData('text/uri-list'))
   if (uris.length > 0) {
     event.preventDefault()
@@ -1266,7 +1294,7 @@ async function handleDrop(event: DragEvent): Promise<void> {
   if (uris.length > 0) post({ type: 'attachUris', uris })
 }
 
-async function attachBrowserFiles(files: FileList): Promise<void> {
+async function attachBrowserFiles(files: FileList | readonly File[]): Promise<void> {
   const textPayload: { readonly name: string; readonly text: string }[] = []
   const imagePayload: { readonly name: string; readonly dataUrl: string }[] = []
   let imageBytes = 0

@@ -23,6 +23,7 @@ export class WorkbenchController implements vscode.Disposable {
   private readonly store: SessionStore
   private readonly sessionOperations: SessionOperationCoordinator
   private gateway: GatewayClient | undefined
+  private suppressAutoCreate = false
   private skillCatalogCache: { readonly key: string; readonly at: number; readonly items: Promise<SkillSummary[]> } | undefined
   private runtimeSubscription: vscode.Disposable
   private configurationSubscription: vscode.Disposable
@@ -109,8 +110,8 @@ export class WorkbenchController implements vscode.Disposable {
       const target = remembered !== undefined && visibleSessions.some(item => item.id === remembered)
         ? remembered
         : visibleSessions[0]?.id
-      if (target === undefined) await this.newSession()
-      else await this.selectSession(target)
+      if (target === undefined && !this.suppressAutoCreate) await this.newSession()
+      else if (target !== undefined) await this.selectSession(target)
       this.store.setPhase('connected')
       this.publish()
     } catch (error) {
@@ -204,8 +205,7 @@ export class WorkbenchController implements vscode.Disposable {
     if (!wasActive) return this.publish()
     await this.context.workspaceState.update('activeSessionId', undefined)
     const replacement = this.store.snapshot().sessions[0]
-    if (replacement === undefined) await this.newSession()
-    else await this.selectSession(replacement.id)
+    if (replacement !== undefined) await this.selectSession(replacement.id)
   }
 
   private async performDeleteSession(sessionId: string): Promise<string> {
@@ -220,16 +220,23 @@ export class WorkbenchController implements vscode.Disposable {
     if (runtimeVersion === undefined) throw new Error('The Harness runtime version is unavailable; deletion was refused.')
     const sourcePath = await this.sessionTrash.locate(runtimeVersion, sessionId)
     if (snapshot.activeSessionId === sessionId) await this.context.workspaceState.update('activeSessionId', undefined)
-    await this.stop()
-    let trashed
+    this.suppressAutoCreate = true
     try {
-      trashed = await this.sessionTrash.moveToTrash(runtimeVersion, sessionId, sourcePath)
-    } catch (error) {
-      await this.start().catch(restartError => this.logger.error('Harness restart after failed session deletion also failed', restartError))
-      throw error
+      await this.stop()
+      let trashed
+      try {
+        trashed = await this.sessionTrash.moveToTrash(runtimeVersion, sessionId, sourcePath)
+      } catch (error) {
+        await this.start().catch(restartError => this.logger.error('Harness restart after failed session deletion also failed', restartError))
+        throw error
+      }
+      this.logger.info(`Moved session "${session.title}" (${session.id}) to recovery storage: ${trashed.directory}`)
+      this.store.removeSession(sessionId)
+      this.publish()
+      await this.start()
+    } finally {
+      this.suppressAutoCreate = false
     }
-    this.logger.info(`Moved session "${session.title}" (${session.id}) to recovery storage: ${trashed.directory}`)
-    await this.start()
     return 'Session moved to recovery storage.'
   }
 

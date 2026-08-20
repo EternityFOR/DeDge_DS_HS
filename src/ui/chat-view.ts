@@ -20,6 +20,7 @@ export interface ChatViewActions {
   readonly loadClaudeSession: () => Promise<StagedHandoff | undefined>
   readonly handoffCurrentSession: () => Promise<StagedHandoff | undefined>
   readonly configureContextWindow: () => Promise<void>
+  readonly openSettings: () => Promise<void>
 }
 
 type SessionPickerAction = 'load-codex' | 'load-claude' | 'handoff-current'
@@ -272,6 +273,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (message.type === 'restart') return this.run(() => this.controller.restart())
     if (message.type === 'stop') return this.run(() => this.controller.stop())
     if (message.type === 'setApiKey') return this.run(this.actions.setApiKey)
+    if (message.type === 'openSettings') return this.run(this.actions.openSettings)
     if (message.type === 'attachSelection') return this.run(async () => {
       const item = await this.controller.attachSelection()
       if (item !== undefined) this.upsertAttachment(item)
@@ -383,7 +385,7 @@ function parseWebviewMessage(value: unknown): WebviewToHostMessage {
   if (!isRecord(value) || typeof value.type !== 'string') throw new Error('Message requires a type.')
   const type = value.type
   if (type === 'ready' || type === 'newSession' || type === 'cancel' || type === 'start' || type === 'restart' || type === 'stop'
-    || type === 'setApiKey' || type === 'attachSelection' || type === 'attachDiagnostics' || type === 'attachFile'
+    || type === 'setApiKey' || type === 'openSettings' || type === 'attachSelection' || type === 'attachDiagnostics' || type === 'attachFile'
     || type === 'compact' || type === 'configureContextWindow' || type === 'handoff' || type === 'showLogs' || type === 'reviewChanges' || type === 'diagnose') return { type }
   if (type === 'send' && typeof value.text === 'string') return { type, text: value.text, ...(value.mode === 'queue' || value.mode === 'steer' ? { mode: value.mode } : {}) }
   if (type === 'selectSession' && typeof value.sessionId === 'string' && value.sessionId.length <= 256) return { type, sessionId: value.sessionId }
@@ -534,6 +536,9 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .attachments { overflow-x: auto; padding-bottom: 6px; }
     .chip { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; max-width: 220px; padding: 3px 6px; border: 1px solid var(--vscode-badge-background); border-radius: 3px; background: var(--vscode-editor-inactiveSelectionBackground); color: var(--vscode-foreground); }
     .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .attachment-thumb { flex: 0 0 26px; width: 26px; height: 26px; border-radius: 3px; object-fit: cover; border: 1px solid var(--vscode-panel-border); }
+    .empty { display: grid; place-items: center; gap: 10px; min-height: 100%; color: var(--vscode-descriptionForeground); text-align: center; padding: 24px; font-size: 12px; }
+    .empty-title { font-size: 12px; }
     .chip button { display: grid; place-items: center; background: transparent; cursor: pointer; padding: 0; }
     .composer-box { position: relative; display: grid; grid-template-rows: minmax(88px,auto) auto; gap: 5px; border: 1px solid var(--vscode-input-border); border-radius: 5px; background: var(--vscode-input-background); padding: 7px; transition: border-color 80ms ease, background 80ms ease; }
     .icon-button.active { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
@@ -664,7 +669,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
           </div>
         </div>
       </div>
-      <div class="status"><span id="status-dot" class="status-dot"></span><span id="status-text">Stopped</span><button id="set-key" class="icon-button" title="Configure API key and base URL" aria-label="Configure API key and base URL"><i data-lucide="key-round"></i></button></div>
+      <div class="status"><span id="status-dot" class="status-dot"></span><span id="status-text">Stopped</span><button id="set-key" class="icon-button" title="Settings: API keys, vision, skills, handoff" aria-label="Settings: API keys, vision, skills, handoff"><i data-lucide="sliders-horizontal"></i></button></div>
     </footer>
   </div>
   <script nonce="${nonce}" src="${script}"></script>
