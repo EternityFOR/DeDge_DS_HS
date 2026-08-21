@@ -11,6 +11,7 @@ import { CredentialStore } from './security/credentials.js'
 import { WorkbenchController } from './session/workbench-controller.js'
 import { SessionTrashService } from './session/session-trash.js'
 import { ChatViewProvider } from './ui/chat-view.js'
+import { mergedVisionModelIds, visionModelIds } from './vision/model-catalog.js'
 
 let activeController: WorkbenchController | undefined
 let activeRuntime: RuntimeManager | undefined
@@ -162,7 +163,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       visionBaseUrl: current.visionBaseUrl,
       visionModel: current.visionModel,
       visionReasoningEffort: current.visionReasoningEffort,
-      visionModels: await visionModels(current.visionBaseUrl, await credentials.getVisionApiKey()) as readonly string[],
+      visionModels: await visionModels(current.visionBaseUrl, await credentials.getVisionApiKey(), current.visionModel) as readonly string[],
       hasVisionApiKey: (await credentials.getVisionApiKey())?.trim() !== '',
       pasteFileThreshold: current.pasteFileThreshold,
       contextWindowTokens: current.contextWindowTokens,
@@ -187,14 +188,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (settings.visionApiKey !== undefined && settings.visionApiKey.trim() !== '') await credentials.setVisionApiKey(settings.visionApiKey.trim())
   }
 
-  const visionModels = async (baseUrl: string, apiKey: string | undefined): Promise<string[]> => {
-    if (baseUrl.trim() === '' || apiKey?.trim() === undefined || apiKey.trim() === '') return []
+  const visionModels = async (baseUrl: string, apiKey: string | undefined, selected: string): Promise<string[]> => {
+    if (baseUrl.trim() === '' || apiKey?.trim() === undefined || apiKey.trim() === '') return mergedVisionModelIds(baseUrl, [], selected)
     try {
       const response = await fetch(new URL('models', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`), { headers: { authorization: `Bearer ${apiKey.trim()}` } })
-      if (!response.ok) return []
-      const payload = await response.json() as { data?: unknown }
-      return Array.isArray(payload.data) ? payload.data.flatMap(item => typeof item === 'object' && item !== null && 'id' in item && typeof item.id === 'string' ? [item.id] : []).slice(0, 100) : []
-    } catch { return [] }
+      if (!response.ok) return mergedVisionModelIds(baseUrl, [], selected)
+      return mergedVisionModelIds(baseUrl, visionModelIds(await response.json()), selected)
+    } catch { return mergedVisionModelIds(baseUrl, [], selected) }
   }
 
   const view = new ChatViewProvider(context, controller, review, logger, {

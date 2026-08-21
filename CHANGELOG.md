@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.1.35] - 2026-08-21
+
+### Fixed
+
+- 恢复 `deepseek-v4-pro`，并将官方新增的 `deepseek-v4-flash-vision-exp` 加入 Harness 模型目录和官方 Vision 目录。
+- Vision `/models` 目录不再截断为前 100 项，避免最新模型因端点返回顺序而消失。
+- 不再把所有名称中含 `image` 的模型都当成生图模型过滤；保留多模态 image-preview 型号，只排除明确的生图与 code-review 路由。
+
 ## [0.1.34] - 2026-08-21
 
 ### Fixed
@@ -395,7 +403,8 @@
 [0.1.32]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.32
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.34...HEAD
+[0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.35...HEAD
 [0.1.13]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.13
 [0.1.12]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.12
 [0.1.11]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.11

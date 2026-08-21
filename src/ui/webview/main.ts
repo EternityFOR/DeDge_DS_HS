@@ -33,6 +33,7 @@ import {
 } from 'lucide'
 import { marked } from 'marked'
 import type { ContextAttachment } from '../../context/context-collector.js'
+import { recommendedVisionModels } from '../../vision/model-catalog.js'
 import type { SkillSummary } from '../../skills/skill-catalog.js'
 import type { WorkbenchMessage, WorkbenchSnapshot } from '../../session/types.js'
 import { modelControlsUnavailableReason, promptUnavailableReason, steerAvailable } from '../../session/interaction-readiness.js'
@@ -2265,11 +2266,6 @@ function renderVisionModelOptions(): void {
   }))
   options.push(menuOption({ label: 'Configure vision...', selected: false, handler: () => { post({ type: 'openVisionSettings' }); closePopovers() } }))
   elements.visionModelOptions.replaceChildren(...options)
-}
-
-function recommendedVisionModels(models: readonly string[]): string[] {
-  const excluded = /(?:^|[-_.])(image|imagen|dall-?e|flux|sdxl|stable-?diffusion|seedream|sora|code-?review|auto-?review)(?:$|[-_.0-9])/iu
-  return [...new Set(models)].filter(model => !excluded.test(model)).sort((left, right) => left.localeCompare(right))
 }
 
 function saveSettings(): void {

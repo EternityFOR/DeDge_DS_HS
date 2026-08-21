@@ -73,6 +73,7 @@ const state = {
           },
         },
         { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', description: 'Higher quality route.' },
+        { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek-V4-Flash-Vision-Exp', description: 'Experimental official image-input route.' },
       ],
     }],
   },
@@ -89,7 +90,7 @@ const state = {
 const bootstrap = `<script nonce="preview">
 const previewSettings = {
   baseUrl: 'https://api.deepseek.com/', hasApiKey: true,
-  visionBaseUrl: '', visionModel: 'qwen-vl-plus', visionReasoningEffort: '', visionModels: ['qwen-vl-plus'], hasVisionApiKey: true,
+  visionBaseUrl: 'https://api.deepseek.com/', visionModel: 'deepseek-v4-flash-vision-exp', visionReasoningEffort: '', visionModels: ['deepseek-v4-flash-vision-exp'], hasVisionApiKey: true,
   pasteFileThreshold: 4096, contextWindowTokens: 1000000,
   codexHome: '\${userHome}/.codex', claudeHome: '\${userHome}/.claude', handoffLaunchMode: 'clipboard',
   skillDirectories: ['\${userHome}/.codex/skills'],

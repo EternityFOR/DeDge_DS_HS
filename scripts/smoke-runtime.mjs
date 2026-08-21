@@ -79,6 +79,11 @@ try {
   if (typeof session?.sessionId !== 'string' || session.sessionId === '') {
     throw new Error(`session.create returned a malformed response: ${JSON.stringify(session)}`)
   }
+  const catalog = await rpc(url, 'session.models', { sessionId: session.sessionId })
+  const modelIds = new Set(catalog?.groups?.flatMap(group => group.models?.map(model => model.id) ?? []) ?? [])
+  for (const model of ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp']) {
+    if (!modelIds.has(model)) throw new Error(`session.models did not advertise ${model}: ${JSON.stringify(catalog)}`)
+  }
   const command = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/compact' } })
   if (command?.result?.kind !== 'success' && command?.result?.kind !== 'error') {
     throw new Error(`commands/execute returned a malformed command result: ${JSON.stringify(command)}`)

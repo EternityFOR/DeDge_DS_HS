@@ -93,4 +93,21 @@ describe('runtime overlay rendering', () => {
     expect(overlay).toContain('contextWindow: 1000000')
     expect(overlay).not.toContain('injected: true\n')
   })
+
+  it('advertises both official DeepSeek models while retaining a custom selected model', () => {
+    const configuration = {
+      runtimeMode: 'bundled', runtimeCommand: '', runtimeNodePath: '', startTimeoutMs: 90_000,
+      provider: 'deepseek-official', model: 'private-reasoner', reasoningEffort: 'high', agentPreset: 'standard',
+      permissionMode: 'workspace-write', approvalPolicy: 'ask', baseUrl: 'https://api.deepseek.com/', autoStart: true,
+      contextMaxBytes: 32_768, contextWindowTokens: 1_000_000, pasteFileThreshold: 4_096,
+      codexHome: '${userHome}/.codex', claudeHome: '${userHome}/.claude', codexCommand: '', claudeCommand: '',
+      handoffMaxBytes: 65_536, handoffLaunchMode: 'clipboard', skillDirectories: ['${userHome}/.codex/skills'],
+      visionBaseUrl: '', visionModel: '', visionReasoningEffort: '', visionMaxBytes: 4_194_304,
+    } satisfies HarnessConfiguration
+    const overlay = renderRuntimeOverlay(configuration)
+    expect(overlay).toContain('id: "deepseek-v4-flash"')
+    expect(overlay).toContain('id: "deepseek-v4-pro"')
+    expect(overlay).toContain('id: "deepseek-v4-flash-vision-exp"')
+    expect(overlay).toContain('id: "private-reasoner"')
+  })
 })

@@ -12,7 +12,7 @@ body:
     id: extension-version
     attributes:
       label: Extension version
-      placeholder: 0.1.34
+      placeholder: 0.1.35
     validations:
       required: true
   - type: input

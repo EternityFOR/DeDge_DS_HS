@@ -23,7 +23,7 @@ export async function listCodexSessionsViaAppServer(
   const client = new CodexAppServerClient(executable, codexHome)
   try {
     await client.request('initialize', {
-      clientInfo: { name: 'dedge-deepseek-harness', title: 'DeDge DeepSeek Harness', version: '0.1.34' },
+      clientInfo: { name: 'dedge-deepseek-harness', title: 'DeDge DeepSeek Harness', version: '0.1.35' },
       capabilities: null,
     })
     client.notify('initialized')
