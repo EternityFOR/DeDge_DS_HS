@@ -19,11 +19,11 @@ Tier 表示发布验证优先级，不表示尚未运行发布门禁的构建已
 
 | 组件 | 内置版本 | 规则 |
 | --- | --- | --- |
-| DeepSeek Harness | `0.1.0-rc.7` | 必须精确匹配 |
+| DeepSeek Harness | `0.1.0-rc.7` | 同一 `0.1.0-rc.x` 协议系列兼容 |
 | Node.js | `22.22.3` | VSIX 内置，不依赖系统 Node |
 | pnpm | `11.21.0` | 只供 Harness 内部工具链使用 |
 
-external JavaScript runtime 接受 Node `22.19+` 或 `24+`；Node 23 不在当前上游支持范围。external DSH 仍必须精确报告 `0.1.0-rc.7`。扩展不会从 PATH 猜测版本，也不会自动升级。
+external JavaScript runtime 接受 Node `22.19+` 或 `24+`；Node 23 不在当前上游支持范围。external DSH 可使用同一 `0.1.0-rc.x` 系列，RC 修订不同会记录警告；基础协议版本不同仍会阻止启动。扩展不会从 PATH 猜测版本，也不会自动升级。
 
 ## Windows 与 PowerShell
 

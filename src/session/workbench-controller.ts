@@ -12,12 +12,13 @@ import { describeImage } from '../vision/vision-client.js'
 import { errorMessage, type Logger } from '../platform/logger.js'
 import type { CredentialStore } from '../security/credentials.js'
 import type { RuntimeManager } from '../runtime/runtime-manager.js'
-import type { PendingApproval, PendingQuestion, QuestionAnswer, WorkbenchSnapshot } from './types.js'
+import type { PendingApproval, PendingQuestion, QuestionAnswer, WorkbenchSendProgress, WorkbenchSnapshot } from './types.js'
 import { SessionOperationCoordinator } from './session-operations.js'
 import { promptUnavailableReason } from './interaction-readiness.js'
 import { SessionStore } from './session-store.js'
 import { SessionTrashService } from './session-trash.js'
 import { validateQuestionAnswers } from './question-answers.js'
+import type { PromptInspection } from '../ui/webview-protocol.js'
 
 export class WorkbenchController implements vscode.Disposable {
   private readonly changed = new vscode.EventEmitter<WorkbenchSnapshot>()
@@ -192,20 +193,32 @@ export class WorkbenchController implements vscode.Disposable {
     const snapshot = this.store.snapshot()
     const sessionId = snapshot.activeSessionId
     if (sessionId === undefined || !snapshot.hasMoreHistory || snapshot.historyLoading) return
-    const beforeSeq = snapshot.messages.reduce((minimum, message) => Math.min(minimum, message.seq ?? minimum), Number.MAX_SAFE_INTEGER)
-    if (!Number.isSafeInteger(beforeSeq)) return
+    const earliestSeq = this.store.historyBeforeSeq(sessionId)
+    if (earliestSeq === undefined) return
+    let beforeSeq: number = earliestSeq
+    const initialUnits = conversationUnitCount(snapshot.messages)
     this.store.setHistoryLoading(true)
     this.publish()
     try {
-      const history = await this.requireGateway().history(sessionId, 40, beforeSeq)
-      this.store.prependHistory(sessionId, history.events ?? [], history.hasMore === true)
+      // Gateway pages may contain only internal events that do not project into
+      // visible messages. Advance the raw event cursor until the UI gains a unit.
+      for (let page = 0; page < 8; page++) {
+        const history = await this.requireGateway().history(sessionId, 40, beforeSeq)
+        const entries = history.events ?? []
+        const nextBeforeSeq: number = entries.reduce((minimum, entry) => Math.min(minimum, entry.event.seq), beforeSeq)
+        const advanced = nextBeforeSeq < beforeSeq
+        const hasMore = history.hasMore === true && advanced
+        this.store.prependHistory(sessionId, entries, hasMore)
+        if (!hasMore || conversationUnitCount(this.store.snapshot().messages) > initialUnits) break
+        beforeSeq = nextBeforeSeq
+      }
     } finally {
       this.store.setHistoryLoading(false)
       this.publish()
     }
   }
 
-  async send(text: string, attachments: readonly ContextAttachment[] = [], mode: 'queue' | 'steer' = 'queue'): Promise<void> {
+  async send(text: string, attachments: readonly ContextAttachment[] = [], mode: 'queue' | 'steer' = 'queue', onProgress?: (progress: WorkbenchSendProgress) => void): Promise<void> {
     const normalized = text.trim()
     if (normalized === '' && attachments.length === 0) return
     await this.ensureStarted()
@@ -215,7 +228,7 @@ export class WorkbenchController implements vscode.Disposable {
     if (unavailable !== undefined) throw new Error(unavailable)
     const sessionId = snapshot.activeSessionId
     if (sessionId === undefined) throw new Error('Wait for an active Harness session before sending.')
-    const resolved = await this.resolveAttachments(normalized, attachments)
+    const resolved = await this.resolveAttachments(normalized, attachments, onProgress)
     const prompt = buildPrompt(normalized, resolved)
     const result = await this.requireGateway().prompt(sessionId, prompt, mode)
     if (result.accepted === false) throw new Error('Harness rejected the prompt.')
@@ -337,6 +350,14 @@ export class WorkbenchController implements vscode.Disposable {
     await rm(resolved, { force: true }).catch(() => undefined)
   }
 
+  async openPastedFile(target: string): Promise<void> {
+    const directory = this.pastedDirectory()
+    const resolved = path.resolve(target)
+    if (!resolved.startsWith(directory + path.sep)) throw new Error('Attachment path is outside the managed temporary directory.')
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(resolved))
+    await vscode.window.showTextDocument(document, { preview: false })
+  }
+
   private pastedDirectory(): string {
     return path.join(this.context.globalStorageUri.fsPath, 'tmp', 'pasted')
   }
@@ -365,13 +386,55 @@ export class WorkbenchController implements vscode.Disposable {
     return this.loadSkillCatalog()
   }
 
+  async inspectPrompt(input: string, attachments: readonly ContextAttachment[]): Promise<PromptInspection> {
+    const configuration = this.configuration.get()
+    const profileText = [
+      `Agent preset: ${configuration.agentPreset}`,
+      `Permission: ${configuration.permissionMode}`,
+      `Provider/model: ${configuration.provider}/${configuration.model}`,
+      `Reasoning effort: ${configuration.reasoningEffort}`,
+      `Context capacity: ${String(configuration.contextWindowTokens)}`,
+    ].join('\n')
+    const layers: PromptInspection['layers'][number][] = [{
+      id: 'runtime-profile',
+      label: 'Harness profile',
+      source: 'Runtime configuration',
+      detail: `${configuration.agentPreset} preset · ${configuration.permissionMode} · ${configuration.provider}/${configuration.model}`,
+      text: profileText,
+      bytes: Buffer.byteLength(profileText, 'utf8'),
+      enabled: true,
+    }]
+
+    const skillRefs = parseSkillRefs(input)
+    if (skillRefs.length > 0) {
+      const skills = await this.loadSkillCatalog()
+      for (const name of skillRefs) {
+        const skill = skills.find(item => item.name === name)
+        if (skill === undefined) continue
+        const body = await readSkillBody(skill.directory)
+        layers.push({ id: `skill:${name}`, label: `Skill: ${name}`, source: skill.directory, detail: body.truncated ? 'Explicit @ reference · truncated' : 'Explicit @ reference', text: body.text, bytes: Buffer.byteLength(body.text, 'utf8'), enabled: true })
+      }
+    }
+    for (const attachment of attachments) {
+      const imagePending = attachment.kind === 'image'
+      const text = imagePending ? `[Vision conversion pending for ${attachment.label}]` : attachment.text
+      layers.push({ id: attachment.id, label: attachment.label, source: attachment.kind, detail: imagePending ? 'Image will be described before session.prompt' : attachment.truncated ? 'Content truncated by attachment budget' : 'Staged context attachment', text, bytes: Buffer.byteLength(text, 'utf8'), enabled: true })
+    }
+    if (input.trim() !== '') layers.push({ id: 'user-input', label: 'User message', source: 'Composer', detail: 'Exact current draft', text: input, bytes: Buffer.byteLength(input, 'utf8'), enabled: true })
+    return {
+      scope: 'Plugin preflight prompt layers',
+      limitation: 'This view shows data assembled by the extension. Harness may add provider system instructions, tool schemas, preset internals, and compaction state after session.prompt; rc.7 does not expose that final provider request through Gateway.',
+      layers,
+    }
+  }
+
   async renameSession(sessionId: string, title: string): Promise<void> {
     const result = await this.requireGateway().renameSession(sessionId, title)
     this.store.setSessionTitle(sessionId, result.title)
     this.publish()
   }
 
-  private async resolveAttachments(input: string, attachments: readonly ContextAttachment[]): Promise<readonly ContextAttachment[]> {
+  private async resolveAttachments(input: string, attachments: readonly ContextAttachment[], onProgress?: (progress: WorkbenchSendProgress) => void): Promise<readonly ContextAttachment[]> {
     const output: ContextAttachment[] = []
     const skillRefs = parseSkillRefs(input)
     if (skillRefs.length > 0) {
@@ -386,13 +449,13 @@ export class WorkbenchController implements vscode.Disposable {
       }
     }
     for (const attachment of attachments) {
-      if (attachment.kind === 'image') output.push(await this.imageAttachment(attachment))
+      if (attachment.kind === 'image') output.push(await this.imageAttachment(attachment, onProgress))
       else output.push(attachment)
     }
     return output
   }
 
-  private async imageAttachment(attachment: ContextAttachment): Promise<ContextAttachment> {
+  private async imageAttachment(attachment: ContextAttachment, onProgress?: (progress: WorkbenchSendProgress) => void): Promise<ContextAttachment> {
     if (attachment.truncated || attachment.image === undefined || attachment.image.dataBase64 === '') {
       throw new Error(`${attachment.label} is too large for the vision endpoint; reduce the image or raise dedgeDeepSeekHarness.vision.maxBytes.`)
     }
@@ -401,20 +464,24 @@ export class WorkbenchController implements vscode.Disposable {
     if (apiKey === undefined || apiKey.trim() === '') {
       throw new Error('No vision API key is stored; run the "Configure Vision API Key" command before attaching images.')
     }
+    onProgress?.({ type: 'vision-start', label: attachment.label, model: configuration.visionModel })
     const description = await describeImage({
       baseUrl: configuration.visionBaseUrl,
       model: configuration.visionModel,
+      reasoningEffort: configuration.visionReasoningEffort,
       apiKey,
       maxBytes: configuration.visionMaxBytes,
     }, { fileName: attachment.label, mimeType: attachment.image.mimeType, dataBase64: attachment.image.dataBase64 })
+    onProgress?.({ type: 'vision-complete', label: attachment.label, model: configuration.visionModel, text: description })
     const label = attachment.label.replace(/^Image: /u, '')
     return {
       id: attachment.id,
-      kind: 'file',
+      kind: 'vision',
       label: `Vision: ${label}`,
       text: `Vision description of ${label}:\n\n${description}`,
       ...(attachment.uri === undefined ? {} : { uri: attachment.uri }),
       truncated: false,
+      visionModel: configuration.visionModel,
     }
   }
 
@@ -456,9 +523,20 @@ export class WorkbenchController implements vscode.Disposable {
     if (snapshot.sessions.find(session => session.id === sessionId)?.running === true) {
       throw new Error('Context cannot be compacted while a response is in progress.')
     }
-    const result = await this.requireGateway().executeCommand(sessionId, '/compact')
-    if (result.result?.kind === 'error') throw new Error(result.result.text ?? 'Harness rejected context compaction.')
-    return result.result?.text ?? 'Context compaction completed.'
+    return this.sessionOperations.run(sessionId, 'compacting', async () => {
+      let result: Awaited<ReturnType<GatewayClient['executeCommand']>>
+      try {
+        result = await this.requireGateway().executeCommand(sessionId, '/compact')
+      } catch (error) {
+        const detail = errorMessage(error)
+        if (detail.includes('commands/execute returned HTTP 404')) {
+          throw new Error('This Harness runtime does not expose the manual compaction RPC. Automatic compaction remains preset-controlled; no context was changed.')
+        }
+        throw error
+      }
+      if (result.result?.kind === 'error') throw new Error(result.result.text ?? 'Harness rejected context compaction.')
+      return result.result?.text ?? 'Context compaction completed.'
+    })
   }
 
   async approve(approvalId: string, outcome: 'allowed-once' | 'rejected'): Promise<void> {
@@ -549,6 +627,12 @@ export class WorkbenchController implements vscode.Disposable {
     }
   }
 
+  async setApprovalPolicy(policy: 'ask' | 'approve-for-me'): Promise<void> {
+    await this.configuration.updateSetting('approvalPolicy', policy)
+    this.store.setConfiguration(toStoreConfiguration(this.configuration.get()))
+    this.publish()
+  }
+
   async restart(): Promise<void> {
     this.gateway?.dispose()
     this.gateway = undefined
@@ -597,6 +681,41 @@ export class WorkbenchController implements vscode.Disposable {
     return this.gateway
   }
 
+  private async maybeGenerateSessionTitle(sessionId: string): Promise<void> {
+    const snapshot = this.store.snapshot()
+    const session = snapshot.sessions.find(item => item.id === sessionId)
+    if (session === undefined || snapshot.activeSessionId !== sessionId || !isPlaceholderSessionTitle(session.title)) return
+    const transcript = snapshot.messages
+      .filter(message => message.role === 'user' || message.role === 'assistant')
+      .map(message => `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.text}`)
+      .join('\n')
+      .slice(0, 6_000)
+    if (transcript.trim() === '') return
+    const apiKey = await this.credentials.getApiKey()
+    const configuration = this.configuration.get()
+    if (apiKey?.trim() === undefined || apiKey.trim() === '' || configuration.model.trim() === '') return
+    try {
+      const endpoint = new URL('chat/completions', configuration.baseUrl.endsWith('/') ? configuration.baseUrl : `${configuration.baseUrl}/`)
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey.trim()}` },
+        body: JSON.stringify({ model: configuration.model, messages: [
+          { role: 'system', content: 'Create a concise session title. Return only 3 to 8 words, without quotes or trailing punctuation.' },
+          { role: 'user', content: transcript },
+        ], max_tokens: 32 }),
+      })
+      if (!response.ok) return
+      const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> }
+      const raw = payload.choices?.[0]?.message?.content
+      if (typeof raw !== 'string') return
+      const title = raw.replace(/^['"\s]+|['"\s]+$/gu, '').replace(/[.!?。！？]+$/u, '').trim().slice(0, 72)
+      const current = this.store.snapshot().sessions.find(item => item.id === sessionId)
+      if (title !== '' && current !== undefined && isPlaceholderSessionTitle(current.title)) await this.renameSession(sessionId, title)
+    } catch (error) {
+      this.logger.warn(`Could not generate a session title: ${errorMessage(error)}`)
+    }
+  }
+
   private async refreshModelCatalog(gateway: GatewayClient, sessionId: string): Promise<void> {
     try {
       this.store.setModelCatalog(sessionId, await gateway.models(sessionId))
@@ -618,7 +737,10 @@ export class WorkbenchController implements vscode.Disposable {
   private handleMux(frame: MuxFrame, rpcId: string): void {
     if (frame.type === 'session/event') {
       this.store.appendEvent(frame.sessionId, frame.event, frame.view)
-      if (frame.event.type === 'turn/end') this.sessionOperations.finish(frame.sessionId, 'cancelling')
+      if (frame.event.type === 'turn/end') {
+        this.sessionOperations.finish(frame.sessionId, 'cancelling')
+        void this.maybeGenerateSessionTitle(frame.sessionId)
+      }
       return this.publish()
     }
     if (frame.type === 'session/projection' && frame.key === 'status' && isRunningValue(frame.value)) {
@@ -636,6 +758,10 @@ export class WorkbenchController implements vscode.Disposable {
     }
     if (frame.type === 'approval/requested') {
       const approval: PendingApproval = { id: frame.approvalId, rpcId, sessionId: frame.sessionId, toolName: frame.toolName, ...(frame.reason === undefined ? {} : { reason: frame.reason }) }
+      if (this.configuration.get().approvalPolicy === 'approve-for-me') {
+        void this.approveApprovalAutomatically(approval)
+        return this.publish()
+      }
       this.store.addApproval(approval)
       return this.publish()
     }
@@ -660,6 +786,19 @@ export class WorkbenchController implements vscode.Disposable {
     if (frame.type === 'question/resolved') {
       this.store.resolveQuestions(frame.questionRpcId)
       return this.publish()
+    }
+  }
+
+  private async approveApprovalAutomatically(approval: PendingApproval): Promise<void> {
+    try {
+      const receipt = await this.requireGateway().respond(approval.rpcId, {
+        sessionId: approval.sessionId,
+        approvalId: approval.id,
+        outcome: 'allowed-once',
+      })
+      if (!receipt.accepted) this.logger.warn(`Harness did not accept automatic approval for ${approval.toolName}.`)
+    } catch (error) {
+      this.logger.error(`Automatic approval failed for ${approval.toolName}`, error)
     }
   }
 
@@ -717,16 +856,27 @@ function workspaceDirectory(): string {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd()
 }
 
-function toStoreConfiguration(configuration: HarnessConfiguration): { provider: string; model: string; reasoningEffort: string; agentPreset: string; permissionMode: string; contextWindowTokens: number; pasteFileThreshold: number } {
+function toStoreConfiguration(configuration: HarnessConfiguration): { provider: string; model: string; reasoningEffort: string; agentPreset: string; permissionMode: string; approvalPolicy: string; contextWindowTokens: number; pasteFileThreshold: number } {
   return {
     provider: configuration.provider,
     model: configuration.model,
     reasoningEffort: configuration.reasoningEffort,
     agentPreset: configuration.agentPreset,
     permissionMode: configuration.permissionMode,
+    approvalPolicy: configuration.approvalPolicy ?? 'ask',
     contextWindowTokens: configuration.contextWindowTokens,
     pasteFileThreshold: configuration.pasteFileThreshold,
   }
+}
+
+function isPlaceholderSessionTitle(title: string): boolean {
+  return /^session-(?:[0-9a-f]+)?$/iu.test(title) || title === 'New session'
+}
+
+function conversationUnitCount(messages: WorkbenchSnapshot['messages']): number {
+  const units = new Set<string>()
+  for (const message of messages) units.add(message.taskId === undefined ? `message:${message.id}` : `task:${message.taskId}`)
+  return units.size
 }
 
 function isRunningValue(value: unknown): value is { readonly running: boolean } {

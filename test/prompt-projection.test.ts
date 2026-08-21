@@ -45,4 +45,18 @@ describe('user prompt display projection', () => {
     expect(projectUserPrompt(malformed)).toEqual({ text: malformed, attachments: [] })
     expect(projectUserPrompt('Normal message')).toEqual({ text: 'Normal message', attachments: [] })
   })
+
+  it('restores clickable file metadata and a foldable Vision result', () => {
+    const prompt = buildPrompt('What is shown?', [
+      { id: 'file-1', kind: 'file', label: 'long-paste.txt', text: 'Read the file.', uri: 'file:///tmp/long-paste.txt', truncated: false },
+      { id: 'vision-1', kind: 'vision', label: 'Vision: image.png', text: 'Visible text: build passed', visionModel: 'gpt-vision', truncated: false },
+    ])
+    expect(projectUserPrompt(prompt)).toEqual({
+      text: 'What is shown?',
+      attachments: [
+        { kind: 'file', label: 'long-paste.txt', uri: 'file:///tmp/long-paste.txt' },
+        { kind: 'vision', label: 'Vision: image.png', detail: 'Visible text: build passed', model: 'gpt-vision' },
+      ],
+    })
+  })
 })

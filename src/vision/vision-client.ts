@@ -3,6 +3,7 @@ import { errorMessage } from '../platform/logger.js'
 export interface VisionConfiguration {
   readonly baseUrl: string
   readonly model: string
+  readonly reasoningEffort?: string
   readonly apiKey: string
   readonly maxBytes: number
 }
@@ -27,13 +28,14 @@ export async function describeImage(config: VisionConfiguration, image: ImagePay
   try {
     response = await fetch(endpoint, {
       method: 'POST',
-      ...(signal === undefined ? {} : { signal }),
+      signal: signal ?? AbortSignal.timeout(120_000),
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${config.apiKey.trim()}`,
       },
       body: JSON.stringify({
         model: config.model.trim(),
+        ...(config.reasoningEffort?.trim() === undefined || config.reasoningEffort.trim() === '' ? {} : { reasoning_effort: config.reasoningEffort.trim() }),
         messages: [
           {
             role: 'user',
@@ -51,7 +53,10 @@ export async function describeImage(config: VisionConfiguration, image: ImagePay
   }
   if (!response.ok) {
     const detail = (await response.text().catch(() => '')).slice(0, 300)
-    throw new Error(`Vision endpoint returned HTTP ${response.status}${detail === '' ? '' : `: ${detail}`}`)
+    const hint = response.status === 401 || response.status === 403 || response.status === 502
+      ? ' Check the Vision URL, key, model access, and whether the upstream allows image requests.'
+      : ''
+    throw new Error(`Vision endpoint returned HTTP ${response.status}.${hint}${detail === '' ? '' : ` Details: ${detail}`}`)
   }
   const payload: unknown = await response.json().catch(() => undefined)
   const choice = firstChoice(payload)

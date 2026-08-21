@@ -3,7 +3,9 @@ import {
   ArrowLeftRight,
   Check,
   ChevronDown,
+  ChevronUp,
   ChevronsDown,
+  CornerDownRight,
   createElement as lucideCreateElement,
   Diff,
   Ellipsis,
@@ -11,8 +13,11 @@ import {
   FoldVertical,
   Image,
   KeyRound,
+  Layers3,
   LoaderCircle,
+  ListPlus,
   Paperclip,
+  Pencil,
   Plus,
   Send,
   Settings2,
@@ -23,6 +28,8 @@ import {
   TextQuote,
   TriangleAlert,
   X,
+  Search,
+  WandSparkles,
 } from 'lucide'
 import { marked } from 'marked'
 import type { ContextAttachment } from '../../context/context-collector.js'
@@ -38,15 +45,20 @@ const iconComponents = {
   'arrow-left-right': ArrowLeftRight,
   'check': Check,
   'chevron-down': ChevronDown,
+  'chevron-up': ChevronUp,
   'chevrons-down': ChevronsDown,
+  'corner-down-right': CornerDownRight,
   'fold-vertical': FoldVertical,
   'image': Image,
   'diff': Diff,
   'ellipsis': Ellipsis,
   'file-text': FileText,
   'key-round': KeyRound,
+  'layers-3': Layers3,
   'loader-circle': LoaderCircle,
+  'list-plus': ListPlus,
   'paperclip': Paperclip,
+  'pencil': Pencil,
   'plus': Plus,
   'send': Send,
   'settings-2': Settings2,
@@ -57,6 +69,8 @@ const iconComponents = {
   'text-quote': TextQuote,
   'triangle-alert': TriangleAlert,
   'x': X,
+  'search': Search,
+  'wand-sparkles': WandSparkles,
 } as const
 type IconName = keyof typeof iconComponents
 const contextCircumference = 2 * Math.PI * 5.5
@@ -67,12 +81,19 @@ let attachments: readonly ContextAttachment[] = []
 let sessionTabsSignature = ''
 let noticeTimer: number | undefined
 let sendPending = false
+let pendingSendPreview: HTMLElement | undefined
+let pendingSendText: string | undefined
+let pendingSendBaselineCount = 0
 let steerPendingText: string | undefined
+type DeliveryMode = 'auto' | 'queue' | 'steer'
+let deliveryMode: DeliveryMode = 'queue'
 let pasteFileThreshold = 4_096
 let scrollBottomButton: HTMLButtonElement | undefined
 let stickToBottom = true
 const collapsedMessages = new Set<string>()
 const expandedTasks = new Set<string>()
+const collapsedTasks = new Set<string>()
+const knownTaskIds = new Set<string>()
 let compactThinking = true
 let skillCatalog: readonly SkillSummary[] = []
 let skillPopoverVisible = false
@@ -80,6 +101,11 @@ let skillHighlight = 0
 let skillFilter = ''
 const sentHistory: string[] = []
 let historyIndex = -1
+let searchMatches: HTMLElement[] = []
+let searchMatchIndex = -1
+let searchScopeIds: Set<string> | undefined
+let searchComposing = false
+let searchDebounceTimer: number | undefined
 
 // Rendering state: state messages are coalesced into at most one full render per animation frame.
 let renderScheduled = false
@@ -92,6 +118,8 @@ let historyLoader: HTMLButtonElement | undefined
 let historyLoadPending = false
 let historyLoadScrollHeight = 0
 let currentSettings: WorkbenchSettings | undefined
+let currentInspection: import('../webview-protocol.js').PromptInspection | undefined
+let showAllVisionModels = false
 let pendingSignature = ''
 let controlsSignature = ''
 let attachmentsSignature = ''
@@ -100,11 +128,23 @@ const messageSignatures = new Map<string, string>()
 const autoOpenedDetails = new Set<string>()
 const userToggledDetails = new Set<string>()
 const taskFoldElements = new Map<string, HTMLButtonElement>()
+const taskGroupElements = new Map<string, HTMLElement>()
 
 marked.setOptions({ gfm: true, breaks: false })
 
 const elements = {
   sessionTabs: required('session-tabs'),
+  searchConversation: requiredButton('search-conversation'),
+  searchPanel: required('search-panel'),
+  searchInput: requiredInput('search-input'),
+  searchSelection: requiredButton('search-selection'),
+  searchPrev: requiredButton('search-prev'),
+  searchNext: requiredButton('search-next'),
+  searchClose: requiredButton('search-close'),
+  searchCase: requiredInput('search-case'),
+  searchWord: requiredInput('search-word'),
+  searchRegex: requiredInput('search-regex'),
+  searchCount: required('search-count'),
   conversation: required('conversation'),
   prompt: requiredTextArea('prompt'),
   composerResize: required('composer-resize'),
@@ -126,6 +166,7 @@ const elements = {
   contextFigures: required('context-figures'),
   modelMenu: requiredButton('model-menu'),
   send: requiredButton('send'),
+  deliveryMode: requiredButton('delivery-mode'),
   cancel: requiredButton('cancel'),
   compact: requiredButton('compact'),
   configureContext: requiredButton('configure-context'),
@@ -137,12 +178,22 @@ const elements = {
   steerNoticeText: required('steer-notice-text'),
   steerNoticeClose: requiredButton('steer-notice-close'),
   settingsDialog: required('settings-dialog'),
+  inspectorDialog: required('inspector-dialog'),
+  inspectorClose: requiredButton('inspector-close'),
+  inspectorCopy: requiredButton('inspector-copy'),
+  inspectorScope: required('inspector-scope'),
+  inspectorNote: required('inspector-note'),
+  inspectorBody: required('inspector-body'),
+  inspectPrompt: requiredButton('inspect-prompt'),
+  settingsClose: requiredButton('settings-close'),
   settingsCancel: requiredButton('settings-cancel'),
   settingsSave: requiredButton('settings-save'),
   settingBaseUrl: requiredInput('setting-base-url'),
   settingApiKey: requiredInput('setting-api-key'),
   settingVisionUrl: requiredInput('setting-vision-url'),
   settingVisionModel: requiredInput('setting-vision-model'),
+  settingVisionModelPicker: requiredSelect('setting-vision-model-picker'),
+  settingVisionReasoning: requiredSelect('setting-vision-reasoning'),
   settingVisionKey: requiredInput('setting-vision-key'),
   settingPasteThreshold: requiredInput('setting-paste-threshold'),
   settingContextWindow: requiredInput('setting-context-window'),
@@ -173,9 +224,11 @@ const popovers = [
     renderPresetOptions(state)
   }),
   popover('vision-model-menu', 'vision-model-popover', renderVisionModelOptions),
+  popover('delivery-mode', 'delivery-popover'),
 ]
 
 bindAction('attach-selection', { type: 'attachSelection' })
+elements.inspectPrompt.addEventListener('click', () => post({ type: 'inspectPrompt', text: elements.prompt.value }))
 bindAction('attach-file', { type: 'attachFile' })
 bindAction('attach-problems', { type: 'attachDiagnostics' })
 bindAction('review', { type: 'reviewChanges' })
@@ -186,26 +239,47 @@ bindAction('compact', { type: 'compact' })
 bindAction('configure-context', { type: 'configureContextWindow' })
 bindAction('cancel', { type: 'cancel' })
 requiredButton('send').addEventListener('click', send)
+for (const [id, mode] of [['delivery-auto', 'auto'], ['delivery-queue', 'queue'], ['delivery-steer', 'steer']] as const) {
+  requiredButton(id).addEventListener('click', () => {
+    deliveryMode = mode
+    renderDeliveryMode()
+    document.getElementById('delivery-popover')?.classList.add('hidden')
+  })
+}
 elements.steerNoticeClose.addEventListener('click', () => {
   steerPendingText = undefined
   elements.steerNotice.classList.add('hidden')
 })
-elements.settingsCancel.addEventListener('click', () => elements.settingsDialog.classList.add('hidden'))
+elements.settingsClose.addEventListener('click', closeSettings)
+elements.settingsCancel.addEventListener('click', closeSettings)
 elements.settingsSave.addEventListener('click', saveSettings)
+elements.inspectorClose.addEventListener('click', () => elements.inspectorDialog.classList.add('hidden'))
+elements.inspectorCopy.addEventListener('click', copyInspection)
+elements.settingVisionModelPicker.addEventListener('change', () => {
+  if (elements.settingVisionModelPicker.value !== '') elements.settingVisionModel.value = elements.settingVisionModelPicker.value
+})
+window.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !elements.settingsDialog.classList.contains('hidden')) closeSettings()
+})
 
 elements.compactThinkingButton.addEventListener('click', () => {
-  compactThinking = !compactThinking
+  const taskIds = new Set(state?.messages.flatMap(message => message.taskId === undefined ? [] : [message.taskId]) ?? [])
+  const collapseAll = [...taskIds].some(taskId => !collapsedTasks.has(taskId))
+  compactThinking = true
+  expandedTasks.clear()
+  collapsedMessages.clear()
+  if (collapseAll) {
+    for (const taskId of taskIds) collapsedTasks.add(taskId)
+    for (const [id, node] of messageElements) {
+      if (node instanceof HTMLDetailsElement) node.open = false
+      autoOpenedDetails.delete(id)
+    }
+  } else {
+    for (const taskId of taskIds) collapsedTasks.delete(taskId)
+  }
   applyCompactThinkingButton()
   const persisted = vscode.getState()
   vscode.setState({ ...(typeof persisted === 'object' && persisted !== null ? persisted : {}), compactThinking })
-  if (compactThinking) {
-    for (const [id, node] of messageElements) {
-      if (autoOpenedDetails.has(id) && !userToggledDetails.has(id) && node instanceof HTMLDetailsElement) {
-        node.open = false
-      }
-    }
-    autoOpenedDetails.clear()
-  }
   if (state !== undefined) renderConversation(state)
 })
 
@@ -330,9 +404,46 @@ window.addEventListener('message', event => {
     pendingState = message.state
     pendingAttachments = message.attachments
     pasteFileThreshold = message.state.pasteFileThreshold
+    if (pendingSendText !== undefined) {
+      const count = message.state.messages.filter(item => item.role === 'user' && item.text === pendingSendText).length
+      if (count > pendingSendBaselineCount) {
+        pendingSendPreview?.remove()
+        pendingSendPreview = undefined
+        pendingSendText = undefined
+      }
+    }
     scheduleRender()
+  } else if (message.type === 'sendStarted') {
+    sendPending = true
+    if (elements.prompt.value === message.text) {
+      elements.prompt.value = ''
+      vscode.setState({ draft: '' })
+      resizePrompt()
+    }
+    elements.prompt.focus()
+    showPendingSendPreview(message.text, message.attachments.map(item => item.label))
+    pendingSendText = message.text
+    pendingSendBaselineCount = state?.messages.filter(item => item.role === 'user' && item.text === message.text).length ?? 0
+    if (state !== undefined) renderStatus(state)
+  } else if (message.type === 'sendProgress') {
+    renderPendingVisionProgress(message.progress)
   } else if (message.type === 'sendSettled') {
     sendPending = false
+    if (!message.accepted) {
+      pendingSendPreview?.remove()
+      pendingSendPreview = undefined
+      pendingSendText = undefined
+      steerPendingText = undefined
+      elements.steerNotice.classList.add('hidden')
+      if (elements.prompt.value.trim() === '') {
+        elements.prompt.value = message.text
+        vscode.setState({ draft: message.text })
+        resizePrompt()
+      }
+    } else {
+      const status = pendingSendPreview?.querySelector('.message-send-status')
+      if (status !== null && status !== undefined) status.textContent = 'Sent'
+    }
     if (message.accepted && elements.prompt.value === message.text) {
       elements.prompt.value = ''
       vscode.setState({ draft: '' })
@@ -345,12 +456,13 @@ window.addEventListener('message', event => {
     vscode.setState({ draft: message.text })
     resizePrompt()
     elements.prompt.focus()
-  } else if (message.type === 'notice') showNotice(message.message)
+  } else if (message.type === 'notice') showNotice(message.message, message.level)
   else if (message.type === 'settings') {
     currentSettings = message.settings
     renderVisionModelOptions()
     if (message.open !== false) showSettings(message.settings, message.section)
   }
+  else if (message.type === 'promptInspection') renderPromptInspection(message.inspection)
   else if (message.type === 'skills') {
     skillCatalog = message.skills
     if (skillPopoverVisible) renderSkillPopover()
@@ -369,6 +481,44 @@ document.querySelectorAll('i[data-lucide]').forEach(element => {
 })
 resizePrompt()
 post({ type: 'ready' })
+
+elements.searchConversation.addEventListener('click', () => {
+  elements.searchPanel.classList.toggle('hidden')
+  if (!elements.searchPanel.classList.contains('hidden')) {
+    elements.searchInput.focus()
+    runConversationSearch()
+  }
+})
+elements.searchClose.addEventListener('click', () => elements.searchPanel.classList.add('hidden'))
+elements.searchSelection.addEventListener('mousedown', event => {
+  event.preventDefault()
+  const selection = window.getSelection()
+  if (selection === null || selection.isCollapsed || selection.rangeCount === 0) return
+  const ids = new Set<string>()
+  document.querySelectorAll<HTMLElement>('.message[data-message-id]').forEach(node => {
+    if (selection.containsNode(node, true) && node.dataset.messageId !== undefined) ids.add(node.dataset.messageId)
+  })
+  if (ids.size === 0) return
+  searchScopeIds = ids
+  elements.searchSelection.classList.add('active')
+  elements.searchSelection.title = 'Search within selected messages; click again to clear scope'
+  elements.searchSelection.setAttribute('aria-label', elements.searchSelection.title)
+  elements.searchInput.focus()
+  runConversationSearch()
+})
+elements.searchSelection.addEventListener('click', () => {
+  if (searchScopeIds === undefined) return
+  searchScopeIds = undefined
+  elements.searchSelection.classList.remove('active')
+  elements.searchSelection.title = 'Search within selected text range'
+  elements.searchSelection.setAttribute('aria-label', elements.searchSelection.title)
+  runConversationSearch()
+})
+elements.searchInput.addEventListener('compositionstart', () => { searchComposing = true })
+elements.searchInput.addEventListener('compositionend', () => { searchComposing = false; scheduleConversationSearch(0) })
+for (const control of [elements.searchInput, elements.searchCase, elements.searchWord, elements.searchRegex]) control.addEventListener('input', () => scheduleConversationSearch())
+elements.searchNext.addEventListener('click', () => stepConversationSearch(1))
+elements.searchPrev.addEventListener('click', () => stepConversationSearch(-1))
 
 function scheduleRender(): void {
   if (renderScheduled) return
@@ -390,9 +540,11 @@ function render(): void {
   renderConversation(state)
   renderAttachments()
   renderStatus(state)
+  if (!elements.searchPanel.classList.contains('hidden') && elements.searchInput.value !== '') scheduleConversationSearch()
   updateSteerNotice(state)
   if (historyLoadPending && !state.historyLoading) {
     historyLoadPending = false
+    renderHistoryLoader(state)
     window.requestAnimationFrame(() => {
       elements.conversation.scrollTop += Math.max(0, elements.conversation.scrollHeight - historyLoadScrollHeight)
     })
@@ -400,11 +552,148 @@ function render(): void {
   vscode.setState({ activeSessionId: state.activeSessionId })
 }
 
+function runConversationSearch(): void {
+  if (searchComposing) return
+  const query = elements.searchInput.value
+  unwrapSearchMarks()
+  clearSearchHighlight()
+  document.querySelectorAll('.search-hit, .search-current').forEach(item => item.classList.remove('search-hit', 'search-current'))
+  searchMatches = []
+  searchMatchIndex = -1
+  if (state === undefined || query === '') { elements.searchCount.textContent = ''; return }
+  let matcher: RegExp
+  try {
+    const source = elements.searchRegex.checked ? query : query.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+    const bounded = elements.searchWord.checked ? `\\b${source}\\b` : source
+    matcher = new RegExp(bounded, elements.searchCase.checked ? 'u' : 'iu')
+  } catch { elements.searchCount.textContent = 'Invalid expression'; return }
+  for (const message of state.messages) {
+    const node = messageElements.get(message.id)
+    if (node !== undefined && (searchScopeIds === undefined || searchScopeIds.has(message.id)) && matcher.test(message.text)) {
+      node.classList.add('search-hit')
+      searchMatches.push(node)
+    }
+  }
+  elements.searchCount.textContent = `${String(searchMatches.length)} matches`
+}
+
+function scheduleConversationSearch(delay = 160): void {
+  if (searchComposing) return
+  if (searchDebounceTimer !== undefined) window.clearTimeout(searchDebounceTimer)
+  searchDebounceTimer = window.setTimeout(() => {
+    searchDebounceTimer = undefined
+    runConversationSearch()
+  }, delay)
+}
+
+function unwrapSearchMarks(): void {
+  document.querySelectorAll('mark.search-text-hit').forEach(mark => {
+    mark.replaceWith(document.createTextNode(mark.textContent ?? ''))
+  })
+}
+
+function stepConversationSearch(direction: number): void {
+  if (searchMatches.length === 0) return
+  searchMatches[searchMatchIndex]?.classList.remove('search-current')
+  searchMatchIndex = (searchMatchIndex + direction + searchMatches.length) % searchMatches.length
+  const target = searchMatches[searchMatchIndex]
+  if (target === undefined) return
+  const message = state?.messages.find(item => messageElements.get(item.id) === target)
+  if (message !== undefined) {
+    if (message.taskId !== undefined) {
+      expandedTasks.add(message.taskId)
+      collapsedTasks.delete(message.taskId)
+      expandSearchTask(message.taskId)
+    }
+    collapsedMessages.delete(message.id)
+    const details = target?.closest('details') as HTMLDetailsElement | null
+    if (details !== null) details.open = true
+  }
+  const visibleTarget = searchMatches[searchMatchIndex]
+  visibleTarget?.classList.add('search-current')
+  if (visibleTarget !== undefined) highlightSearchTarget(visibleTarget)
+}
+
+function expandSearchTask(taskId: string): void {
+  const group = taskGroupElements.get(taskId)
+  if (group === undefined) return
+  group.querySelectorAll<HTMLElement>('.task-middle-hidden, .task-all-hidden').forEach(node => {
+    node.classList.remove('task-middle-hidden', 'task-all-hidden')
+  })
+  group.querySelector<HTMLElement>('.task-fold-summary')?.classList.remove('task-all-hidden')
+  const fold = taskFoldElements.get(taskId)
+  if (fold !== undefined) {
+    const label = fold.querySelector('span')
+    if (label !== null) label.textContent = label.textContent?.replace(/^Show\b/u, 'Hide') ?? 'Hide task details'
+    fold.setAttribute('aria-expanded', 'true')
+  }
+}
+
+function highlightSearchTarget(node: HTMLElement): void {
+  const css = (globalThis as typeof globalThis & { readonly CSS?: { readonly highlights?: { set: (name: string, highlight: unknown) => void; delete: (name: string) => void } } }).CSS
+  const HighlightCtor = (globalThis as typeof globalThis & { readonly Highlight?: new (...ranges: Range[]) => unknown }).Highlight
+  if (css?.highlights === undefined || HighlightCtor === undefined) return
+  css.highlights.delete('dedge-search-current')
+  const matcher = buildSearchMatcherForHighlight()
+  if (matcher === undefined) return
+  const ranges: Range[] = []
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT)
+  let current: Node | null
+  while ((current = walker.nextNode()) !== null) {
+    if (current.parentElement?.closest('summary, button, input, textarea, select') !== null) continue
+    const value = current.nodeValue ?? ''
+    matcher.lastIndex = 0
+    let match: RegExpExecArray | null
+    while ((match = matcher.exec(value)) !== null) {
+      const range = document.createRange()
+      range.setStart(current, match.index)
+      range.setEnd(current, match.index + match[0].length)
+      ranges.push(range)
+      if (match[0] === '') matcher.lastIndex += 1
+    }
+  }
+  if (ranges.length === 0) return
+  css.highlights.set('dedge-search-current', new HighlightCtor(...ranges))
+  const firstRange = ranges[0]
+  if (firstRange !== undefined) scrollSearchRangeIntoView(firstRange)
+}
+
+function scrollSearchRangeIntoView(range: Range): void {
+  const match = range.getBoundingClientRect()
+  const viewport = elements.conversation.getBoundingClientRect()
+  const panel = elements.searchPanel.classList.contains('hidden') ? undefined : elements.searchPanel.getBoundingClientRect()
+  const visibleTop = Math.max(viewport.top, panel === undefined ? viewport.top : panel.bottom + 8)
+  const visibleBottom = viewport.bottom
+  const desiredCenter = visibleTop + Math.max(0, visibleBottom - visibleTop) / 2
+  const matchCenter = match.top + match.height / 2
+  elements.conversation.scrollTo({
+    top: elements.conversation.scrollTop + matchCenter - desiredCenter,
+    behavior: 'auto',
+  })
+}
+
+function clearSearchHighlight(): void {
+  const css = (globalThis as typeof globalThis & { readonly CSS?: { readonly highlights?: { delete: (name: string) => void } } }).CSS
+  css?.highlights?.delete('dedge-search-current')
+}
+
+function buildSearchMatcherForHighlight(): RegExp | undefined {
+  const query = elements.searchInput.value
+  if (query === '') return undefined
+  try {
+    const source = elements.searchRegex.checked ? query : query.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+    const bounded = elements.searchWord.checked ? `\\b${source}\\b` : source
+    // Highlight navigation iterates with exec(); global matching is required
+    // so each iteration advances instead of returning the same match forever.
+    return new RegExp(bounded, elements.searchCase.checked ? 'gu' : 'giu')
+  } catch { return undefined }
+}
+
 function renderControls(snapshot: WorkbenchSnapshot): void {
   const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
   const signature = [
     snapshot.provider, snapshot.model, snapshot.reasoningEffort, snapshot.agentPreset,
-    snapshot.permissionMode, String(snapshot.permissionChanging), snapshot.phase,
+    snapshot.permissionMode, snapshot.approvalPolicy ?? 'ask', String(snapshot.permissionChanging), snapshot.phase,
     snapshot.modelCatalog === undefined ? 'u' : 'd',
     snapshot.presetCatalog === undefined ? 'u' : 'd',
     snapshot.permissionOptions === undefined ? null : snapshot.permissionOptions,
@@ -420,7 +709,7 @@ function renderControls(snapshot: WorkbenchSnapshot): void {
 }
 
 function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
-  const visibleSessions = snapshot.sessions.filter(session => !session.blank)
+  const visibleSessions = snapshot.sessions.filter(session => !session.blank || session.id === snapshot.activeSessionId)
   const signature = JSON.stringify({
     activeSessionId: snapshot.activeSessionId,
     sessions: visibleSessions.map(session => [session.id, session.title, session.running, session.operation]),
@@ -445,6 +734,8 @@ function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
         ? `${session.title} - archive in progress`
         : session.operation === 'cancelling'
           ? `${session.title} - stopping response`
+          : session.operation === 'compacting'
+            ? `${session.title} - compacting context`
           : `${session.title}${session.running ? ' - response in progress' : ''}`
     const label = document.createElement('span')
     label.className = 'session-tab-label'
@@ -463,6 +754,8 @@ function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
         ? 'Archive in progress'
         : session.operation === 'cancelling'
           ? 'Stop in progress'
+          : session.operation === 'compacting'
+            ? 'Context compaction in progress'
           : session.running ? 'Finish or cancel the response before managing this session' : `Archive or delete ${session.title}`
     manage.setAttribute('aria-label', manage.title)
     const icon = svgIcon(session.operation === undefined ? 'ellipsis' : 'loader-circle')
@@ -575,27 +868,30 @@ function renderPermissionOptions(snapshot: WorkbenchSnapshot | undefined): void 
   if (snapshot === undefined) return
   const fallback = [
     { id: 'read-only', label: 'Read only', short: 'Read only', description: 'No model-driven file mutations' },
-    { id: 'workspace-write', label: 'Workspace write', short: 'Workspace', description: 'Workspace writes; some Windows external tools require one-time approval' },
+    { id: 'workspace-write', label: 'Ask for approval', short: 'Ask', description: 'Workspace writes; ask before wider or unsafe actions' },
+    { id: 'approve-for-me', label: 'Approve for me', short: 'Approve', description: 'Keep workspace sandboxing and allow each approval once' },
     { id: 'danger-full-access', label: 'Full access', short: 'Full access', description: 'Unrestricted writes without approval prompts' },
   ] as const
   const options = snapshot.permissionOptions?.filter(option => option.value !== 'custom').map(option => ({
     id: option.value,
     label: option.name,
-    short: option.value === 'workspace-write' ? 'Workspace' : option.value === 'danger-full-access' ? 'Full access' : option.name,
+    short: option.value === 'workspace-write' ? 'Ask' : option.value === 'approve-for-me' ? 'Approve' : option.value === 'danger-full-access' ? 'Full access' : option.name,
     description: option.description ?? '',
   })) ?? fallback
-  const current = options.find(option => option.id === snapshot.permissionMode) ?? options[1]
+  const permissionOptions = options.some(option => option.id === 'approve-for-me') ? options : [...options.slice(0, 2), fallback[2], ...options.slice(2)]
+  const currentId = snapshot.approvalPolicy === 'approve-for-me' ? 'approve-for-me' : snapshot.permissionMode
+  const current = permissionOptions.find(option => option.id === currentId) ?? permissionOptions[1]
   elements.permissionLabel.textContent = current?.short ?? snapshot.permissionMode
   const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
-  const disabled = snapshot.permissionChanging || snapshot.phase !== 'connected' || active === undefined || active.running
+  const disabled = snapshot.permissionChanging || snapshot.phase !== 'connected' || active === undefined || active.running || active.operation !== undefined
   elements.permissionMenu.disabled = disabled
   elements.permissionMenu.title = snapshot.permissionChanging
     ? 'Changing file permissions...'
     : active?.running === true ? 'Stop the current response before changing file permissions' : 'File access permissions'
-  elements.permissionOptions.replaceChildren(...options.map(option => menuOption({
+  elements.permissionOptions.replaceChildren(...permissionOptions.map(option => menuOption({
     label: option.label,
     description: option.description,
-    selected: option.id === snapshot.permissionMode,
+    selected: option.id === currentId,
     disabled,
     handler: () => {
       post({ type: 'selectPermission', permission: option.id })
@@ -614,7 +910,10 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     userToggledDetails.clear()
     collapsedMessages.clear()
     expandedTasks.clear()
+    collapsedTasks.clear()
+    knownTaskIds.clear()
     taskFoldElements.clear()
+    taskGroupElements.clear()
     stickToBottom = true
     emptyNode = undefined
     elements.conversation.replaceChildren()
@@ -645,6 +944,16 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
   }
 
   const messages = snapshot.messages ?? []
+  const currentTaskIds = new Set(messages.flatMap(message => message.taskId === undefined ? [] : [message.taskId]))
+  for (const [taskId, group] of taskGroupElements) {
+    if (currentTaskIds.has(taskId)) continue
+    group.remove()
+    taskGroupElements.delete(taskId)
+    taskFoldElements.delete(taskId)
+    knownTaskIds.delete(taskId)
+    collapsedTasks.delete(taskId)
+    expandedTasks.delete(taskId)
+  }
   const seen = new Set<string>()
   let streaming = false
   for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
@@ -657,11 +966,16 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
       node = renderMessage(message)
       messageElements.set(message.id, node)
       messageSignatures.set(message.id, signature)
-      const next = messages.slice(messageIndex + 1).map(item => messageElements.get(item.id)).find(item => item?.isConnected)
-      elements.conversation.insertBefore(node, next ?? pendingAnchor)
     } else if (signature !== messageSignatures.get(message.id)) {
       messageSignatures.set(message.id, signature)
       updateMessage(node, message)
+    }
+    if (!node.isConnected) {
+      const group = message.taskId === undefined ? undefined : taskGroupElements.get(message.taskId)
+      const next = messages.slice(messageIndex + 1).map(item => messageElements.get(item.id)).find(item => item?.isConnected)
+      if (group !== undefined) group.append(node)
+      else if (next !== undefined && next.parentElement === elements.conversation) elements.conversation.insertBefore(node, next)
+      else elements.conversation.insertBefore(node, pendingAnchor)
     }
     if (message.status === 'streaming') streaming = true
   }
@@ -672,10 +986,13 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     messageSignatures.delete(id)
   }
   renderTaskFolds(messages)
+  reorderConversationUnits(messages)
+  if (pendingSendPreview !== undefined && pendingSendPreview.isConnected && pendingAnchor !== undefined) {
+    elements.conversation.insertBefore(pendingSendPreview, pendingAnchor)
+  }
+  renderMessageSegments(messages)
   if (historyLoader !== undefined) {
-    historyLoader.classList.toggle('hidden', !snapshot.hasMoreHistory && !snapshot.historyLoading)
-    historyLoader.disabled = snapshot.historyLoading
-    historyLoader.textContent = snapshot.historyLoading ? 'Loading earlier messages...' : 'Load earlier messages'
+    renderHistoryLoader(snapshot)
   }
 
   const approvals = snapshot.approvals
@@ -702,7 +1019,86 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     const conversation = elements.conversation
     conversation.scrollTop = Math.max(0, conversation.scrollHeight - conversation.clientHeight)
   }
+  applyCompactThinkingButton()
   updateScrollBottomButton()
+}
+
+function reorderConversationUnits(messages: readonly WorkbenchMessage[]): void {
+  if (pendingAnchor === undefined) return
+  const seen = new Set<HTMLElement>()
+  for (const message of messages) {
+    const node = messageElements.get(message.id)
+    if (node === undefined) continue
+    const unit = message.taskId === undefined ? node : taskGroupElements.get(message.taskId) ?? node
+    if (seen.has(unit)) continue
+    seen.add(unit)
+    elements.conversation.insertBefore(unit, pendingAnchor)
+  }
+}
+
+function renderHistoryLoader(snapshot: WorkbenchSnapshot): void {
+  if (historyLoader === undefined) return
+  const loading = historyLoadPending || snapshot.historyLoading
+  const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
+  const operationBlocked = active?.operation !== undefined
+  historyLoader.classList.toggle('hidden', !snapshot.hasMoreHistory && !loading)
+  historyLoader.disabled = loading || operationBlocked
+  historyLoader.title = operationBlocked ? 'Wait for the current session operation to finish' : ''
+  historyLoader.replaceChildren()
+  if (loading) {
+    const spinner = svgIcon('loader-circle')
+    spinner.classList.add('history-loader-spinner')
+    historyLoader.append(spinner, document.createTextNode('Loading earlier messages...'))
+  } else {
+    historyLoader.textContent = 'Load earlier messages'
+  }
+}
+
+function showPendingSendPreview(text: string, attachmentLabels: readonly string[]): void {
+  pendingSendPreview?.remove()
+  pendingSendPreview = document.createElement('article')
+  pendingSendPreview.className = 'message user pending-send'
+  const head = document.createElement('div')
+  head.className = 'message-head'
+  const label = document.createElement('span')
+  label.className = 'message-role-label'
+  label.textContent = 'You'
+  const status = document.createElement('span')
+  status.className = 'message-send-status'
+  status.textContent = 'Sending...'
+  head.append(label, status)
+  pendingSendPreview.append(head)
+  if (attachmentLabels.length > 0) pendingSendPreview.append(buildAttachmentsRow(attachmentLabels.map(label => ({ kind: 'file' as const, label }))))
+  if (text.trim() !== '') {
+    const copy = document.createElement('div')
+    copy.className = 'message-copy'
+    copy.textContent = text
+    pendingSendPreview.append(copy)
+  }
+  if (pendingAnchor !== undefined) elements.conversation.insertBefore(pendingSendPreview, pendingAnchor)
+  else elements.conversation.append(pendingSendPreview)
+  elements.conversation.scrollTop = elements.conversation.scrollHeight
+}
+
+function renderPendingVisionProgress(progress: import('../../session/types.js').WorkbenchSendProgress): void {
+  if (pendingSendPreview === undefined) return
+  let details = Array.from(pendingSendPreview.querySelectorAll<HTMLDetailsElement>('.vision-process'))
+    .find(item => item.dataset.label === progress.label)
+  if (details === undefined) {
+    details = document.createElement('details')
+    details.className = 'vision-process'
+    details.dataset.label = progress.label
+    const summary = document.createElement('summary')
+    summary.append(svgIcon('image'), document.createElement('span'))
+    details.append(summary, document.createElement('div'))
+    pendingSendPreview.append(details)
+  }
+  const label = details.querySelector('summary span')
+  const body = details.querySelector('div')
+  if (label !== null) label.textContent = progress.type === 'vision-start'
+    ? `Vision · ${progress.model} · reading image...`
+    : `Vision · ${progress.model} · complete`
+  if (body !== null && progress.type === 'vision-complete') body.textContent = progress.text
 }
 
 function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
@@ -717,8 +1113,14 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
     if (groups.has(taskId)) continue
     node.remove()
     taskFoldElements.delete(taskId)
+    taskGroupElements.get(taskId)?.remove()
+    taskGroupElements.delete(taskId)
   }
   for (const [taskId, items] of groups) {
+    if (!knownTaskIds.has(taskId)) {
+      knownTaskIds.add(taskId)
+      collapsedTasks.add(taskId)
+    }
     const first = items.find(item => item.role === 'user') ?? items[0]
     const last = [...items].reverse().find(item => item.role === 'assistant' || item.role === 'system') ?? items.at(-1)
     if (first === undefined || last === undefined || first.id === last.id) continue
@@ -729,6 +1131,10 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
       const intermediate = middle.some(candidate => candidate.id === item.id)
       node?.classList.toggle('task-middle-hidden', collapsed && intermediate)
       node?.classList.toggle('task-intermediate', intermediate)
+      if (item.role === 'user') {
+        const role = node?.querySelector('.message-role-label')
+        if (role !== null && role !== undefined) role.textContent = intermediate ? 'You · Steer' : 'You'
+      }
     }
 
     let fold = taskFoldElements.get(taskId)
@@ -743,6 +1149,12 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
         if (state !== undefined) renderConversation(state)
       })
       taskFoldElements.set(taskId, fold)
+    }
+    let group = taskGroupElements.get(taskId)
+    if (group === undefined) {
+      group = document.createElement('section')
+      group.className = 'task-group'
+      taskGroupElements.set(taskId, group)
     }
     const reasoning = middle.filter(item => item.role === 'reasoning').length
     const tools = middle.filter(item => item.role === 'tool').length
@@ -759,8 +1171,45 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
     fold.title = collapsed ? 'Show the intermediate work in this completed task' : 'Hide the intermediate work in this completed task'
     fold.setAttribute('aria-expanded', String(!collapsed))
     fold.querySelector('svg')?.classList.toggle('collapsed', collapsed)
+    const nodes = items.map(item => messageElements.get(item.id)).filter((node): node is HTMLElement => node !== undefined)
     const firstNode = messageElements.get(first.id)
-    if (firstNode !== undefined && fold.previousElementSibling !== firstNode) firstNode.after(fold)
+    if (firstNode !== undefined && nodes.length > 1) {
+      if (group.parentElement !== elements.conversation) elements.conversation.insertBefore(group, firstNode)
+      let taskToggle = group.querySelector<HTMLButtonElement>('.task-collapse-all')
+      if (taskToggle === null) {
+        taskToggle = document.createElement('button')
+        taskToggle.type = 'button'
+        taskToggle.className = 'task-collapse-all'
+        taskToggle.addEventListener('click', () => {
+          if (collapsedTasks.has(taskId)) collapsedTasks.delete(taskId)
+          else collapsedTasks.add(taskId)
+          if (state !== undefined) renderConversation(state)
+        })
+      }
+      const wholeCollapsed = collapsedTasks.has(taskId)
+      const firstPreview = first.text.replace(/\s+/gu, ' ').slice(0, 72)
+      taskToggle.replaceChildren(svgIcon('chevron-down'), document.createTextNode(wholeCollapsed ? `Show task · ${firstPreview}` : 'Collapse entire task'))
+      taskToggle.setAttribute('aria-expanded', String(!wholeCollapsed))
+      taskToggle.querySelector('svg')?.classList.toggle('collapsed', wholeCollapsed)
+      for (const node of nodes) node.classList.toggle('task-all-hidden', wholeCollapsed)
+      fold.classList.toggle('task-all-hidden', wholeCollapsed)
+      const remainingNodes = nodes.filter(node => node !== firstNode)
+      group.replaceChildren(taskToggle, firstNode, fold, ...remainingNodes)
+    }
+  }
+}
+
+function renderMessageSegments(messages: readonly WorkbenchMessage[]): void {
+  let segmentOwner: WorkbenchMessage | undefined
+  for (const message of messages) {
+    const node = messageElements.get(message.id)
+    if (node === undefined) continue
+    if (message.role !== 'reasoning' && message.role !== 'tool') {
+      segmentOwner = message
+      node.classList.remove('message-segment-hidden')
+      continue
+    }
+    node.classList.toggle('message-segment-hidden', segmentOwner !== undefined && collapsedMessages.has(segmentOwner.id))
   }
 }
 
@@ -784,11 +1233,13 @@ function updateScrollBottomButton(): void {
 }
 
 function applyCompactThinkingButton(): void {
-  elements.compactThinkingButton.classList.toggle('active', compactThinking)
-  elements.compactThinkingButton.setAttribute('aria-pressed', String(compactThinking))
-  elements.compactThinkingButton.title = compactThinking
-    ? 'Compact completed tasks and collapse thinking/tool details'
-    : 'Show completed task details and expanded live thinking'
+  const taskIds = new Set(state?.messages.flatMap(message => message.taskId === undefined ? [] : [message.taskId]) ?? [])
+  const allCollapsed = taskIds.size > 0 && [...taskIds].every(taskId => collapsedTasks.has(taskId))
+  elements.compactThinkingButton.classList.toggle('active', allCollapsed)
+  elements.compactThinkingButton.setAttribute('aria-pressed', String(allCollapsed))
+  elements.compactThinkingButton.title = allCollapsed
+    ? 'Expand tasks to the first level; nested process, Vision, reasoning, and tool details stay collapsed'
+    : 'Recursively collapse every task and nested detail'
   elements.compactThinkingButton.setAttribute('aria-label', elements.compactThinkingButton.title)
 }
 
@@ -837,6 +1288,7 @@ function renderMessage(message: WorkbenchMessage): HTMLElement {
   if (message.role === 'reasoning' || message.role === 'tool') {
     const details = document.createElement('details')
     details.className = `message ${message.role}`
+    details.dataset.messageId = message.id
     if (message.status === 'streaming' && !userToggledDetails.has(message.id) && !compactThinking) {
       details.open = true
       autoOpenedDetails.add(message.id)
@@ -864,10 +1316,16 @@ function renderMessage(message: WorkbenchMessage): HTMLElement {
       const latest = state?.messages.find(item => item.id === message.id)
       if (latest !== undefined) body.replaceChildren(renderMessageBody(latest))
     })
+    details.addEventListener('click', event => {
+      if (!(event.target instanceof HTMLElement) || event.target.closest('summary') === null) return
+      if (event.target.closest('button, a, input, textarea, select') !== null) return
+      userToggledDetails.add(message.id)
+    })
     return details
   }
   const article = document.createElement('article')
   article.className = `message ${message.role}`
+  article.dataset.messageId = message.id
   const head = buildMessageHead(message)
   article.append(head.head)
   if (message.attachments !== undefined && message.attachments.length > 0) {
@@ -930,6 +1388,36 @@ function buildMessageHead(message: WorkbenchMessage): { head: HTMLDivElement; to
   label.className = 'message-role-label'
   label.textContent = roleLabel(message.role)
   head.append(toggle, label)
+  if (message.role === 'user' && message.text !== '') {
+    const snapshot = state
+    const active = snapshot?.sessions.find(session => session.id === snapshot.activeSessionId)
+    const latestUserId = snapshot?.messages.filter(item => item.role === 'user').at(-1)?.id
+    const hasActiveTurn = snapshot?.messages.some(item => item.status === 'streaming' || item.taskComplete === false) === true
+    if (message.id === latestUserId && active?.running === true && hasActiveTurn && active.operation === undefined) {
+      const actions = document.createElement('span')
+      actions.className = 'message-actions'
+      const edit = document.createElement('button')
+      edit.type = 'button'
+      edit.className = 'message-action'
+      edit.title = 'Edit this prompt and send it as a new message'
+      edit.append(svgIcon('pencil'), document.createTextNode('Edit'))
+      edit.addEventListener('click', () => {
+        elements.prompt.value = message.text
+        resizePrompt()
+        const persisted = vscode.getState()
+        vscode.setState({ ...(typeof persisted === 'object' && persisted !== null ? persisted : {}), draft: message.text })
+        elements.prompt.focus()
+      })
+      const steer = document.createElement('button')
+      steer.type = 'button'
+      steer.className = 'message-action'
+      steer.title = 'Steer the active turn with this prompt'
+      steer.append(svgIcon('corner-down-right'), document.createTextNode('Steer'))
+      steer.addEventListener('click', () => post({ type: 'send', text: message.text, mode: 'steer' }))
+      actions.append(edit, steer)
+      head.append(actions)
+    }
+  }
   return { head, toggle }
 }
 
@@ -943,6 +1431,7 @@ function bindCollapseToggle(article: HTMLElement, toggle: HTMLButtonElement, mes
       collapsedMessages.add(message.id)
       applyCollapse(article, message, true)
     }
+    if (state !== undefined) renderMessageSegments(state.messages)
   })
 }
 
@@ -981,6 +1470,17 @@ function buildAttachmentsRow(attachments: readonly NonNullable<WorkbenchMessage[
   const row = document.createElement('div')
   row.className = 'message-attachments'
   for (const attachment of attachments) {
+    if (attachment.kind === 'vision') {
+      const details = document.createElement('details')
+      details.className = 'vision-process'
+      const summary = document.createElement('summary')
+      summary.append(svgIcon('image'), document.createTextNode(`Vision · ${attachment.model ?? 'image model'} · complete`))
+      const body = document.createElement('div')
+      body.textContent = attachment.detail ?? 'Vision result is unavailable in this history entry.'
+      details.append(summary, body)
+      row.append(details)
+      continue
+    }
     const item = document.createElement('span')
     item.className = 'message-attachment'
     item.title = `${attachment.label} - content hidden from the conversation view`
@@ -989,6 +1489,13 @@ function buildAttachmentsRow(attachments: readonly NonNullable<WorkbenchMessage[
     label.className = 'message-attachment-label'
     label.textContent = attachment.label
     item.append(label)
+    if (attachment.uri !== undefined) {
+      item.classList.add('attachment-openable')
+      item.title = `Open ${attachment.label} in VS Code`
+      item.addEventListener('click', () => {
+        if (attachment.uri !== undefined) post({ type: 'openAttachment', uri: attachment.uri })
+      })
+    }
     row.append(item)
   }
   return row
@@ -1144,11 +1651,19 @@ function renderAttachments(): void {
     label.textContent = attachment.pastedPath !== undefined
       ? `${display} · saved to file`
       : `${display}${attachment.truncated ? ' [truncated]' : ''}`
+    if (attachment.pastedPath !== undefined || attachment.uri !== undefined) {
+      chip.classList.add('attachment-openable')
+      chip.title = 'Open attached file in VS Code'
+      chip.addEventListener('click', () => post({ type: 'openAttachment', id: attachment.id }))
+    }
     const remove = document.createElement('button')
     remove.title = 'Remove attachment'
     remove.setAttribute('aria-label', 'Remove attachment')
     remove.append(svgIcon('x'))
-    remove.addEventListener('click', () => post({ type: 'removeAttachment', id: attachment.id }))
+    remove.addEventListener('click', event => {
+      event.stopPropagation()
+      post({ type: 'removeAttachment', id: attachment.id })
+    })
     chip.append(label, remove)
     return chip
   }))
@@ -1158,30 +1673,45 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
   const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
   const running = active?.running === true
   const cancelling = active?.operation === 'cancelling'
+  const compacting = active?.operation === 'compacting'
   const modelUnavailable = snapshot.modelCatalog?.routable === false
   const sendUnavailable = promptUnavailableReason(snapshot)
   const steer = steerAvailable(snapshot)
+  renderDeliveryMode()
   const modelControlsUnavailable = modelControlsUnavailableReason(snapshot)
   const compactionUnavailable = snapshot.agentPreset === 'minimal'
-  elements.cancel.classList.toggle('hidden', !running)
+  const hasActiveTurn = snapshot.messages.some(message => message.status === 'streaming' || message.taskComplete === false)
+  elements.cancel.classList.toggle('hidden', !running || !hasActiveTurn)
   elements.cancel.disabled = cancelling
   elements.cancel.title = cancelling ? 'Stop request is being processed' : 'Stop'
   elements.cancel.setAttribute('aria-label', elements.cancel.title)
   elements.send.classList.toggle('hidden', false)
-  elements.send.classList.toggle('steer', running && steer)
-  elements.send.disabled = sendPending || (sendUnavailable !== undefined && !steer)
+  const effectiveSteer = steer && (deliveryMode === 'steer' || deliveryMode === 'auto')
+  elements.send.classList.toggle('steer', effectiveSteer)
+  elements.send.disabled = sendPending || (sendUnavailable !== undefined && !effectiveSteer)
   elements.send.title = sendPending
     ? 'Sending...'
-    : steer
-      ? 'Send immediately - the running response will address this prompt'
+    : effectiveSteer
+      ? 'Steer: deliver this prompt into the active turn'
       : sendUnavailable ?? 'Send'
   elements.send.setAttribute('aria-label', elements.send.title)
   elements.modelMenu.disabled = modelControlsUnavailable !== undefined
   elements.modelMenu.title = modelControlsUnavailable ?? 'Model, reasoning, and agent preset'
   elements.modelMenu.setAttribute('aria-label', elements.modelMenu.title)
-  const compactDisabled = snapshot.phase !== 'connected' || active === undefined || running || active.operation !== undefined || compactionUnavailable
+  const compactDisabled = snapshot.phase !== 'connected' || active === undefined || running || sendPending || active.operation !== undefined || compactionUnavailable
   elements.compact.disabled = compactDisabled
-  elements.compact.title = running
+  const compactIconState = compacting ? 'compacting' : 'idle'
+  if (elements.compact.dataset.state !== compactIconState) {
+    elements.compact.dataset.state = compactIconState
+    const icon = svgIcon(compacting ? 'loader-circle' : 'shrink')
+    if (compacting) icon.classList.add('session-operation-icon')
+    elements.compact.replaceChildren(icon)
+  }
+  elements.compact.title = compacting
+    ? 'Compacting context; session actions are temporarily locked'
+    : sendPending
+      ? 'Wait for the current message to finish submitting before compacting context'
+    : running
     ? 'Compact unavailable while a response is in progress'
     : compactionUnavailable
       ? 'Compact unavailable in the Minimal agent preset'
@@ -1198,10 +1728,28 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
   const phase = snapshot.runtime.phase
   elements.statusDot.className = `status-dot ${phase === 'ready' ? 'ready' : phase === 'error' ? 'error' : phase === 'starting' || phase === 'resolving' ? 'busy' : ''}`
   elements.statusText.textContent = phase === 'ready'
-    ? modelUnavailable
+    ? compacting
+      ? 'Compacting context...'
+      : modelUnavailable
       ? 'Selected model is unavailable'
       : `${snapshot.runtime.version ?? 'Harness'}${snapshot.hasApiKey ? '' : ' - API key required'}`
     : phase === 'error' ? snapshot.runtime.error ?? snapshot.error ?? 'Runtime error' : phase
+}
+
+function renderDeliveryMode(): void {
+  const label = deliveryMode === 'auto' ? 'Auto' : deliveryMode === 'steer' ? 'Steer' : 'Queue'
+  const detail = deliveryMode === 'auto'
+    ? 'Running: steer | Idle: queue'
+    : deliveryMode === 'steer' ? 'Inject into active turn' : 'After current turn'
+  elements.deliveryMode.title = `Delivery mode: ${label} (${detail})`
+  elements.deliveryMode.setAttribute('aria-label', elements.deliveryMode.title)
+  elements.deliveryMode.replaceChildren(svgIcon(deliveryMode === 'auto' ? 'wand-sparkles' : deliveryMode === 'steer' ? 'corner-down-right' : 'list-plus'))
+  elements.deliveryMode.classList.toggle('steer', deliveryMode === 'steer')
+  for (const [id, mode] of [['delivery-auto', 'auto'], ['delivery-steer', 'steer'], ['delivery-queue', 'queue']] as const) {
+    const option = requiredButton(id)
+    option.classList.toggle('selected', deliveryMode === mode)
+    option.setAttribute('aria-checked', String(deliveryMode === mode))
+  }
 }
 
 function renderContextMeter(snapshot: WorkbenchSnapshot): void {
@@ -1290,10 +1838,10 @@ function send(): void {
   }
   historyIndex = -1
   renderStatus(state)
-  const steer = steerAvailable(state)
+  const steer = steerAvailable(state) && (deliveryMode === 'steer' || deliveryMode === 'auto')
   if (steer) {
     steerPendingText = value
-    elements.steerNoticeText.textContent = 'Steer message queued - it will be delivered after the current reasoning or tool step finishes.'
+    elements.steerNoticeText.textContent = 'Steer message sent to the active turn.'
     elements.steerNotice.classList.remove('hidden')
   }
   post({ type: 'send', text: value, ...(steer ? { mode: 'steer' } : {}) })
@@ -1496,6 +2044,7 @@ function requestOlderHistory(): void {
   if (state?.hasMoreHistory !== true || state.historyLoading || historyLoadPending) return
   historyLoadPending = true
   historyLoadScrollHeight = elements.conversation.scrollHeight
+  renderHistoryLoader(state)
   post({ type: 'loadOlderHistory' })
 }
 
@@ -1581,9 +2130,10 @@ function closePopovers(): void {
   }
 }
 
-function showNotice(message: string): void {
+function showNotice(message: string, level: 'info' | 'warning' | 'error'): void {
   if (noticeTimer !== undefined) window.clearTimeout(noticeTimer)
   elements.notice.textContent = message
+  elements.notice.className = `notice ${level}`
   elements.notice.classList.remove('hidden')
   noticeTimer = window.setTimeout(() => {
     elements.notice.classList.add('hidden')
@@ -1598,6 +2148,18 @@ function showSettings(settings: WorkbenchSettings, section?: 'connection' | 'vis
   elements.settingApiKey.placeholder = settings.hasApiKey ? 'Configured - leave blank to keep' : 'Enter API key'
   elements.settingVisionUrl.value = settings.visionBaseUrl
   elements.settingVisionModel.value = settings.visionModel
+  elements.settingVisionReasoning.value = settings.visionReasoningEffort
+  const pickerModels = recommendedVisionModels(settings.visionModels)
+  const placeholder = document.createElement('option')
+  placeholder.value = ''
+  placeholder.textContent = pickerModels.length === 0 ? 'Save URL and key to load models...' : 'Select an endpoint model...'
+  elements.settingVisionModelPicker.replaceChildren(placeholder, ...pickerModels.map(model => {
+    const option = document.createElement('option')
+    option.value = model
+    option.textContent = model
+    return option
+  }))
+  elements.settingVisionModelPicker.value = pickerModels.includes(settings.visionModel) ? settings.visionModel : ''
   elements.settingVisionKey.value = ''
   elements.settingVisionKey.placeholder = settings.hasVisionApiKey ? 'Configured - leave blank to keep' : 'Enter Vision API key'
   elements.settingPasteThreshold.value = String(settings.pasteFileThreshold)
@@ -1610,10 +2172,83 @@ function showSettings(settings: WorkbenchSettings, section?: 'connection' | 'vis
   if (section !== undefined) document.getElementById(`settings-${section}`)?.scrollIntoView({ block: 'start' })
 }
 
+function closeSettings(): void {
+  elements.settingsDialog.classList.add('hidden')
+  elements.prompt.focus()
+}
+
+function renderPromptInspection(inspection: import('../webview-protocol.js').PromptInspection): void {
+  currentInspection = inspection
+  elements.inspectorDialog.classList.remove('hidden')
+  elements.inspectorScope.textContent = inspection.scope
+  elements.inspectorNote.textContent = inspection.limitation
+  const layers = inspection.layers.map(layer => ({ ...layer }))
+  const render = (): void => {
+    elements.inspectorBody.replaceChildren(...layers.map((layer, index) => {
+      const card = document.createElement('article')
+      card.className = 'inspector-layer'
+      card.draggable = true
+      card.dataset.layerId = layer.id
+      const grip = document.createElement('span')
+      grip.textContent = '::'
+      grip.title = 'Drag to reorder this preview layer'
+      const copy = document.createElement('div')
+      const title = document.createElement('div')
+      title.className = 'inspector-layer-title'
+      title.textContent = layer.label
+      const meta = document.createElement('div')
+      meta.className = 'inspector-layer-meta'
+      meta.textContent = `${layer.source} · ${String(layer.bytes)} bytes · ${layer.detail}`
+      const details = document.createElement('details')
+      const summary = document.createElement('summary')
+      summary.textContent = 'View content'
+      const pre = document.createElement('pre')
+      pre.textContent = layer.text
+      details.append(summary, pre)
+      copy.append(title, meta, details)
+      const enabled = document.createElement('input')
+      enabled.type = 'checkbox'
+      enabled.checked = layer.enabled
+      enabled.title = 'Include this layer in the local preview'
+      enabled.addEventListener('change', () => {
+        const found = layers[index]
+        if (found !== undefined) layers[index] = { ...found, enabled: enabled.checked }
+        render()
+      })
+      card.append(grip, copy, enabled)
+      card.addEventListener('dragstart', () => card.classList.add('dragging'))
+      card.addEventListener('dragend', () => card.classList.remove('dragging'))
+      card.addEventListener('dragover', event => event.preventDefault())
+      card.addEventListener('drop', event => {
+        event.preventDefault()
+        const from = layers.findIndex(item => item.id === document.querySelector('.inspector-layer.dragging')?.getAttribute('data-layer-id'))
+        if (from < 0 || from === index) return
+        const [moved] = layers.splice(from, 1)
+        if (moved !== undefined) layers.splice(index, 0, moved)
+        render()
+      })
+      return card
+    }))
+    const preview = document.createElement('pre')
+    preview.className = 'inspector-layer'
+    preview.textContent = layers.filter(layer => layer.enabled).map(layer => `### ${layer.label}\n${layer.text}`).join('\n\n')
+    elements.inspectorBody.append(preview)
+  }
+  render()
+}
+
+function copyInspection(): void {
+  if (currentInspection === undefined) return
+  const text = currentInspection.layers.map(layer => `### ${layer.label}\n${layer.text}`).join('\n\n')
+  post({ type: 'copyInspection', text })
+}
+
 function renderVisionModelOptions(): void {
   const settings = currentSettings
   if (settings === undefined) return
-  const models = settings.visionModels.length > 0 ? settings.visionModels : (settings.visionModel === '' ? [] : [settings.visionModel])
+  const allModels = settings.visionModels.length > 0 ? settings.visionModels : (settings.visionModel === '' ? [] : [settings.visionModel])
+  const recommended = recommendedVisionModels(allModels)
+  const models = showAllVisionModels ? allModels : recommended
   const options = models.map(model => menuOption({
     label: model,
     selected: model === settings.visionModel,
@@ -1622,8 +2257,19 @@ function renderVisionModelOptions(): void {
       closePopovers()
     },
   }))
+  if (allModels.length > recommended.length) options.push(menuOption({
+    label: showAllVisionModels ? 'Show recommended models only' : `Show all endpoint models (${String(allModels.length)})`,
+    description: showAllVisionModels ? 'Hide obvious image-generation and code-review-only models' : 'Includes models that may not accept image input',
+    selected: false,
+    handler: () => { showAllVisionModels = !showAllVisionModels; renderVisionModelOptions() },
+  }))
   options.push(menuOption({ label: 'Configure vision...', selected: false, handler: () => { post({ type: 'openVisionSettings' }); closePopovers() } }))
   elements.visionModelOptions.replaceChildren(...options)
+}
+
+function recommendedVisionModels(models: readonly string[]): string[] {
+  const excluded = /(?:^|[-_.])(image|imagen|dall-?e|flux|sdxl|stable-?diffusion|seedream|sora|code-?review|auto-?review)(?:$|[-_.0-9])/iu
+  return [...new Set(models)].filter(model => !excluded.test(model)).sort((left, right) => left.localeCompare(right))
 }
 
 function saveSettings(): void {
@@ -1638,6 +2284,7 @@ function saveSettings(): void {
       hasApiKey: previous.hasApiKey,
       visionBaseUrl: elements.settingVisionUrl.value.trim(),
       visionModel: elements.settingVisionModel.value.trim(),
+      visionReasoningEffort: elements.settingVisionReasoning.value,
       visionModels: previous.visionModels,
       hasVisionApiKey: previous.hasVisionApiKey,
       pasteFileThreshold,

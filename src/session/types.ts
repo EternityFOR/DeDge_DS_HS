@@ -2,12 +2,19 @@ import type { RuntimeState } from '../runtime/types.js'
 import type { ContextPressureProjection, ModelCatalog, PermissionProjection, PresetCatalog } from '../gateway/protocol.js'
 
 export type WorkbenchPhase = 'idle' | 'connecting' | 'connected' | 'error'
-export type SessionOperation = 'archiving' | 'deleting' | 'cancelling'
+export type SessionOperation = 'archiving' | 'deleting' | 'cancelling' | 'compacting'
 
 export interface WorkbenchMessageAttachment {
-  readonly kind: 'selection' | 'file' | 'diagnostics' | 'handoff'
+  readonly kind: 'selection' | 'file' | 'diagnostics' | 'handoff' | 'vision'
   readonly label: string
+  readonly uri?: string
+  readonly detail?: string
+  readonly model?: string
 }
+
+export type WorkbenchSendProgress =
+  | { readonly type: 'vision-start'; readonly label: string; readonly model: string }
+  | { readonly type: 'vision-complete'; readonly label: string; readonly model: string; readonly text: string }
 
 export interface WorkbenchMessage {
   readonly id: string
@@ -77,6 +84,7 @@ export interface WorkbenchSnapshot {
   readonly modelCatalog?: ModelCatalog
   readonly presetCatalog?: PresetCatalog
   readonly permissionMode: string
+  readonly approvalPolicy?: string
   readonly permissionOptions?: PermissionProjection['options']
   readonly permissionChanging: boolean
   readonly contextWindowTokens: number

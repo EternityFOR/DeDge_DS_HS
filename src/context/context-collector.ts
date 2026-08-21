@@ -7,7 +7,7 @@ import { imageExtensionMimeType, mimeTypeForDataUrl, stripDataUrlPrefix } from '
 
 export interface ContextAttachment {
   readonly id: string
-  readonly kind: 'selection' | 'file' | 'diagnostics' | 'image' | 'skill'
+  readonly kind: 'selection' | 'file' | 'diagnostics' | 'image' | 'vision' | 'skill'
   readonly label: string
   readonly text: string
   readonly uri?: string
@@ -15,6 +15,7 @@ export interface ContextAttachment {
   readonly pastedPath?: string
   readonly image?: { readonly mimeType: string; readonly dataBase64: string }
   readonly skillDirectory?: string
+  readonly visionModel?: string
 }
 
 export class ContextCollector {
@@ -153,6 +154,7 @@ export class ContextCollector {
         ].join('\n'),
         truncated: false,
         pastedPath: target,
+        uri: vscode.Uri.file(target).toString(),
       }
     }
     const limited = limitUtf8(value, maxBytes)
@@ -168,7 +170,7 @@ export class ContextCollector {
 
 export function buildPrompt(input: string, attachments: readonly ContextAttachment[]): string {
   const blocks = attachments.map(attachment => [
-    `<editor_context kind=${JSON.stringify(attachment.kind)} label=${JSON.stringify(attachment.label)}>`,
+    `<editor_context kind=${JSON.stringify(attachment.kind)} label=${JSON.stringify(attachment.label)}${attachment.uri === undefined ? '' : ` uri=${JSON.stringify(attachment.uri)}`}${attachment.visionModel === undefined ? '' : ` model=${JSON.stringify(attachment.visionModel)}`}>`,
     attachment.text,
     '</editor_context>',
   ].join('\n'))

@@ -2,6 +2,7 @@ import * as vscode from 'vscode'
 
 export type RuntimeMode = 'bundled' | 'external'
 export type PermissionMode = 'read-only' | 'workspace-write' | 'danger-full-access'
+export type ApprovalPolicy = 'ask' | 'approve-for-me'
 export type ReasoningEffort = string
 
 export const OFFICIAL_DEEPSEEK_BASE_URL = 'https://api.deepseek.com/'
@@ -17,6 +18,7 @@ export interface HarnessConfiguration {
   readonly reasoningEffort: ReasoningEffort
   readonly agentPreset: string
   readonly permissionMode: PermissionMode
+  readonly approvalPolicy?: ApprovalPolicy
   readonly baseUrl: string
   readonly autoStart: boolean
   readonly contextMaxBytes: number
@@ -31,6 +33,7 @@ export interface HarnessConfiguration {
   readonly skillDirectories: readonly string[]
   readonly visionBaseUrl: string
   readonly visionModel: string
+  readonly visionReasoningEffort: string
   readonly visionMaxBytes: number
 }
 
@@ -65,6 +68,7 @@ export class ConfigurationService implements vscode.Disposable {
         ['read-only', 'workspace-write', 'danger-full-access'],
         'workspace-write',
       ),
+      approvalPolicy: oneOf(config.get<string>('approvalPolicy'), ['ask', 'approve-for-me'], 'ask'),
       baseUrl,
       autoStart: config.get<boolean>('autoStart', true),
       contextMaxBytes: bounded(config.get<number>('context.maxBytes'), 1_024, 131_072, 32_768),
@@ -78,7 +82,8 @@ export class ConfigurationService implements vscode.Disposable {
       handoffLaunchMode: oneOf(config.get<string>('handoff.launchMode'), ['clipboard', 'cli'], 'clipboard'),
       skillDirectories: stringList(config.get<string[]>('skills.directories'), ['${userHome}/.codex/skills']),
       visionBaseUrl: config.get<string>('vision.baseUrl', '').trim(),
-      visionModel: nonEmpty(config.get<string>('vision.model'), 'qwen-vl-plus'),
+      visionModel: config.get<string>('vision.model', '').trim(),
+      visionReasoningEffort: config.get<string>('vision.reasoningEffort', '').trim(),
       visionMaxBytes: bounded(config.get<number>('vision.maxBytes'), 65_536, 8_388_608, 4_194_304),
     }
   }

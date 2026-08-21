@@ -248,18 +248,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
     if (message.type === 'send') {
       const attachments = [...this.attachments]
+      const sentIds = new Set(attachments.map(item => item.id))
+      this.attachments = this.attachments.filter(item => !sentIds.has(item.id))
+      // Release the composer immediately, matching Codex's image-send UX. Vision conversion and
+      // the Harness RPC continue in this handler; failures are reported through sendSettled.
+      await this.post({ type: 'sendStarted', text: message.text, attachments: attachments.map(item => ({ label: item.label })) })
+      await this.postState()
       try {
-        await this.controller.send(message.text, attachments, message.mode ?? 'queue')
-        const sentIds = new Set(attachments.map(item => item.id))
-        this.attachments = this.attachments.filter(item => !sentIds.has(item.id))
+        await this.controller.send(message.text, attachments, message.mode ?? 'queue', progress => { void this.post({ type: 'sendProgress', progress }) })
         if (this.pendingHandoff?.sessionId === this.controller.snapshot().activeSessionId) await this.clearPendingHandoff()
         await this.post({ type: 'sendSettled', accepted: true, text: message.text })
         await this.postState()
       } catch (error) {
         const detail = errorMessage(error)
+        this.attachments = [...attachments, ...this.attachments.filter(item => !sentIds.has(item.id))]
         this.logger.error('Workbench send failed', error)
         await this.post({ type: 'notice', level: 'error', message: conciseNotice(detail) })
         await this.post({ type: 'sendSettled', accepted: false, text: message.text })
+        await this.postState()
       }
       return
     }
@@ -279,10 +285,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (message.type === 'setApiKey') return this.run(this.actions.setApiKey)
     if (message.type === 'openSettings') return this.showSettings()
     if (message.type === 'openVisionSettings') return this.showSettings('vision')
+    if (message.type === 'inspectPrompt') return this.run(async () => {
+      await this.post({ type: 'promptInspection', inspection: await this.controller.inspectPrompt(message.text, this.attachments) })
+    })
+    if (message.type === 'copyInspection') return this.run(async () => {
+      await vscode.env.clipboard.writeText(message.text)
+      await this.post({ type: 'notice', level: 'info', message: 'Prompt inspection copied to the clipboard.' })
+    })
     if (message.type === 'saveSettings') return this.run(async () => {
       await this.actions.saveSettings(message.settings)
       const settings = await this.actions.getSettings()
-      await this.post({ type: 'settings', settings })
+      await this.post({ type: 'settings', settings, open: false })
       if (this.pendingImageFiles.length > 0 && settings.visionBaseUrl !== '' && settings.visionModel !== '' && settings.hasVisionApiKey) {
         const pending = this.pendingImageFiles
         this.pendingImageFiles = []
@@ -328,6 +341,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       await this.postState()
       return
     }
+    if (message.type === 'openAttachment') {
+      if (message.uri !== undefined) return this.run(async () => {
+        const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(message.uri!, true))
+        await vscode.window.showTextDocument(document, { preview: false })
+      })
+      const attachment = this.attachments.find(item => item.id === message.id)
+      if (attachment?.pastedPath !== undefined) return this.run(() => this.controller.openPastedFile(attachment.pastedPath!))
+      if (attachment?.uri !== undefined) return this.run(async () => {
+        const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(attachment.uri!, true))
+        await vscode.window.showTextDocument(document, { preview: false })
+      })
+      return
+    }
     if (message.type === 'approve') return this.run(() => this.controller.approve(message.approvalId, message.outcome))
     if (message.type === 'answerQuestions') return this.run(() => this.controller.answerQuestions(message.rpcId, message.answers))
     if (message.type === 'selectModel') return this.run(() => this.controller.selectModel(message.provider, message.model, message.reasoningEffort))
@@ -345,6 +371,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       this.upsertAttachment(await this.controller.continueWithPreset(message.preset))
     })
     if (message.type === 'selectPermission') return this.run(async () => {
+      if (message.permission === 'approve-for-me') {
+        await this.controller.setApprovalPolicy('approve-for-me')
+        await this.controller.selectPermission('workspace-write')
+        return
+      }
       if (message.permission === 'danger-full-access') {
         const confirmed = await vscode.window.showWarningMessage(
           'Enable Full access for this session? Commands will run without the workspace file sandbox or approval prompts, including external executables such as Git.',
@@ -428,6 +459,8 @@ function parseWebviewMessage(value: unknown): WebviewToHostMessage {
     || type === 'compact' || type === 'configureContextWindow' || type === 'handoff' || type === 'showLogs' || type === 'reviewChanges' || type === 'diagnose') return { type }
   if (type === 'saveSettings' && isRecord(value.settings)) return { type, settings: parseSettings(value.settings) }
   if (type === 'send' && typeof value.text === 'string') return { type, text: value.text, ...(value.mode === 'queue' || value.mode === 'steer' ? { mode: value.mode } : {}) }
+  if (type === 'copyInspection' && typeof value.text === 'string' && value.text.length <= 1_000_000) return { type, text: value.text }
+  if (type === 'inspectPrompt' && typeof value.text === 'string' && value.text.length <= 262_144) return { type, text: value.text }
   if (type === 'selectSession' && typeof value.sessionId === 'string' && value.sessionId.length <= 256) return { type, sessionId: value.sessionId }
   if (type === 'manageSession' && typeof value.sessionId === 'string' && value.sessionId.length <= 256) return { type, sessionId: value.sessionId }
   if (type === 'attachUris' && Array.isArray(value.uris) && value.uris.length <= 20 && value.uris.every(item => typeof item === 'string' && item.length <= 8_192)) {
@@ -445,6 +478,7 @@ function parseWebviewMessage(value: unknown): WebviewToHostMessage {
   }
   if (type === 'listSkills') return { type }
   if (type === 'removeAttachment' && typeof value.id === 'string') return { type, id: value.id }
+  if (type === 'openAttachment' && (typeof value.id === 'string' || typeof value.uri === 'string')) return { type, ...(typeof value.id === 'string' ? { id: value.id } : {}), ...(typeof value.uri === 'string' ? { uri: value.uri } : {}) }
   if (type === 'approve' && typeof value.approvalId === 'string' && (value.outcome === 'allowed-once' || value.outcome === 'rejected')) return { type, approvalId: value.approvalId, outcome: value.outcome }
   if (type === 'answerQuestions' && typeof value.rpcId === 'string' && Array.isArray(value.answers)) {
     const answers = value.answers.map(parseQuestionAnswer)
@@ -461,7 +495,7 @@ function parseSettings(value: Record<string, unknown>): WebviewToHostMessage ext
   const number = (key: string, fallback: number): number => typeof value[key] === 'number' && Number.isFinite(value[key]) ? value[key] as number : fallback
   const directories = Array.isArray(value.skillDirectories) ? value.skillDirectories.filter(item => typeof item === 'string') as string[] : []
   return {
-    baseUrl: text('baseUrl'), hasApiKey: value.hasApiKey === true, visionBaseUrl: text('visionBaseUrl'), visionModel: text('visionModel'), visionModels: Array.isArray(value.visionModels) ? value.visionModels.filter(item => typeof item === 'string') as string[] : [],
+    baseUrl: text('baseUrl'), hasApiKey: value.hasApiKey === true, visionBaseUrl: text('visionBaseUrl'), visionModel: text('visionModel'), visionReasoningEffort: text('visionReasoningEffort'), visionModels: Array.isArray(value.visionModels) ? value.visionModels.filter(item => typeof item === 'string') as string[] : [],
     hasVisionApiKey: value.hasVisionApiKey === true, pasteFileThreshold: number('pasteFileThreshold', 4_096), contextWindowTokens: number('contextWindowTokens', 1_000_000),
     codexHome: text('codexHome'), claudeHome: text('claudeHome'), handoffLaunchMode: text('handoffLaunchMode') === 'cli' ? 'cli' : 'clipboard', skillDirectories: directories,
     ...(text('apiKey') === '' ? {} : { apiKey: text('apiKey') }), ...(text('visionApiKey') === '' ? {} : { visionApiKey: text('visionApiKey') }),
@@ -516,7 +550,23 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .icon-button:hover { background: var(--vscode-toolbar-hoverBackground); }
     .icon-button:focus-visible, .menu-button:focus-visible, .menu-option:focus-visible, .context-meter:focus-visible, .session-tab:focus-visible, .session-tab-manage:focus-visible, .command:focus-visible, textarea:focus-visible, input:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
     .icon-button[disabled] { opacity: .45; cursor: default; }
-    .session-tabs { display: flex; align-items: stretch; min-height: 30px; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--vscode-panel-border); scrollbar-width: none; }
+    .session-toolbar { position: relative; z-index: 25; display: flex; align-items: stretch; border-bottom: 1px solid var(--vscode-panel-border); }
+    .session-toolbar .session-tabs { flex: 1 1 auto; border-bottom: 0; }
+    .search-panel { position: absolute; top: 31px; left: 6px; right: 6px; z-index: 40; padding: 6px 8px 7px; border: 1px solid var(--vscode-widget-border,var(--vscode-panel-border)); border-radius: 3px; background: var(--vscode-editorWidget-background,var(--vscode-sideBar-background)); box-shadow: 0 5px 18px rgba(0,0,0,.45); }
+    .search-row { display: flex; align-items: center; gap: 2px; }
+    .search-row input { flex: 1 1 auto; min-width: 0; height: 26px; padding: 3px 7px; border: 1px solid var(--vscode-input-border,var(--vscode-panel-border)); border-radius: 3px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); outline: none; }
+    .search-row .icon-button { position: relative; z-index: 2; flex: 0 0 24px; width: 24px; height: 24px; pointer-events: auto; }
+    .search-row .search-selection { color: var(--vscode-textLink-foreground); }
+    .search-row input:focus { border-color: var(--vscode-focusBorder); }
+    .search-options { display: flex; align-items: center; gap: 4px; padding-top: 5px; color: var(--vscode-descriptionForeground); font-size: 10px; }
+    .search-options label { display: inline-flex; align-items: center; gap: 3px; min-height: 20px; padding: 1px 5px; border: 1px solid transparent; border-radius: 3px; cursor: pointer; user-select: none; }
+    .search-options label:hover { background: var(--vscode-toolbar-hoverBackground); }
+    .search-options label:has(input:checked) { border-color: var(--vscode-focusBorder); color: var(--vscode-foreground); background: var(--vscode-editor-findMatchHighlightBackground); }
+    .search-options input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+    .search-options span { margin-left: auto; color: var(--vscode-descriptionForeground); }
+    .search-row .search-selection.active { color: var(--vscode-charts-yellow); background: var(--vscode-toolbar-activeBackground); }
+    ::highlight(dedge-search-current) { background: #ffb000; color: #111; text-decoration: underline 2px solid #d65a00; }
+    .session-tabs { display: flex; align-items: stretch; min-height: 30px; overflow-x: auto; overflow-y: hidden; border-bottom: 0; scrollbar-width: none; }
     .session-tabs::-webkit-scrollbar { display: none; }
     .session-tab-wrap { display: inline-flex; align-items: stretch; flex: 0 1 172px; min-width: 94px; max-width: 202px; height: 30px; }
     .session-tab { position: relative; display: inline-flex; align-items: center; flex: 1 1 auto; min-width: 0; height: 30px; padding: 0 4px 0 9px; border-bottom: 2px solid transparent; background: transparent; color: var(--vscode-descriptionForeground); cursor: pointer; font-size: 11px; white-space: nowrap; }
@@ -534,20 +584,31 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .session-operation-icon { animation: session-operation-spin 900ms linear infinite; }
     @keyframes session-operation-spin { to { transform: rotate(360deg); } }
     .conversation { overflow: auto; min-height: 0; padding: 2px 10px 18px; }
-    .history-loader { display: block; min-height: 28px; margin: 4px auto; padding: 3px 9px; border-radius: 3px; color: var(--vscode-descriptionForeground); background: transparent; cursor: pointer; font-size: 11px; }
+    .history-loader { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 28px; margin: 4px auto; padding: 3px 9px; border-radius: 3px; color: var(--vscode-descriptionForeground); background: transparent; cursor: pointer; font-size: 11px; }
     .history-loader:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
     .history-loader[disabled] { cursor: wait; opacity: .7; }
+    .history-loader-spinner { width: 12px; height: 12px; animation: history-loader-spin 800ms linear infinite; }
+    @keyframes history-loader-spin { to { transform: rotate(360deg); } }
     .empty { display: grid; place-items: center; min-height: 100%; color: var(--vscode-descriptionForeground); text-align: center; padding: 24px; font-size: 12px; }
     .message { padding: 12px 2px; border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent); overflow-wrap: anywhere; }
-    .message-head { display: flex; align-items: center; gap: 4px; min-height: 18px; margin-bottom: 3px; opacity: 0; transition: opacity 90ms ease; }
-    .message:hover .message-head, .message.collapsed .message-head { opacity: 1; }
+    .message-head { display: flex; align-items: center; gap: 4px; min-height: 18px; margin-bottom: 3px; opacity: 1; }
     .message-role-label { color: var(--vscode-descriptionForeground); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
     .collapse-toggle { display: grid; place-items: center; width: 18px; height: 18px; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border-radius: 3px; cursor: pointer; }
     .collapse-toggle:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }
     .collapse-toggle svg { width: 13px; height: 13px; transition: transform 120ms ease; }
     .collapse-toggle.collapsed svg { transform: rotate(-90deg); }
     .message-preview { color: var(--vscode-descriptionForeground); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-    .message.user { padding-left: 10px; border-left: 2px solid var(--vscode-charts-blue); }
+    .message.user { box-sizing: border-box; width: 88%; max-width: 88%; margin: 6px 0 6px auto; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--vscode-charts-blue) 45%, var(--vscode-panel-border)); border-radius: 5px; background: color-mix(in srgb, var(--vscode-charts-blue) 8%, var(--vscode-sideBar-background)); }
+    .message.user .message-head { justify-content: flex-end; }
+    .message.user .message-role-label { color: var(--vscode-charts-blue); }
+    .message.user.task-intermediate { width: 76%; max-width: 76%; margin-top: 5px; margin-bottom: 5px; padding: 6px 8px; border-color: color-mix(in srgb, var(--vscode-charts-blue) 28%, var(--vscode-panel-border)); background: color-mix(in srgb, var(--vscode-charts-blue) 4%, var(--vscode-sideBar-background)); font-size: 11px; }
+    .message.user.task-intermediate .message-role-label { font-size: 9px; opacity: .82; }
+    .message-actions { display: inline-flex; align-items: center; gap: 2px; margin-left: 4px; }
+    .message-action { display: inline-flex; align-items: center; gap: 3px; min-height: 20px; padding: 1px 4px; border: 0; border-radius: 3px; background: transparent; color: var(--vscode-descriptionForeground); font: 10px/1 var(--vscode-font-family); cursor: pointer; }
+    .message-action:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+    .message-action svg { width: 12px; height: 12px; }
+    .message.assistant, .message.reasoning, .message.tool, .message.system { margin-right: 8%; }
+    .message.assistant { padding-left: 10px; border-left-color: var(--vscode-charts-green); background: color-mix(in srgb, var(--vscode-charts-green) 3%, transparent); }
     .message-attachments { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 7px; min-width: 0; }
     .message-attachment { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-height: 24px; padding: 2px 6px; border: 1px solid var(--vscode-panel-border); border-radius: 3px; color: var(--vscode-descriptionForeground); background: var(--vscode-editor-inactiveSelectionBackground); font-size: 11px; }
     .message-attachment svg { flex: 0 0 12px; width: 12px; height: 12px; }
@@ -562,13 +623,20 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .streaming-text::after { content: '\u258d'; color: var(--vscode-progressBar-background); margin-left: 1px; animation: streaming-caret 1.1s ease-in-out infinite alternate; }
     @keyframes streaming-caret { from { opacity: 1; } to { opacity: .15; } }
     details.message .message-body { margin-top: 4px; }
-    details.message summary { cursor: pointer; color: var(--vscode-descriptionForeground); display: flex; align-items: center; gap: 4px; list-style: none; }
+    details.message summary { cursor: pointer; color: var(--vscode-descriptionForeground); display: flex; align-items: center; gap: 4px; width: 100%; min-height: 26px; padding: 4px 8px; box-sizing: border-box; list-style: none; }
     details.message summary::-webkit-details-marker { display: none; }
     details.message .summary-chevron { width: 12px; height: 12px; flex: 0 0 12px; transition: transform 120ms ease; }
     details.message:not([open]) .summary-chevron { transform: rotate(-90deg); }
     details.message .summary-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     details.reasoning { border-left: 2px solid var(--vscode-charts-yellow); padding-left: 8px; }
     details.tool { border-left: 2px solid var(--vscode-charts-green); padding-left: 8px; }
+    .vision-process { width: 100%; margin: 4px 0; padding: 4px 7px; border-left: 2px solid var(--vscode-charts-purple, #b180d7); background: color-mix(in srgb, var(--vscode-charts-purple, #b180d7) 7%, transparent); }
+    .vision-process summary { display: flex; align-items: center; gap: 5px; width: 100%; min-height: 24px; padding: 3px 5px; box-sizing: border-box; cursor: pointer; color: var(--vscode-descriptionForeground); font-size: 11px; }
+    .vision-process summary svg { width: 12px; height: 12px; }
+    .vision-process > div { margin-top: 5px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
+    .message-send-status { margin-left: auto; color: var(--vscode-descriptionForeground); font-size: 10px; }
+    .attachment-openable { cursor: pointer; }
+    .attachment-openable:hover { border-color: var(--vscode-focusBorder); color: var(--vscode-foreground); }
     .pending { margin: 8px 0; padding: 10px; border: 1px solid var(--vscode-inputValidation-warningBorder); border-radius: 4px; background: var(--vscode-inputValidation-warningBackground); }
     .pending-title { font-weight: 600; margin-bottom: 5px; }
     .question-item { min-width: 0; margin: 0; padding: 10px 0; border: 0; }
@@ -615,11 +683,19 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .steer-notice button:hover { background: var(--vscode-toolbar-hoverBackground); }
     .steer-notice svg { width: 12px; height: 12px; }
     .task-middle-hidden { display: none !important; }
-    .task-intermediate { margin-left: 10px; padding-left: 8px; border-left-width: 1px !important; }
-    .task-fold-summary { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 30px; padding: 5px 8px; border: 0; border-bottom: 1px solid var(--vscode-panel-border,#3c3c3c); color: var(--vscode-descriptionForeground,#9d9d9d); background: var(--vscode-sideBar-background,#1e1e1e); font-size: 11px; text-align: left; cursor: pointer; }
+    .task-all-hidden { display: none !important; }
+    .task-collapse-all { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 26px; padding: 4px 8px; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 65%, transparent); color: var(--vscode-descriptionForeground); background: transparent; text-align: left; font-size: 11px; cursor: pointer; }
+    .task-collapse-all:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
+    .task-collapse-all svg { width: 12px; height: 12px; transition: transform 120ms ease; }
+    .task-collapse-all svg.collapsed { transform: rotate(-90deg); }
+    .task-group { box-sizing: border-box; width: 100%; margin: 5px 0 9px; padding: 0 1px 4px; border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 72%, transparent); border-radius: 4px; overflow: visible; }
+    .message-segment-hidden { display: none !important; }
+    .task-intermediate:not(.user) { margin-left: 10px; padding-left: 8px; border-left-width: 1px !important; }
+    .task-fold-summary { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 26px; padding: 4px 8px; border: 0; border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 65%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 65%, transparent); color: var(--vscode-descriptionForeground,#9d9d9d); background: transparent; font-size: 11px; text-align: left; cursor: pointer; }
     .task-fold-summary:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
     .task-fold-summary:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
-    .task-fold-summary svg { flex: 0 0 12px; width: 12px; height: 12px; }
+    .task-fold-summary svg { flex: 0 0 12px; width: 12px; height: 12px; transition: transform 120ms ease; }
+    .task-fold-summary svg.collapsed { transform: rotate(-90deg); }
     .task-fold-summary span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .composer-box:focus-within { border-color: var(--vscode-focusBorder); }
     .composer-box.drop-active { border-color: var(--vscode-focusBorder); background: var(--vscode-list-hoverBackground); }
@@ -631,7 +707,9 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .composer-left, .composer-right { display: flex; align-items: center; gap: 3px; min-width: 0; }
     .composer-left { flex: 0 1 auto; }
     .composer-right { flex: 1 1 0; justify-content: flex-end; overflow: hidden; }
-    .composer-right .menu-anchor { flex: 1 1 auto; max-width: 132px; }
+    .composer-right > .icon-button, .composer-right > .context-meter-anchor, .composer-right > #send, .composer-right > #cancel { flex: 0 0 24px; }
+    .composer-right .model-anchor { flex: 1 1 52px; min-width: 24px; max-width: 132px; overflow: hidden; }
+    .composer-right .vision-anchor { flex: 0 0 24px; width: 24px; }
     .menu-anchor { position: relative; min-width: 0; }
     .menu-button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 24px; height: 24px; max-width: 132px; padding: 0 5px; border-radius: 3px; color: var(--vscode-foreground); background: transparent; cursor: pointer; }
     .menu-button:hover, .menu-button[aria-expanded="true"] { background: var(--vscode-toolbar-hoverBackground); }
@@ -669,21 +747,38 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .status-dot.ready { background: var(--vscode-testing-iconPassed); }
     .status-dot.busy { background: var(--vscode-progressBar-background); }
     .status-dot.error { background: var(--vscode-testing-iconFailed); }
-    .notice { position: fixed; top: 8px; left: 10px; right: 10px; z-index: 50; max-height: min(96px,calc(100vh - 16px)); overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; padding: 8px 10px; border: 1px solid var(--vscode-inputValidation-errorBorder); background: var(--vscode-inputValidation-errorBackground); border-radius: 4px; box-shadow: 0 4px 18px rgba(0,0,0,.28); line-height: 1.35; }
+    .notice { position: fixed; top: 8px; right: 8px; z-index: 50; width: min(320px,calc(100% - 16px)); max-height: 72px; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; padding: 7px 9px; border: 1px solid var(--vscode-widget-border); background: var(--vscode-notifications-background); color: var(--vscode-notifications-foreground); border-radius: 4px; box-shadow: 0 4px 18px rgba(0,0,0,.28); font-size: 11px; line-height: 1.35; }
+    .notice.warning { border-color: var(--vscode-inputValidation-warningBorder); }
+    .notice.error { border-color: var(--vscode-inputValidation-errorBorder); background: var(--vscode-inputValidation-errorBackground); color: var(--vscode-inputValidation-errorForeground); }
     .settings-dialog { position: fixed; inset: 7% 6%; z-index: 60; display: grid; grid-template-rows: auto minmax(0,1fr) auto; border: 1px solid var(--vscode-panel-border); background: var(--vscode-sideBar-background); box-shadow: 0 10px 30px rgba(0,0,0,.4); }
-    .settings-dialog h2 { margin: 0; padding: 12px 14px; font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border); }
+    .settings-title { display: flex; align-items: center; min-height: 42px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--vscode-panel-border); }
+    .settings-title h2 { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 13px; font-weight: 600; }
+    .settings-close { flex: 0 0 24px; }
     .settings-body { overflow: auto; padding: 10px 14px; }
     .settings-section { display: grid; gap: 6px; margin-bottom: 14px; }
     .settings-section h3 { margin: 0; font-size: 11px; color: var(--vscode-descriptionForeground); }
     .settings-section label { display: grid; gap: 3px; color: var(--vscode-descriptionForeground); font-size: 10px; }
-    .settings-section input { min-height: 26px; width: 100%; border: 1px solid var(--vscode-input-border); background: var(--vscode-input-background); padding: 4px 6px; }
+    .settings-section input, .settings-section select, .settings-section textarea { min-height: 24px; width: 100%; border: 1px solid var(--vscode-input-border); background: var(--vscode-input-background); color: var(--vscode-input-foreground); padding: 3px 6px; font: 11px/1.3 var(--vscode-font-family); }
+    .settings-section select { height: 24px; }
+    .settings-section textarea { resize: vertical; }
     .settings-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--vscode-panel-border); }
+    .inspector-dialog { position: fixed; inset: 6% 5%; z-index: 62; display: grid; grid-template-rows: auto auto auto minmax(0,1fr); border: 1px solid var(--vscode-panel-border); background: var(--vscode-sideBar-background); box-shadow: 0 10px 30px rgba(0,0,0,.45); }
+    .inspector-toolbar { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground); font-size: 11px; }
+    .inspector-toolbar span { flex: 1 1 auto; min-width: 0; }
+    .inspector-body { overflow: auto; padding: 8px 10px; }
+    .inspector-layer { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 7px; align-items: start; padding: 8px; margin-bottom: 6px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; background: var(--vscode-editor-background); }
+    .inspector-layer[draggable="true"] { cursor: grab; }
+    .inspector-layer.dragging { opacity: .5; }
+    .inspector-layer-title { font-size: 12px; font-weight: 600; }
+    .inspector-layer-meta { color: var(--vscode-descriptionForeground); font-size: 10px; }
+    .inspector-layer pre { max-height: 180px; overflow: auto; margin: 6px 0 0; padding: 7px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--vscode-textCodeBlock-background); font-size: 10px; }
+    .inspector-note { margin: 0; padding: 8px 10px; color: var(--vscode-descriptionForeground); background: var(--vscode-editor-inactiveSelectionBackground); font-size: 11px; line-height: 1.4; }
     .hidden { display: none !important; }
-    @media (max-width: 420px) {
+    @media (max-width: 520px) {
       .composer-bottom { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; }
       .composer-left, .composer-right { width: 100%; }
       .composer-right { overflow: visible; }
-      .composer-right .menu-anchor { max-width: none; }
+      .composer-right .model-anchor { max-width: none; }
       #model-menu { width: 100%; max-width: none; }
     }
     @media (max-width: 310px) {
@@ -698,17 +793,23 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   <div class="app">
     <div id="notice" class="notice hidden"></div>
     <section id="settings-dialog" class="settings-dialog hidden" aria-label="DeepSeek Harness settings">
-      <h2>DeepSeek Harness settings</h2>
+      <div class="settings-title"><h2>DeepSeek Harness settings</h2><button id="settings-close" class="icon-button settings-close" title="Close settings" aria-label="Close settings"><i data-lucide="x"></i></button></div>
       <div class="settings-body">
         <section id="settings-connection" class="settings-section"><h3>DeepSeek connection</h3><label>Base URL<input id="setting-base-url" type="url"></label><label>API key<input id="setting-api-key" type="password" placeholder="Leave blank to keep the stored key"></label></section>
-        <section id="settings-vision" class="settings-section"><h3>Vision</h3><label>Base URL<input id="setting-vision-url" type="url"></label><label>Model<input id="setting-vision-model"></label><label>API key<input id="setting-vision-key" type="password" placeholder="Leave blank to keep the stored key"></label></section>
+        <section id="settings-vision" class="settings-section"><h3>Vision</h3><label>Base URL<input id="setting-vision-url" type="url" title="OpenAI-compatible vision endpoint. The extension calls /models and /chat/completions on this URL."></label><label>Model<input id="setting-vision-model" title="Enter any compatible model id manually."><select id="setting-vision-model-picker" title="Models returned by the endpoint. Obvious image-generation and code-review-only models are hidden here; the composer Vision menu can show every endpoint model."><option value="">Select an endpoint model...</option></select></label><label>Reasoning effort<select id="setting-vision-reasoning" title="Optional reasoning_effort for compatible providers. Default sends no reasoning parameter."><option value="">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Maximum</option></select></label><label>API key<input id="setting-vision-key" type="password" title="Stored only in VS Code SecretStorage; never included in the workspace or VSIX." placeholder="Leave blank to keep the stored key"></label></section>
         <section id="settings-context" class="settings-section"><h3>Context</h3><label>Convert pasted text to an attachment at (bytes)<input id="setting-paste-threshold" type="number" min="2048" max="131072"></label><label>Context window (tokens)<input id="setting-context-window" type="number" min="16384" max="16000000"></label></section>
-        <section id="settings-handoff" class="settings-section"><h3>Handoff</h3><label>Codex home<input id="setting-codex-home"></label><label>Claude home<input id="setting-claude-home"></label><label>Delivery mode<select id="setting-handoff-mode"><option value="clipboard">Clipboard</option><option value="cli">CLI</option></select></label></section>
+        <section id="settings-handoff" class="settings-section"><h3>Handoff</h3><label>Codex home<input id="setting-codex-home"></label><label>Claude home<input id="setting-claude-home"></label><label title="Clipboard copies an isolated take-over prompt without starting a process. CLI starts the native Codex or Claude command in a new VS Code terminal. In both modes the source session remains unchanged.">Delivery mode<select id="setting-handoff-mode"><option value="clipboard">Clipboard</option><option value="cli">CLI</option></select></label></section>
         <section id="settings-skills" class="settings-section"><h3>Skills</h3><label>Directories (one per line)<textarea id="setting-skill-directories" rows="3"></textarea></label></section>
       </div>
       <div class="settings-actions"><button id="settings-cancel" class="command">Cancel</button><button id="settings-save" class="command primary">Save</button></div>
     </section>
-    <nav id="session-tabs" class="session-tabs" role="tablist" aria-label="DeepSeek Harness sessions"></nav>
+    <section id="inspector-dialog" class="inspector-dialog hidden" aria-label="Prompt Inspector">
+      <div class="settings-title"><h2>Prompt Inspector</h2><button id="inspector-close" class="icon-button settings-close" title="Close Prompt Inspector" aria-label="Close Prompt Inspector"><i data-lucide="x"></i></button></div>
+      <div class="inspector-toolbar"><span id="inspector-scope">No inspection loaded</span><button id="inspector-copy" class="command">Copy view</button></div>
+      <div id="inspector-note" class="inspector-note"></div><div id="inspector-body" class="inspector-body"></div>
+    </section>
+    <div class="session-toolbar"><nav id="session-tabs" class="session-tabs" role="tablist" aria-label="DeepSeek Harness sessions"></nav><button id="search-conversation" class="icon-button" title="Search current session" aria-label="Search current session"><i data-lucide="search"></i></button></div>
+    <section id="search-panel" class="search-panel hidden" aria-label="Search current session"><div class="search-row"><input id="search-input" type="search" placeholder="Search in current session"><button id="search-selection" class="icon-button search-selection" title="Search selected text" aria-label="Search selected text"><i data-lucide="text-quote"></i></button><button id="search-prev" class="icon-button" title="Previous match" aria-label="Previous match"><i data-lucide="chevron-up"></i></button><button id="search-next" class="icon-button" title="Next match" aria-label="Next match"><i data-lucide="chevron-down"></i></button><button id="search-close" class="icon-button" title="Close search" aria-label="Close search"><i data-lucide="x"></i></button></div><div class="search-options"><label><input id="search-case" type="checkbox"> Aa</label><label><input id="search-word" type="checkbox"> Word</label><label><input id="search-regex" type="checkbox"> .* </label><span id="search-count"></span></div></section>
     <main id="conversation" class="conversation"><div class="empty">DeepSeek Harness</div></main>
     <footer class="composer">
       <div id="attachments" class="attachments"></div>
@@ -721,6 +822,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
           <div class="composer-left">
             <div class="menu-anchor">
               <button id="attach-menu" class="icon-button" title="Add context" aria-label="Add context" aria-expanded="false"><i data-lucide="plus"></i></button>
+              <button id="inspect-prompt" class="icon-button" title="Inspect prompt layers before sending" aria-label="Inspect prompt layers before sending"><i data-lucide="layers-3"></i></button>
               <div id="attach-popover" class="popover hidden" role="menu">
                 <div id="attach-options" class="menu-options">
                   <button id="attach-file" class="menu-option" role="menuitem"><i data-lucide="paperclip"></i><span class="menu-option-copy"><span class="menu-option-label">File</span></span></button>
@@ -731,7 +833,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
                 </div>
               </div>
             </div>
-            <div class="menu-anchor">
+            <div class="menu-anchor permission-anchor">
               <button id="permission-menu" class="menu-button" title="Permission mode" aria-label="Permission mode" aria-expanded="false"><i data-lucide="shield-check"></i><span id="permission-label" class="menu-label permission-copy">Workspace</span><i class="chevron" data-lucide="chevron-down"></i></button>
               <div id="permission-popover" class="popover hidden" role="menu"><div id="permission-options" class="menu-options"></div></div>
             </div>
@@ -747,7 +849,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
               </span>
               <span id="context-tooltip" class="context-tooltip" role="tooltip"><span>Context window:</span><strong id="context-percent">0% full</strong><span id="context-figures" class="context-figures">0 / 1M tokens used</span><span id="context-trigger" class="context-figures">Auto compact at 800K</span></span>
             </span>
-            <div class="menu-anchor">
+            <div class="menu-anchor model-anchor">
               <button id="model-menu" class="menu-button" title="Models are loading" aria-label="Models are loading" aria-expanded="false" disabled><span id="model-label" class="menu-label">Model</span><i class="chevron" data-lucide="chevron-down"></i></button>
               <div id="model-popover" class="popover model-popover align-right hidden" role="menu">
                 <section class="menu-section"><div class="menu-heading">Model</div><div id="model-options" class="menu-options"></div></section>
@@ -755,11 +857,20 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
                 <section class="menu-section"><div class="menu-heading">Agent preset</div><div id="preset-options" class="menu-options"></div></section>
               </div>
             </div>
-            <div class="menu-anchor">
+            <div class="menu-anchor vision-anchor">
               <button id="vision-model-menu" class="icon-button" title="Vision model" aria-label="Vision model" aria-expanded="false"><i data-lucide="image"></i></button>
               <div id="vision-model-popover" class="popover align-right hidden" role="menu"><div class="menu-heading">Vision model</div><div id="vision-model-options" class="menu-options"></div></div>
             </div>
             <button id="send" class="icon-button" title="Wait for Harness to connect" aria-label="Wait for Harness to connect" disabled><i data-lucide="send"></i></button>
+            <div class="menu-anchor delivery-anchor">
+              <button id="delivery-mode" class="icon-button delivery-mode" title="Delivery mode: Auto" aria-label="Delivery mode: Auto" aria-expanded="false"><i data-lucide="corner-down-right"></i></button>
+              <div id="delivery-popover" class="popover align-right hidden" role="menu">
+                <div class="menu-heading">Delivery mode</div>
+                <button id="delivery-auto" class="menu-option" role="menuitem"><i data-lucide="wand-sparkles"></i><span class="menu-option-copy"><span class="menu-option-label">Auto</span><span class="menu-option-description">Steer while running; queue when idle</span></span></button>
+                <button id="delivery-steer" class="menu-option" role="menuitem"><i data-lucide="corner-down-right"></i><span class="menu-option-copy"><span class="menu-option-label">Steer</span><span class="menu-option-description">Inject into the active turn immediately</span></span></button>
+                <button id="delivery-queue" class="menu-option" role="menuitem"><i data-lucide="list-plus"></i><span class="menu-option-copy"><span class="menu-option-label">Queue</span><span class="menu-option-description">Run after the current turn finishes</span></span></button>
+              </div>
+            </div>
             <button id="cancel" class="icon-button hidden" title="Stop" aria-label="Stop"><i data-lucide="square"></i></button>
           </div>
         </div>
@@ -781,6 +892,7 @@ function uniqueUris(uris: readonly vscode.Uri[]): vscode.Uri[] {
 function operationLabel(operation: WorkbenchSession['operation']): string {
   if (operation === 'archiving') return 'being archived'
   if (operation === 'deleting') return 'being moved to the recovery folder'
+  if (operation === 'compacting') return 'compacting context'
   return 'stopping'
 }
 

@@ -9,6 +9,7 @@ export interface StoreConfiguration {
   readonly reasoningEffort: string
   readonly agentPreset: string
   readonly permissionMode: string
+  readonly approvalPolicy?: string
   readonly contextWindowTokens: number
   readonly pasteFileThreshold: number
 }
@@ -162,6 +163,14 @@ export class SessionStore {
     this.applySessionMetadata(sessionId, entries.map(entry => entry.event))
   }
 
+  historyBeforeSeq(sessionId: string): number | undefined {
+    const seqs = this.events.get(sessionId)?.keys()
+    if (seqs === undefined) return undefined
+    let minimum = Number.MAX_SAFE_INTEGER
+    for (const seq of seqs) minimum = Math.min(minimum, seq)
+    return Number.isSafeInteger(minimum) ? minimum : undefined
+  }
+
   setHistoryLoading(value: boolean): void {
     this.historyLoading = value
   }
@@ -218,6 +227,7 @@ export class SessionStore {
       questions: [...this.questions.values()].filter(item => item.sessionId === this.activeSessionId),
       ...this.configuration,
       permissionMode: activePermissions?.currentValue ?? this.configuration.permissionMode,
+      approvalPolicy: this.configuration.approvalPolicy ?? 'ask',
       ...(activePermissions === undefined ? {} : { permissionOptions: activePermissions.options }),
       permissionChanging: this.permissionChanging,
       provider: currentModel?.provider ?? this.configuration.provider,

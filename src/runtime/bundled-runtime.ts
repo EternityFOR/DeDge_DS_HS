@@ -46,9 +46,10 @@ export class RuntimeResolver {
 
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { version?: unknown }
     const version = typeof manifest.version === 'string' ? manifest.version : 'unknown'
-    if (version !== EXPECTED_DSH_VERSION) {
+    if (!supportsHarnessVersion(EXPECTED_DSH_VERSION, version)) {
       throw new Error(`Bundled Harness version mismatch: expected ${EXPECTED_DSH_VERSION}, found ${version}. Reinstall this platform VSIX.`)
     }
+    if (version !== EXPECTED_DSH_VERSION) this.logger.warn(`Using compatible bundled Harness ${version}; extension was built against ${EXPECTED_DSH_VERSION}.`)
     const nodeVersion = await executableVersion(node)
     if (!supportsHarnessNode(nodeVersion)) {
       throw new Error(`Bundled Node ${nodeVersion.raw} is incompatible with Harness; Node 22.19+ or 24+ is required.`)
@@ -104,9 +105,10 @@ export class RuntimeResolver {
       throw new Error(`External Harness version probe failed: ${error instanceof Error ? error.message : String(error)}`)
     })
     const version = versionResult.stdout.trim().replace(/^v/u, '')
-    if (version !== EXPECTED_DSH_VERSION) {
+    if (!supportsHarnessVersion(EXPECTED_DSH_VERSION, version)) {
       throw new Error(`External Harness ${version || 'unknown'} is unsupported. Configure the pinned ${EXPECTED_DSH_VERSION} runtime.`)
     }
+    if (version !== EXPECTED_DSH_VERSION) this.logger.warn(`Using compatible external Harness ${version}; extension was built against ${EXPECTED_DSH_VERSION}.`)
     return {
       command: executable,
       args: launchesScript ? [command] : [],
@@ -148,6 +150,13 @@ export function parseNodeVersion(raw: string): ParsedNodeVersion {
 
 export function supportsHarnessNode(version: Pick<ParsedNodeVersion, 'major' | 'minor'>): boolean {
   return version.major >= 24 || (version.major === 22 && version.minor >= 19)
+}
+
+export function supportsHarnessVersion(expected: string, actual: string): boolean {
+  if (actual === expected) return true
+  const expectedRc = /^(\d+\.\d+\.\d+)-rc\.\d+$/u.exec(expected)
+  const actualRc = /^(\d+\.\d+\.\d+)-rc\.\d+$/u.exec(actual)
+  return expectedRc !== null && actualRc !== null && expectedRc[1] === actualRc[1]
 }
 
 async function executableVersion(command: string): Promise<ParsedNodeVersion> {

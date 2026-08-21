@@ -7,7 +7,7 @@ export interface ProjectedUserPrompt {
 
 const contextStart = '<editor_context '
 const contextEnd = '\n</editor_context>'
-const contextHeader = /^<editor_context kind=("(?:\\.|[^"\\])*") label=("(?:\\.|[^"\\])*")>$/u
+const contextHeader = /^<editor_context kind=("(?:\\.|[^"\\])*") label=("(?:\\.|[^"\\])*")(?: uri=("(?:\\.|[^"\\])*"))?(?: model=("(?:\\.|[^"\\])*"))?>$/u
 
 export function projectUserPrompt(value: string): ProjectedUserPrompt {
   const normalized = value.replaceAll('\r\n', '\n')
@@ -31,13 +31,14 @@ function extractEditorContexts(value: string): ProjectedUserPrompt {
     }
     const headerEnd = value.indexOf('>\n', start)
     if (headerEnd < 0) break
-    const attachment = parseContextHeader(value.slice(start, headerEnd + 1))
+    const end = value.indexOf(contextEnd, headerEnd + 2)
+    if (end < 0) break
+    const body = value.slice(headerEnd + 2, end)
+    const attachment = parseContextHeader(value.slice(start, headerEnd + 1), body)
     if (attachment === undefined) {
       scan = start + contextStart.length
       continue
     }
-    const end = value.indexOf(contextEnd, headerEnd + 2)
-    if (end < 0) break
     visible.push(value.slice(cursor, start))
     attachments.push(attachment)
     cursor = end + contextEnd.length
@@ -49,18 +50,22 @@ function extractEditorContexts(value: string): ProjectedUserPrompt {
   return { text: cleanVisibleText(visible.join('')), attachments }
 }
 
-function parseContextHeader(value: string): WorkbenchMessageAttachment | undefined {
+function parseContextHeader(value: string, body: string): WorkbenchMessageAttachment | undefined {
   const match = contextHeader.exec(value)
   if (match === null) return undefined
   try {
     const kind: unknown = JSON.parse(match[1] ?? '')
     const label: unknown = JSON.parse(match[2] ?? '')
+    const uri: unknown = match[3] === undefined ? undefined : JSON.parse(match[3])
+    const model: unknown = match[4] === undefined ? undefined : JSON.parse(match[4])
     if (typeof label !== 'string') return undefined
     const handoff = handoffAttachment(label)
     if (handoff !== undefined) return handoff
     return {
-      kind: kind === 'selection' || kind === 'diagnostics' ? kind : 'file',
+      kind: kind === 'selection' || kind === 'diagnostics' || kind === 'vision' ? kind : 'file',
       label: boundedLabel(label.trim() || 'Attached context'),
+      ...(typeof uri === 'string' ? { uri } : {}),
+      ...(kind === 'vision' ? { detail: body, ...(typeof model === 'string' ? { model } : {}) } : {}),
     }
   } catch {
     return undefined

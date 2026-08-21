@@ -86,7 +86,25 @@ export class GatewayClient implements vscode.Disposable {
   }
 
   executeCommand(sessionId: string, line: string): Promise<{ readonly result?: { readonly kind?: string; readonly text?: string } }> {
-    return this.call('commands.execute', { args: { agentId: sessionId, line } })
+    return this.call<unknown>('commands/execute', { args: { agentId: sessionId, line } }).then(value => {
+      let execution = value
+      // rc.7 returns CommandExecution directly. Some generated clients retain an
+      // additional RemoteResult envelope, so accept both protocol shapes.
+      if (isRecord(value) && typeof value.ok === 'boolean') {
+        if (!value.ok) {
+          const failure = isRecord(value.error) ? value.error : {}
+          throw new Error(`Harness command failed: ${typeof failure.message === 'string' ? failure.message : 'unknown command failure'}`)
+        }
+        execution = value.value
+      }
+      if (execution === undefined) return {}
+      if (!isRecord(execution) || !isRecord(execution.result)) throw new Error('Malformed Harness command execution.')
+      const result = execution.result
+      if ((result.kind !== 'success' && result.kind !== 'error') || (result.text !== undefined && typeof result.text !== 'string')) {
+        throw new Error('Malformed Harness command result.')
+      }
+      return { result: { kind: result.kind, ...(typeof result.text === 'string' ? { text: result.text } : {}) } }
+    })
   }
 
   respond(rpcId: string, value: unknown): Promise<{ readonly accepted: boolean }> {

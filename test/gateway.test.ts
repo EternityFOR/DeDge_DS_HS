@@ -51,6 +51,30 @@ describe('Gateway JSON frame parsing', () => {
     }
   })
 
+  it('uses the generated commands/execute route and parses its command result', async () => {
+    const originalFetch = globalThis.fetch
+    try {
+      let requestedUrl = ''
+      let requestedBody: unknown
+      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        requestedUrl = String(input)
+        requestedBody = JSON.parse(String(init?.body)) as unknown
+        const rpcId = (requestedBody as { rpcId: string }).rpcId
+        return new Response(JSON.stringify({
+          type: 'server-response',
+          rpcId,
+          result: { ok: true, value: { commandId: 'cmd-1', result: { kind: 'success', text: 'Compacted 12 history items.' } } },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      })
+      const client = new GatewayClient('http://127.0.0.1:1/', {} as never)
+      await expect(client.executeCommand('session-1', '/compact')).resolves.toEqual({ result: { kind: 'success', text: 'Compacted 12 history items.' } })
+      expect(requestedUrl).toBe('http://127.0.0.1:1/api/commands/execute')
+      expect(requestedBody).toMatchObject({ method: 'commands/execute', payload: { args: { agentId: 'session-1', line: '/compact' } } })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   it('parses server requests and preserves arbitrary payloads', () => {
     expect(parseServerRequest({ type: 'server-request', rpcId: 'evt-1', payload: { type: 'host/session-status', running: true } }))
       .toEqual({ type: 'server-request', rpcId: 'evt-1', payload: { type: 'host/session-status', running: true } })

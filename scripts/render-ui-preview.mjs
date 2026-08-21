@@ -20,18 +20,24 @@ const state = {
   ],
   activeSessionId: 'one',
   messages: [
+    { id: 'r1', role: 'reasoning', text: 'A deliberately early reasoning event used to verify that the user prompt still renders first.', status: 'complete', taskId: 'turn:1', taskComplete: true },
     {
       id: 'u1',
       role: 'user',
       text: 'Continue the unfinished task after checking the workspace.',
-      attachments: [{ kind: 'handoff', label: 'Codex handoff - DeDge_DS_HS' }],
+      attachments: [
+        { kind: 'handoff', label: 'Codex handoff - DeDge_DS_HS' },
+        { kind: 'vision', label: 'Vision: screenshot.png', model: 'gpt-vision', detail: 'The screenshot shows a compact VS Code sidebar with a message composer and session controls.' },
+      ],
       status: 'complete',
       taskId: 'turn:1',
       taskComplete: true,
     },
-    { id: 'r1', role: 'reasoning', text: 'Inspecting the relevant implementation and official runtime behavior.', status: 'complete', taskId: 'turn:1', taskComplete: true },
     { id: 't1', role: 'tool', title: 'read_file', text: 'Intermediate tool output.', status: 'complete', taskId: 'turn:1', taskComplete: true },
     { id: 'u2', role: 'user', text: 'Also keep the inserted message inside this task.', status: 'complete', taskId: 'turn:1', taskComplete: true },
+    { id: 'a-stage', role: 'assistant', text: 'I found the relevant implementation. Checking the remaining details now.', status: 'complete', taskId: 'turn:1', taskComplete: true },
+    { id: 't2', role: 'tool', title: 'run_code', text: 'Tool output that belongs to the preceding assistant segment.', status: 'complete', taskId: 'turn:1', taskComplete: true },
+    { id: 'r2', role: 'reasoning', text: 'Reasoning that should collapse with the preceding assistant segment.', status: 'complete', taskId: 'turn:1', taskComplete: true },
     { id: 'a1', role: 'assistant', text: 'The preview keeps the first prompt and final summary visible while folding all intermediate work.', status: 'complete', taskId: 'turn:1', taskComplete: true },
   ],
   hasMoreHistory: true,
@@ -81,13 +87,75 @@ const state = {
 }
 
 const bootstrap = `<script nonce="preview">
+const previewSettings = {
+  baseUrl: 'https://api.deepseek.com/', hasApiKey: true,
+  visionBaseUrl: '', visionModel: 'qwen-vl-plus', visionReasoningEffort: '', visionModels: ['qwen-vl-plus'], hasVisionApiKey: true,
+  pasteFileThreshold: 4096, contextWindowTokens: 1000000,
+  codexHome: '\${userHome}/.codex', claudeHome: '\${userHome}/.claude', handoffLaunchMode: 'clipboard',
+  skillDirectories: ['\${userHome}/.codex/skills'],
+}
 window.acquireVsCodeApi = () => ({
-  postMessage: message => { window.__lastWebviewMessage = message },
+  postMessage: message => {
+    window.__lastWebviewMessage = message
+    if (message.type === 'openSettings' || message.type === 'openVisionSettings') {
+      window.postMessage({ type: 'settings', settings: previewSettings, ...(message.type === 'openVisionSettings' ? { section: 'vision' } : {}) }, '*')
+    }
+    if (message.type === 'inspectPrompt') window.postMessage({ type: 'promptInspection', inspection: {
+      scope: 'Preview preflight prompt layers',
+      limitation: 'Preview only. The live Harness may add provider system instructions, tool schemas, and compaction state after session.prompt.',
+      layers: [
+        { id: 'profile', label: 'Harness profile', source: 'Runtime configuration', detail: 'standard preset | workspace-write', text: 'Agent preset: standard\\nPermission: workspace-write\\nProvider/model: deepseek-official/deepseek-v4-flash', bytes: 96, enabled: true },
+        { id: 'user', label: 'User message', source: 'Composer', detail: 'Exact current draft', text: 'Continue the task with the attached context.', bytes: 45, enabled: true },
+      ],
+    } }, '*')
+    if (message.type === 'compact' && window.__previewState !== undefined) {
+      window.__previewState = {
+        ...window.__previewState,
+        sessions: window.__previewState.sessions.map(session => session.id === window.__previewState.activeSessionId
+          ? { ...session, operation: 'compacting' }
+          : session),
+      }
+      window.postMessage({ type: 'state', state: window.__previewState, attachments: [] }, '*')
+      window.setTimeout(() => {
+        window.__previewState = {
+          ...window.__previewState,
+          sessions: window.__previewState.sessions.map(session => session.id === window.__previewState.activeSessionId
+            ? { ...session, operation: undefined }
+            : session),
+        }
+        window.postMessage({ type: 'state', state: window.__previewState, attachments: [] }, '*')
+        window.postMessage({ type: 'notice', level: 'info', message: 'Compacted 926 history items (~521683 tokens).' }, '*')
+      }, 10_000)
+    }
+    if (message.type === 'send' && window.__previewState !== undefined) {
+      window.postMessage({ type: 'sendStarted', text: message.text, attachments: [] }, '*')
+      window.setTimeout(() => {
+        window.postMessage({ type: 'state', state: window.__previewState, attachments: [] }, '*')
+      }, 50)
+    }
+    if (message.type === 'loadOlderHistory' && window.__previewState !== undefined) {
+      window.postMessage({ type: 'state', state: { ...window.__previewState, historyLoading: true }, attachments: [] }, '*')
+      window.setTimeout(() => {
+        window.__previewState = {
+          ...window.__previewState,
+          hasMoreHistory: false,
+          historyLoading: false,
+          messages: [
+            { id: 'old-u', role: 'user', text: 'This is the earlier task and must stay above the current task.', status: 'complete', taskId: 'turn:0', taskComplete: true },
+            { id: 'old-r', role: 'reasoning', text: 'Earlier reasoning.', status: 'complete', taskId: 'turn:0', taskComplete: true },
+            { id: 'old-a', role: 'assistant', text: 'Earlier task completed.', status: 'complete', taskId: 'turn:0', taskComplete: true },
+            ...window.__previewState.messages,
+          ],
+        }
+        window.postMessage({ type: 'state', state: window.__previewState, attachments: [] }, '*')
+      }, 450)
+    }
+  },
   setState: value => { window.__webviewState = value },
   getState: () => window.__webviewState,
 })
 </script>`
-const payload = `<script nonce="preview">window.postMessage(${JSON.stringify({ type: 'state', state, attachments: [] })}, '*')</script>`
+const payload = `<script nonce="preview">window.__previewState = ${JSON.stringify(state)}; window.postMessage({ type: 'state', state: window.__previewState, attachments: [] }, '*')</script>`
 const html = template
   .replaceAll('${webview.cspSource}', "'self'")
   .replaceAll('${nonce}', 'preview')

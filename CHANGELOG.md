@@ -4,6 +4,196 @@
 
 ## [Unreleased]
 
+## [0.1.34] - 2026-08-21
+
+### Fixed
+
+- 搜索箭头现在按目标文字 `Range` 的实际屏幕坐标滚动，不再被后续的整消息滚动覆盖。
+- 定位计算会避开搜索浮层，并将命中文字放在对话可见区域内。
+
+## [0.1.33] - 2026-08-21
+
+### Fixed
+
+- 搜索输入和箭头定位不再给整个命中消息或任务添加黄色背景、边框和阴影；仅高亮当前目标文字。
+- 更改搜索词时立即清理上一条词级高亮，避免旧结果残留。
+
+## [0.1.32] - 2026-08-21
+
+### Fixed
+
+- 修复点击搜索结果箭头导致 Webview 卡死：文字高亮正则现在使用全局匹配，迭代会正确前进，不再无限处理同一个命中。
+- 已使用真实浏览器预览流程验证搜索、下一条定位、任务展开与页面持续响应。
+
+## [0.1.31] - 2026-08-21
+
+### Fixed
+
+- 搜索箭头导航不再触发整轮会话重渲染；只在现有 DOM 上展开目标任务、切换目标消息状态并进行 Range 定位，避免真实 Webview 点击箭头卡死。
+
+## [0.1.30] - 2026-08-21
+
+### Fixed
+
+- 搜索导航使用 Chromium CSS Custom Highlight API 的 `Range` 高亮目标文字，不修改 DOM 文本节点；目标任务仍会展开并滚动定位，避免长消息点击箭头卡死。
+
+## [0.1.29] - 2026-08-21
+
+### Fixed
+
+- 移除箭头导航期间的文字级 DOM 重写；长消息和折叠任务只使用当前消息强边框高亮、展开和滚动，避免点击箭头卡死 Webview。
+
+## [0.1.28] - 2026-08-21
+
+### Fixed
+
+- 搜索输入期间不再创建或销毁文字级 `<mark>` DOM；输入只计算匹配消息候选，避免拼音输入和空格确认时 Webview 卡死。
+- 只有点击上一条/下一条定位后，才对当前目标消息插入文字高亮标记。
+
+## [0.1.27] - 2026-08-21
+
+### Fixed
+
+- 修复中文拼音输入时搜索面板卡死：IME composition 期间暂停搜索，输入完成后使用 160ms 防抖。
+- 每次搜索前清理旧文字标记，避免重复输入导致 `<mark>` DOM 无限嵌套和性能退化。
+
+## [0.1.26] - 2026-08-21
+
+### Fixed
+
+- “搜索选中文本”现在只设置消息范围，不会把选中文字复制进搜索框；搜索框中的词保持由用户输入。
+- 搜索高亮改为命中文字级别的 `<mark>`，不再把整条消息铺成黄色；当前导航结果使用更强的橙色边框。
+
+## [0.1.25] - 2026-08-21
+
+### Added
+
+- 搜索栏新增明确的“搜索选中文本”按钮；使用 `mousedown` 保留对话内容的文本选区，再填入搜索词并计算匹配。
+
+## [0.1.24] - 2026-08-21
+
+### Fixed
+
+- 提高搜索命中对比度：普通命中使用琥珀色边框和底色，当前箭头定位命中使用高亮橙色边框、黄色正文底色和阴影。
+- 当前命中会覆盖消息正文、折叠摘要以及 reasoning/tool 详情，重新输入搜索词会清理旧高亮。
+
+## [0.1.23] - 2026-08-21
+
+### Fixed
+
+- 搜索面板改为覆盖在会话内容上方，不再改变对话区域高度。
+- 输入搜索词时只更新匹配高亮和数量，不再自动跳到第一条。
+- 上下箭头按钮扩大可点击区域；点击后才展开目标任务、详情并滚动到当前匹配。
+- 打开搜索面板时会读取当前文本选区作为初始搜索词。
+
+## [0.1.22] - 2026-08-21
+
+### Fixed
+
+- 搜索栏改为 VS Code 风格的深色输入框和外置 `Aa`、`Word`、`.*` 切换按钮，不再把复选框显示在输入框内部。
+- 搜索结果的上一条/下一条会展开目标所属任务和详情，滚动到目标消息并使用当前匹配高亮。
+
+## [0.1.21] - 2026-08-21
+
+### Added
+
+- 会话搜索面板：支持当前已加载历史的文本搜索、大小写、整词、正则、上一条/下一条定位。
+- 新增 `Approve for me`：保持 `workspace-write` 沙箱，仅自动允许每个 Harness approval 一次，不启用 unrestricted/full access。
+
+### Changed
+
+- reasoning、tool、Vision 等所有详情折叠的可点击区域统一为整行，并保留键盘操作与嵌套按钮保护。
+
+## [0.1.20] - 2026-08-21
+
+### Fixed
+
+- 历史分页游标改用最早的原始 Harness 事件序号；一页只有内部事件时会继续向前读取，直到出现新的可见任务或没有更多历史。
+- 对没有推进游标的重复分页结果停止继续加载，避免连续点击反复替换同一段任务。
+- 手动压缩现在投影为 `compacting` 会话操作：tab、历史分页、权限、模型、发送和压缩按钮在事务完成前锁定，压缩按钮显示旋转状态，底部显示 `Compacting context...`。
+- 重复点击压缩会复用同一事务，不再向 Harness 并发提交第二个 `/compact`；成功通知使用普通信息样式，只有失败使用红色。
+- 待发送（含 Vision 处理中）用户消息固定在已有历史之后，不再因历史 DOM 重排跑到旧任务上方。
+
+## [0.1.19] - 2026-08-21
+
+### Fixed
+
+- 手动压缩改用 Harness rc.7 的官方 `commands/execute` RPC 路由，并兼容实际的直接 `CommandExecution` 返回格式与生成客户端可能保留的 `RemoteResult` 包装。
+- bundled runtime smoke 现在会创建隔离空会话并真实执行 `/compact`，防止仅检查 Gateway 启动而遗漏压缩协议回归。
+- 连续加载多页较早历史时，消息节点会在任务边界变化后重新挂载并按序重排，不再出现旧任务替换、消失或跑到当前任务下方。
+- 历史加载按钮在请求期间立即锁定并显示加载动画；插队消息使用紧凑的 `YOU · STEER` 样式与任务起始消息区分。
+
+## [0.1.18] - 2026-08-21
+
+### Fixed
+
+- `Load earlier messages` 合并后按消息序列重排顶层任务，较早历史固定插入当前内容上方。
+- 历史加载按钮点击后立即禁用并显示旋转状态，直到 Host 明确完成。
+- 中途插入的用户消息使用更紧凑的右侧卡片和 `YOU · STEER` 标签，与整轮起始消息区分。
+- Harness RC 检查改为协议系列兼容：`0.1.0-rc.6` 与 `0.1.0-rc.7` 可互用并记录警告，不再因市场升级或共享 runtime 的 RC 修订差异阻止启动。
+
+## [0.1.17] - 2026-08-21
+
+### Fixed
+
+- 任务内部固定按 `YOU → intermediate process → ASSISTANT` 排列，即使 Harness 历史事件中的 reasoning/tool 早于用户消息投影出现，也不会把过程折叠放到用户消息上方。
+
+## [0.1.16] - 2026-08-21
+
+### Fixed
+
+- 统一任务与过程折叠按钮尺寸、颜色和边界，修复用户消息左边框被任务容器覆盖的问题。
+- `YOU` 与 `ASSISTANT` 标签始终可见；`Edit / Steer` 仅允许出现在真实运行中任务的最后一条用户消息。
+- 空会话或仅有过期 running 投影时不再错误显示停止按钮。
+- Show/Hide 过程按钮的箭头现在随折叠状态正确旋转。
+
+### Changed
+
+- 首次载入及向上分页载入的任务默认递归折叠。
+- 工具栏折叠按钮现在递归收起所有任务；再次点击仅展开第一层，内部过程、Vision、reasoning 和工具仍保持折叠。
+
+## [0.1.15] - 2026-08-21
+
+### Added
+
+- 图片消息点击发送后立即离开输入框并在对话区显示，Vision 识别和 Harness 提交在后台继续；失败时恢复草稿和附件。
+- Vision 识别过程成为独立可折叠层，显示模型、状态和最终识图文本，并可从会话历史恢复。
+- 每轮任务新增整轮折叠，内部仍保留过程折叠以及 reasoning、tool、Vision 的独立折叠。
+- 长文本生成的临时附件可点击并直接在 VS Code 编辑器中打开。
+
+### Changed
+
+- 用户消息靠右、Assistant 输出靠左，并用低对比色区分。
+- Queue、Steer、Auto 直接切换不同图标，菜单同步标记当前模式。
+- 520px 以下输入工具栏使用稳定双行布局，长模型名不再覆盖发送控件。
+
+## [0.1.14] - 2026-08-21
+
+- Added Prompt Inspector, delivery mode controls, and active-message Edit / Steer actions.
+- Made the runtime model overlay follow the configured provider and model.
+- Reduced settings control density and fixed the UI preview bootstrap.
+
+## [0.1.13] - 2026-08-20
+
+### Fixed
+
+- Vision model configuration now starts empty instead of assuming `qwen-vl-plus`.
+- Saving Vision URL and key refreshes the inline model suggestions from the endpoint's `/models` response.
+- Vision HTTP 401/403/502 errors now explain that endpoint access, model permissions, or upstream image policy may be blocking the request.
+- Added a hover explanation for Clipboard versus CLI handoff delivery.
+- Vision settings now provide a separate endpoint-model selector while preserving manual model entry. The compact composer menu hides obvious image-generation and review-only models by default and can reveal the complete endpoint catalog.
+- Vision requests support an optional `reasoning_effort`; the parameter is omitted by default for cross-provider compatibility.
+- The active session remains visible in the tab strip while the runtime is temporarily reporting it as blank.
+- Manual compaction HTTP 404 responses now explain that the runtime lacks the RPC and confirm that no context was changed.
+
+## [0.1.12] - 2026-08-20
+
+### Fixed
+
+- 设置面板标题栏新增关闭按钮，并支持按 `Esc` 关闭。
+- Vision 模型按钮使用稳定的固定宽度，不再被较长的 Harness 模型名称挤出输入工具栏。
+- 折叠 Assistant、User 或 System 消息段时，同时收起紧随其后的 reasoning 和工具调用；重新展开后内部详情仍可单独折叠。
+
 ## [0.1.11] - 2026-08-20
 
 ### Added
@@ -184,7 +374,30 @@
 - Gateway 固定监听随机 `127.0.0.1`，子进程使用参数数组、`shell: false` 和 `windowsHide: true`。
 - 发布审计拒绝 session dump、私钥、常见 provider token、绝对本机路径、Mojibake 和开发期文件进入公开源或 VSIX。
 
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.11...HEAD
+[0.1.14]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.14
+[0.1.15]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.15
+[0.1.16]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.16
+[0.1.17]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.17
+[0.1.18]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.18
+[0.1.19]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.19
+[0.1.20]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.20
+[0.1.21]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.21
+[0.1.22]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.22
+[0.1.23]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.23
+[0.1.24]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.24
+[0.1.25]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.25
+[0.1.26]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.26
+[0.1.27]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.27
+[0.1.28]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.28
+[0.1.29]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.29
+[0.1.30]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.30
+[0.1.31]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.31
+[0.1.32]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.32
+[0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
+[0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.34...HEAD
+[0.1.13]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.13
+[0.1.12]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.12
 [0.1.11]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.11
 [0.1.10]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.10
 [0.1.9]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.9

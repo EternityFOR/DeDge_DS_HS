@@ -161,6 +161,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       hasApiKey: (await credentials.getApiKey())?.trim() !== '',
       visionBaseUrl: current.visionBaseUrl,
       visionModel: current.visionModel,
+      visionReasoningEffort: current.visionReasoningEffort,
       visionModels: await visionModels(current.visionBaseUrl, await credentials.getVisionApiKey()) as readonly string[],
       hasVisionApiKey: (await credentials.getVisionApiKey())?.trim() !== '',
       pasteFileThreshold: current.pasteFileThreshold,
@@ -176,6 +177,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await configuration.updateSetting('context.pasteFileThreshold', settings.pasteFileThreshold)
     await configuration.updateSetting('vision.baseUrl', settings.visionBaseUrl)
     await configuration.updateSetting('vision.model', settings.visionModel)
+    await configuration.updateSetting('vision.reasoningEffort', settings.visionReasoningEffort)
     await configuration.updateSetting('handoff.codexHome', settings.codexHome)
     await configuration.updateSetting('handoff.claudeHome', settings.claudeHome)
     await configuration.updateSetting('handoff.launchMode', settings.handoffLaunchMode)

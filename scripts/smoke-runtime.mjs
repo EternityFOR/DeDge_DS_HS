@@ -74,18 +74,16 @@ try {
     detached: process.platform !== 'win32',
   })
   const url = await waitForUrl(child, 90_000)
-  const rpcId = 'runtime-smoke'
-  const response = await fetch(new URL('/api/host.describe', url), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ type: 'client-request', rpcId, method: 'host.describe', payload: {} }),
-  })
-  if (!response.ok) throw new Error(`host.describe returned HTTP ${response.status}`)
-  const body = await response.json()
-  if (body?.type !== 'server-response' || body.rpcId !== rpcId || body.result?.ok !== true) {
-    throw new Error(`host.describe returned a malformed response: ${JSON.stringify(body)}`)
+  const description = await rpc(url, 'host.describe', {})
+  const session = await rpc(url, 'session.create', { cwd: root, agentPreset: 'standard' })
+  if (typeof session?.sessionId !== 'string' || session.sessionId === '') {
+    throw new Error(`session.create returned a malformed response: ${JSON.stringify(session)}`)
   }
-  console.log(`Runtime smoke passed at ${url} with Gateway ${String(body.result.value?.version ?? 'unknown')}`)
+  const command = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/compact' } })
+  if (command?.result?.kind !== 'success' && command?.result?.kind !== 'error') {
+    throw new Error(`commands/execute returned a malformed command result: ${JSON.stringify(command)}`)
+  }
+  console.log(`Runtime smoke passed at ${url} with Gateway ${String(description?.version ?? 'unknown')} and /compact RPC support`)
 } finally {
   if (child !== undefined) await terminate(child)
   await rm(smokeRoot, { recursive: true, force: true })
@@ -122,6 +120,21 @@ function waitForUrl(processHandle, timeoutMs) {
       finish(new Error(`Runtime exited before readiness (code=${String(code)}, signal=${String(signal)}). stderr: ${stderr.slice(-2_000)}`))
     })
   })
+}
+
+async function rpc(url, method, payload) {
+  const rpcId = `runtime-smoke-${method}`
+  const response = await fetch(new URL(`/api/${method}`, url), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ type: 'client-request', rpcId, method, payload }),
+  })
+  if (!response.ok) throw new Error(`${method} returned HTTP ${response.status}`)
+  const body = await response.json()
+  if (body?.type !== 'server-response' || body.rpcId !== rpcId || body.result?.ok !== true) {
+    throw new Error(`${method} returned a malformed response: ${JSON.stringify(body)}`)
+  }
+  return body.result.value
 }
 
 async function terminate(processHandle) {

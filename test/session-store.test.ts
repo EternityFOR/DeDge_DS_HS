@@ -150,4 +150,52 @@ describe('session event projection', () => {
     store.setSessionOperation('session-one', undefined)
     expect(store.snapshot().sessions[0]?.operation).toBeUndefined()
   })
+
+  it('accumulates three earlier history pages in chronological order without duplicate boundaries', () => {
+    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000,
+      pasteFileThreshold: 8_192, })
+    store.addSession({ sessionId: 'session-one', blank: false, running: false })
+    store.setActive('session-one')
+    store.replaceHistory('session-one', [
+      entry('user/message', 7, { content: [{ type: 'text', text: 'Newest task' }] }),
+      entry('assistant/message', 8, { turn: 4, step: 1, message: { content: [{ type: 'text', text: 'Newest result' }] } }),
+    ], true)
+    store.prependHistory('session-one', [
+      entry('user/message', 5, { content: [{ type: 'text', text: 'Third task' }] }),
+      entry('assistant/message', 6, { turn: 3, step: 1, message: { content: [{ type: 'text', text: 'Third result' }] } }),
+      entry('user/message', 7, { content: [{ type: 'text', text: 'Newest task' }] }),
+    ], true)
+    store.prependHistory('session-one', [
+      entry('user/message', 3, { content: [{ type: 'text', text: 'Second task' }] }),
+      entry('assistant/message', 4, { turn: 2, step: 1, message: { content: [{ type: 'text', text: 'Second result' }] } }),
+      entry('user/message', 5, { content: [{ type: 'text', text: 'Third task' }] }),
+    ], true)
+    store.prependHistory('session-one', [
+      entry('user/message', 1, { content: [{ type: 'text', text: 'First task' }] }),
+      entry('assistant/message', 2, { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'First result' }] } }),
+      entry('user/message', 3, { content: [{ type: 'text', text: 'Second task' }] }),
+    ], false)
+
+    expect(store.snapshot().messages.map(message => message.text)).toEqual([
+      'First task', 'First result',
+      'Second task', 'Second result',
+      'Third task', 'Third result',
+      'Newest task', 'Newest result',
+    ])
+    expect(store.snapshot().hasMoreHistory).toBe(false)
+  })
+
+  it('pages from the earliest raw event even when that event is not a visible message', () => {
+    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000,
+      pasteFileThreshold: 8_192, })
+    store.addSession({ sessionId: 'session-one', blank: false, running: false })
+    store.setActive('session-one')
+    store.replaceHistory('session-one', [
+      entry('context/pressure', 90, { projectedTokens: 10 }),
+      entry('user/message', 100, { content: [{ type: 'text', text: 'Visible message' }] }),
+    ], true)
+
+    expect(store.snapshot().messages.map(message => message.seq)).toEqual([100])
+    expect(store.historyBeforeSeq('session-one')).toBe(90)
+  })
 })
