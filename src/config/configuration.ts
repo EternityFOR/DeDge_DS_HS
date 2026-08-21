@@ -3,6 +3,7 @@ import * as vscode from 'vscode'
 export type RuntimeMode = 'bundled' | 'external'
 export type PermissionMode = 'read-only' | 'workspace-write' | 'danger-full-access'
 export type ApprovalPolicy = 'ask' | 'approve-for-me'
+export type VisionMode = 'auto' | 'dedicated' | 'off'
 export type ReasoningEffort = string
 
 export const OFFICIAL_DEEPSEEK_BASE_URL = 'https://api.deepseek.com/'
@@ -35,6 +36,10 @@ export interface HarnessConfiguration {
   readonly visionModel: string
   readonly visionReasoningEffort: string
   readonly visionMaxBytes: number
+  readonly visionMode?: VisionMode
+  readonly visionModelOverrides?: Readonly<Record<string, boolean>>
+  readonly compactionProvider?: string
+  readonly compactionModel?: string
 }
 
 const PREFIX = 'dedgeDeepSeekHarness'
@@ -85,6 +90,10 @@ export class ConfigurationService implements vscode.Disposable {
       visionModel: config.get<string>('vision.model', '').trim(),
       visionReasoningEffort: config.get<string>('vision.reasoningEffort', '').trim(),
       visionMaxBytes: bounded(config.get<number>('vision.maxBytes'), 65_536, 8_388_608, 4_194_304),
+      visionMode: oneOf(config.get<string>('vision.mode'), ['auto', 'dedicated', 'off'], 'auto'),
+      visionModelOverrides: booleanRecord(config.get<Record<string, unknown>>('vision.modelOverrides')),
+      compactionProvider: config.get<string>('compaction.provider', '').trim(),
+      compactionModel: config.get<string>('compaction.model', '').trim(),
     }
   }
 
@@ -149,6 +158,10 @@ function configuredBaseUrl(value: string | undefined): string {
 function stringList(value: string[] | undefined, fallback: readonly string[]): readonly string[] {
   const items = (Array.isArray(value) ? value : fallback).map(item => item.trim()).filter(item => item !== '')
   return items.length > 0 ? items : fallback
+}
+
+function booleanRecord(value: Record<string, unknown> | undefined): Readonly<Record<string, boolean>> {
+  return Object.fromEntries(Object.entries(value ?? {}).filter((entry): entry is [string, boolean] => entry[0].trim() !== '' && typeof entry[1] === 'boolean'))
 }
 
 function nonEmpty(value: string | undefined, fallback: string): string {

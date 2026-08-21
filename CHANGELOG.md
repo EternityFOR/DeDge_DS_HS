@@ -4,6 +4,106 @@
 
 ## [Unreleased]
 
+## [0.1.46] - 2026-08-22
+
+### Fixed
+
+- Session management now selects the target tab before archive/delete actions.
+- Delete keeps its local tombstone through runtime restart and cleans the Harness session index afterward, preventing deleted non-active sessions from reappearing.
+
+## [0.1.45] - 2026-08-22
+
+### Fixed
+
+- Removed Webview horizontal overflow and the bottom horizontal scrollbar in the VS Code sidebar.
+- Restyled conversation scrolling to use a narrow, low-contrast Codex-like scrollbar.
+- Prevented empty conversations and composer children from creating phantom vertical overflow.
+
+## [0.1.44] - 2026-08-22
+
+### Changed
+
+- Session selection now uses a two-level picker: session actions are shown first, while searchable Harness history opens separately.
+- Added a dedicated New session action and kept Codex/Claude import and current-session handoff out of the history list.
+
+## [0.1.43] - 2026-08-21
+
+### Fixed
+
+- `Hide All` now retains only the latest complete task instead of the initial history page.
+- Runtime startup passes the official Harness `--no-open` option, preventing the browser UI from opening after VSIX installation or window reload.
+- Session tabs read persistent titles from `session.list` projections and update from live title projections without requiring the session to be opened first.
+
+## [0.1.42] - 2026-08-21
+
+### Fixed
+
+- Replayed `session-added` frames can no longer mark known non-empty sessions blank and hide their tabs.
+- Open managed attachment files are no longer deleted underneath the VS Code editor when their attachment chip is removed.
+
+### Changed
+
+- Selection attachments display the source basename and inclusive line range, and use readable managed filenames.
+- Removed redundant selection and Problems actions from the composer menu; source selections remain available from the editor context menu.
+- File attachment is now a two-level choice between a workspace file and the system file picker.
+- Earlier history has separate one-page/all Load and Hide controls.
+- The composer toolbar remains one line and progressively hides secondary controls at narrow widths.
+
+## [0.1.41] - 2026-08-21
+
+### Changed
+
+- Source-editor selections and current-file diagnostics are saved as openable managed text attachments instead of silent inline context.
+- Added explicit collapse-all and expand-first-level toolbar actions, plus a reversible way to hide previously loaded history pages.
+- Clarified that rendered preview selections are not exposed by VS Code and now show an actionable notice instead of failing silently.
+
+## [0.1.40] - 2026-08-21
+
+### Changed
+
+- 保留有效历史会话 tab；启动时只隐藏空白 `New session`，不会清除已有历史。
+- 暂停自动显示工作区级 DeDge Diff，避免把整棵工作区变更误认为当前轮变更；Review 继续保留在上下文菜单。
+- 一轮完成后自动展开第一层任务壳，最终回答可立即看到，内部 reasoning/tool/Vision 细节仍折叠。
+
+## [0.1.39] - 2026-08-21
+
+### Fixed
+
+- 取消“辅助识图”确认后正确恢复发送按钮、草稿和附件状态。
+- 启动时不再自动创建空白 `New session` tab；首次发送或明确点击新建时才创建会话。
+
+## [0.1.38] - 2026-08-21
+
+### Fixed
+
+- bundled 模式不再复用其他 VSIX 版本遗留的 Harness 租约；版本不一致时仅清理租约记录的 DeDge runtime PID，并启动当前 bundled `0.1.1-rc.1`。
+- 修复安装 `0.1.37` 后底部仍显示 `0.1.0-rc.7`，导致 Vision Exp 原生图片被旧适配器拒绝的问题。
+
+## [0.1.37] - 2026-08-21
+
+### Added
+
+- 升级 bundled Harness 至 `0.1.1-rc.1`，视觉主模型可通过原生图片块直接接收图片。
+- 辅助识图改为独立开关；视觉主模型与辅助识图同时启用时，发送前确认额外调用、延迟与 token 成本。
+- 任务结束后显示文件数和增删统计；DeDge Diff 支持逐文件折叠、纵向统一视图、左右双栏视图及 VS Code 原生 diff。
+
+### Changed
+
+- 合并发送按钮与 Auto/Steer/Queue 下拉；合并压缩、折叠和上下文控件。
+- 移除常驻 Git 审查按钮及不能影响最终 provider 请求的 Prompt Inspector。
+
+## [0.1.36] - 2026-08-21
+
+### Added
+
+- 图片按钮改为按当前模型能力自动启用的开关，并允许逐模型手动覆盖。
+- 压缩按钮增加模型选择菜单，可为不同会话选择独立的压缩模型。
+- 模型目录加载前也提供稳定的 DeepSeek Flash、Pro 和 Vision Exp 候选项。
+
+### Fixed
+
+- 当前 Harness RC7 不支持原生图片消息时，自动使用兼容的两步视觉预处理，避免发送后卡住或直接失败。
+
 ## [0.1.35] - 2026-08-21
 
 ### Fixed

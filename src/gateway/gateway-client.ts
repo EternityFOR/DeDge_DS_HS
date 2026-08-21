@@ -10,6 +10,10 @@ export interface GatewayHandlers {
   readonly onError: (error: Error) => void
 }
 
+export type PromptContentPart =
+  | { readonly type: 'text'; readonly text: string }
+  | { readonly type: 'image'; readonly mediaType: string; readonly data: string; readonly name?: string }
+
 export class GatewayClient implements vscode.Disposable {
   private stream: EventStream | undefined
 
@@ -40,7 +44,12 @@ export class GatewayClient implements vscode.Disposable {
   }
 
   listSessions(): Promise<{ readonly items: SessionSummary[] }> {
-    return this.call('session.list', {})
+    return this.call<{ readonly items: SessionSummary[] }>('session.list', {}).then(result => ({
+      items: result.items.map(item => {
+        const projectedTitle = item.projections?.values?.title
+        return typeof projectedTitle === 'string' && projectedTitle.trim() !== '' ? { ...item, title: projectedTitle } : item
+      }),
+    }))
   }
 
   listWorkspaces(): Promise<WorkspaceRegistry> {
@@ -59,8 +68,9 @@ export class GatewayClient implements vscode.Disposable {
     return this.call('session.history', { sessionId, maxMessages, ...(beforeSeq === undefined ? {} : { beforeSeq }) })
   }
 
-  prompt(sessionId: string, text: string, mode: 'queue' | 'steer' = 'queue'): Promise<{ readonly accepted?: boolean }> {
-    return this.call('session.prompt', { sessionId, mode, content: [{ type: 'text', text }] })
+  prompt(sessionId: string, content: string | readonly PromptContentPart[], mode: 'queue' | 'steer' = 'queue'): Promise<{ readonly accepted?: boolean }> {
+    const parts = typeof content === 'string' ? [{ type: 'text' as const, text: content }] : content
+    return this.call('session.prompt', { sessionId, mode, content: parts })
   }
 
   async cancel(sessionId: string): Promise<{ readonly accepted: true }> {
@@ -86,7 +96,7 @@ export class GatewayClient implements vscode.Disposable {
   }
 
   executeCommand(sessionId: string, line: string): Promise<{ readonly result?: { readonly kind?: string; readonly text?: string } }> {
-    return this.call<unknown>('commands/execute', { args: { agentId: sessionId, line } }).then(value => {
+    return this.call<unknown>('commands/execute', { args: { agentId: sessionId, line, images: [] } }).then(value => {
       let execution = value
       // rc.7 returns CommandExecution directly. Some generated clients retain an
       // additional RemoteResult envelope, so accept both protocol shapes.

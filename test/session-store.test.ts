@@ -183,6 +183,55 @@ describe('session event projection', () => {
       'Newest task', 'Newest result',
     ])
     expect(store.snapshot().hasMoreHistory).toBe(false)
+    expect(store.snapshot().historyExpanded).toBe(true)
+
+    store.hideOlderHistory('session-one')
+
+    expect(store.snapshot().messages.map(message => message.text)).toEqual([
+      'Second task', 'Second result',
+      'Third task', 'Third result',
+      'Newest task', 'Newest result',
+    ])
+    expect(store.snapshot().historyExpanded).toBe(true)
+
+    store.hideOlderHistory('session-one', true)
+
+    expect(store.snapshot().messages.map(message => message.text)).toEqual(['Newest task', 'Newest result'])
+    expect(store.snapshot().hasMoreHistory).toBe(true)
+    expect(store.snapshot().historyExpanded).toBe(false)
+  })
+
+  it('does not let a replayed session-added frame mark a known non-empty session blank', () => {
+    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000,
+      pasteFileThreshold: 8_192, })
+    store.replaceSessions([{ sessionId: 'session-one', blank: false, title: 'Existing session' }])
+    store.addSession({ sessionId: 'session-one', blank: true, running: false })
+
+    expect(store.snapshot().sessions[0]).toMatchObject({ id: 'session-one', title: 'Existing session', blank: false })
+  })
+
+  it('hide all keeps only the latest complete task even before older pages were loaded', () => {
+    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000,
+      pasteFileThreshold: 8_192, })
+    store.addSession({ sessionId: 'session-one', blank: false, running: false })
+    store.setActive('session-one')
+    store.replaceHistory('session-one', [
+      entry('turn/start', 1, { turn: 1 }),
+      entry('user/message', 2, { content: [{ type: 'text', text: 'Older task' }] }),
+      entry('assistant/message', 3, { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'Older result' }] } }),
+      entry('turn/end', 4, { turn: 1 }),
+      entry('turn/start', 5, { turn: 2 }),
+      entry('user/message', 6, { content: [{ type: 'text', text: 'Latest task' }] }),
+      entry('assistant/message', 7, { turn: 2, step: 1, message: { content: [{ type: 'text', text: 'Latest result' }] } }),
+      entry('turn/end', 8, { turn: 2 }),
+    ], true)
+
+    expect(store.snapshot().historyCanHideAll).toBe(true)
+    store.hideOlderHistory('session-one', true)
+
+    expect(store.snapshot().messages.map(message => message.text)).toEqual(['Latest task', 'Latest result'])
+    expect(store.snapshot().historyCanHideAll).toBe(false)
+    expect(store.historyBeforeSeq('session-one')).toBe(5)
   })
 
   it('pages from the earliest raw event even when that event is not a visible message', () => {

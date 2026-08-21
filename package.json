@@ -2,7 +2,7 @@
   "name": "dedge-deepseek-harness-vscode",
   "displayName": "DeDge DeepSeek Harness",
   "description": "Self-contained DeepSeek Harness coding agent for VS Code with a Windows-safe runtime and isolated Codex/Claude handoffs.",
-  "version": "0.1.35",
+  "version": "0.1.46",
   "publisher": "diractive-edge",
   "private": true,
   "packageManager": "pnpm@11.21.0",
@@ -325,7 +325,10 @@
         },
         "dedgeDeepSeekHarness.approvalPolicy": {
           "type": "string",
-          "enum": ["ask", "approve-for-me"],
+          "enum": [
+            "ask",
+            "approve-for-me"
+          ],
           "enumDescriptions": [
             "Show an approval request for actions outside the workspace policy.",
             "Keep workspace-write sandboxing and automatically allow each pending approval once."
@@ -422,17 +425,39 @@
         "dedgeDeepSeekHarness.vision.baseUrl": {
           "type": "string",
           "default": "",
-          "description": "OpenAI-compatible vision endpoint used to describe attached images before sending. DeepSeek models are text-only, so this is how images become readable. Leave empty to disable image attachment.",
+          "description": "Optional OpenAI-compatible auxiliary vision endpoint. When enabled from the composer, it describes images in an extra request before Harness receives the prompt.",
           "scope": "machine"
         },
         "dedgeDeepSeekHarness.vision.model": {
           "type": "string",
           "default": "",
-          "description": "Vision model name for the configured vision endpoint. Leave empty until a compatible model is selected from the inline model list."
+          "description": "Auxiliary vision model name. This model is called only when the composer auxiliary-vision toggle is enabled."
+        },
+        "dedgeDeepSeekHarness.vision.modelOverrides": {
+          "type": "object",
+          "default": {},
+          "description": "Per-main-model auxiliary vision toggle values managed by the composer. False sends images directly when the main model supports them."
+        },
+        "dedgeDeepSeekHarness.compaction.provider": {
+          "type": "string",
+          "default": "",
+          "description": "Optional provider used for compaction summaries. Empty inherits the conversation route."
+        },
+        "dedgeDeepSeekHarness.compaction.model": {
+          "type": "string",
+          "default": "",
+          "description": "Optional model used for compaction summaries. Empty inherits the conversation route."
         },
         "dedgeDeepSeekHarness.vision.reasoningEffort": {
           "type": "string",
-          "enum": ["", "low", "medium", "high", "xhigh", "max"],
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
           "default": "",
           "description": "Optional reasoning_effort sent to the Vision endpoint. Leave empty for providers that do not support this parameter."
         },
@@ -466,7 +491,7 @@
     "vscode:prepublish": "pnpm run typecheck && pnpm run build && pnpm run prepare:runtime"
   },
   "dependencies": {
-    "@deepseek-ai/dsh": "0.1.0-rc.7",
+    "@deepseek-ai/dsh": "0.1.1-rc.1",
     "node": "22.22.3",
     "pnpm": "11.21.0"
   },

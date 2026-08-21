@@ -9,9 +9,9 @@ import { errorMessage } from '../platform/logger.js'
 import type { StorageLayout } from '../platform/storage.js'
 import { versionedHome } from '../platform/storage.js'
 import type { CredentialStore } from '../security/credentials.js'
-import type { RuntimeResolver } from './bundled-runtime.js'
+import { EXPECTED_DSH_VERSION, type RuntimeResolver } from './bundled-runtime.js'
 import { renderRuntimeOverlay } from './overlay.js'
-import { terminateProcessTree } from './process-tree.js'
+import { terminateProcessId, terminateProcessTree } from './process-tree.js'
 import type { RuntimeLaunch, RuntimeState } from './types.js'
 import {
   clearGatewayLease,
@@ -22,6 +22,7 @@ import {
   writeGatewayLease,
   type GatewayLease,
   type GatewayStartupLock,
+  gatewayLeaseMatchesVersion,
 } from './gateway-lease.js'
 import { checkWindowsCompatibility, describeWindowsExitCode } from './windows-compat.js'
 
@@ -126,7 +127,7 @@ export class RuntimeManager implements vscode.Disposable {
       await Promise.all([mkdir(home, { recursive: true }), mkdir(generatedDir, { recursive: true })])
       await writeAtomic(overlay, renderRuntimeOverlay(configuration))
 
-      const args = [...launch.args, 'web', '--patch', overlay, '--host', '127.0.0.1', '--port', '0']
+      const args = [...launch.args, 'web', '--patch', overlay, '--host', '127.0.0.1', '--port', '0', '--no-open']
       const env: NodeJS.ProcessEnv = {
         ...launch.environment,
         DSH_HOME: home,
@@ -255,6 +256,12 @@ export class RuntimeManager implements vscode.Disposable {
     try {
       const lease = await readGatewayLease(this.gatewayLease)
       if (!isProcessRunning(lease.pid) || !await probeGateway(lease.url)) return undefined
+      if (this.configuration.get().runtimeMode === 'bundled' && !gatewayLeaseMatchesVersion(lease, EXPECTED_DSH_VERSION)) {
+        this.logger.warn(`Discarding shared Harness ${lease.version}; bundled extension requires ${EXPECTED_DSH_VERSION}.`)
+        await clearGatewayLease(this.gatewayLease, lease.pid)
+        await terminateProcessId(lease.pid).catch(error => this.logger.warn(`Could not stop incompatible shared Harness ${lease.pid}: ${errorMessage(error)}`))
+        return undefined
+      }
       return lease
     } catch {
       return undefined

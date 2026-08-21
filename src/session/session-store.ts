@@ -24,6 +24,9 @@ export class SessionStore {
   private readonly archivedSessionIds = new Set<string>()
   private readonly events = new Map<string, Map<number, HistoryEntry>>()
   private readonly historyHasMore = new Map<string, boolean>()
+  private readonly initialHistoryStart = new Map<string, number>()
+  private readonly historyExpanded = new Map<string, boolean>()
+  private readonly historyPageStarts = new Map<string, number[]>()
   private historyLoading = false
   private readonly approvals = new Map<string, PendingApproval>()
   private readonly questions = new Map<string, PendingQuestion>()
@@ -89,13 +92,19 @@ export class SessionStore {
   }
 
   addSession(item: SessionSummary): void {
-    this.sessions.set(item.sessionId, { ...this.sessions.get(item.sessionId), ...item })
+    const current = this.sessions.get(item.sessionId)
+    const merged = { ...current, ...item }
+    this.sessions.set(item.sessionId, current?.blank === false ? { ...merged, blank: false } : merged)
   }
 
   removeSession(sessionId: string): void {
     this.sessions.delete(sessionId)
     this.archivedSessionIds.delete(sessionId)
     this.events.delete(sessionId)
+    this.historyHasMore.delete(sessionId)
+    this.initialHistoryStart.delete(sessionId)
+    this.historyExpanded.delete(sessionId)
+    this.historyPageStarts.delete(sessionId)
     this.contextPressure.delete(sessionId)
     this.sessionOperations.delete(sessionId)
     if (this.activeSessionId === sessionId) this.activeSessionId = undefined
@@ -152,14 +161,22 @@ export class SessionStore {
     for (const entry of entries) bySeq.set(entry.event.seq, entry)
     this.events.set(sessionId, bySeq)
     this.historyHasMore.set(sessionId, hasMore)
+    const firstSeq = entries.reduce<number | undefined>((minimum, entry) => minimum === undefined ? entry.event.seq : Math.min(minimum, entry.event.seq), undefined)
+    if (firstSeq === undefined) this.initialHistoryStart.delete(sessionId)
+    else this.initialHistoryStart.set(sessionId, firstSeq)
+    this.historyExpanded.set(sessionId, false)
+    this.historyPageStarts.set(sessionId, [])
     this.applySessionMetadata(sessionId, entries.map(entry => entry.event))
   }
 
-  prependHistory(sessionId: string, entries: readonly HistoryEntry[], hasMore: boolean): void {
+  prependHistory(sessionId: string, entries: readonly HistoryEntry[], hasMore: boolean, trackPage = true): void {
     const bySeq = this.events.get(sessionId) ?? new Map<number, HistoryEntry>()
+    const previousStart = minimumSeq(bySeq.keys())
     for (const entry of entries) bySeq.set(entry.event.seq, entry)
     this.events.set(sessionId, bySeq)
     this.historyHasMore.set(sessionId, hasMore)
+    const nextStart = minimumSeq(bySeq.keys())
+    if (trackPage && previousStart !== undefined && nextStart !== undefined && nextStart < previousStart) this.markHistoryPage(sessionId, previousStart)
     this.applySessionMetadata(sessionId, entries.map(entry => entry.event))
   }
 
@@ -173,6 +190,31 @@ export class SessionStore {
 
   setHistoryLoading(value: boolean): void {
     this.historyLoading = value
+  }
+
+  hideOlderHistory(sessionId: string, all = false): void {
+    const pages = this.historyPageStarts.get(sessionId) ?? []
+    const bySeq = this.events.get(sessionId)
+    const firstSeq = all && bySeq !== undefined ? latestTurnStart(bySeq) ?? this.initialHistoryStart.get(sessionId) : pages.pop()
+    if (firstSeq === undefined || bySeq === undefined) return
+    for (const seq of bySeq.keys()) if (seq < firstSeq) bySeq.delete(seq)
+    this.historyHasMore.set(sessionId, true)
+    if (all) {
+      pages.length = 0
+      this.initialHistoryStart.set(sessionId, firstSeq)
+    }
+    this.historyPageStarts.set(sessionId, pages)
+    this.historyExpanded.set(sessionId, pages.length > 0)
+  }
+
+  markHistoryPage(sessionId: string, previousStart: number): void {
+    const bySeq = this.events.get(sessionId)
+    const nextStart = bySeq === undefined ? undefined : minimumSeq(bySeq.keys())
+    if (nextStart === undefined || nextStart >= previousStart) return
+    const pages = this.historyPageStarts.get(sessionId) ?? []
+    pages.push(previousStart)
+    this.historyPageStarts.set(sessionId, pages)
+    this.historyExpanded.set(sessionId, true)
   }
 
   appendEvent(sessionId: string, event: SessionEvent, view?: unknown): void {
@@ -203,11 +245,18 @@ export class SessionStore {
   snapshot(): WorkbenchSnapshot {
     const sessions = [...this.sessions.values()]
       .filter(session => !this.archivedSessionIds.has(session.sessionId))
-      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
+      .sort((left, right) => {
+        // Keep the one-click blank workspace at the far left; persisted work follows newest first.
+        const leftBlank = left.blank === true
+        const rightBlank = right.blank === true
+        if (leftBlank !== rightBlank) return leftBlank ? -1 : 1
+        return (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
+      })
       .map(session => toWorkbenchSession(session, this.sessionOperations.get(session.sessionId)))
     const activeEvents = this.activeSessionId === undefined
       ? []
       : [...(this.events.get(this.activeSessionId)?.values() ?? [])].sort((left, right) => left.event.seq - right.event.seq)
+    const messages = projectMessages(activeEvents)
     const modelCatalog = this.modelCatalog
     const activeModelCatalog = modelCatalog !== undefined && modelCatalog.sessionId === this.activeSessionId ? modelCatalog.value : undefined
     const currentModel = activeModelCatalog?.current
@@ -220,8 +269,11 @@ export class SessionStore {
       hasApiKey: this.hasApiKey,
       sessions,
       ...(this.activeSessionId === undefined ? {} : { activeSessionId: this.activeSessionId }),
-      messages: projectMessages(activeEvents),
+      messages,
       hasMoreHistory: this.activeSessionId === undefined ? false : (this.historyHasMore.get(this.activeSessionId) ?? false),
+      historyExpanded: this.activeSessionId === undefined ? false : (this.historyExpanded.get(this.activeSessionId) ?? false),
+      historyPageCount: this.activeSessionId === undefined ? 0 : (this.historyPageStarts.get(this.activeSessionId)?.length ?? 0),
+      historyCanHideAll: conversationUnitCount(messages) > 1,
       historyLoading: this.historyLoading,
       approvals: [...this.approvals.values()].filter(item => item.sessionId === this.activeSessionId),
       questions: [...this.questions.values()].filter(item => item.sessionId === this.activeSessionId),
@@ -256,6 +308,24 @@ export class SessionStore {
 
 function questionKey(rpcId: string, questionId: string): string {
   return `${rpcId}\u0000${questionId}`
+}
+
+function minimumSeq(values: Iterable<number>): number | undefined {
+  let minimum: number | undefined
+  for (const value of values) minimum = minimum === undefined ? value : Math.min(minimum, value)
+  return minimum
+}
+
+function latestTurnStart(entries: ReadonlyMap<number, HistoryEntry>): number | undefined {
+  let latest: number | undefined
+  for (const entry of entries.values()) if (entry.event.type === 'turn/start') latest = latest === undefined ? entry.event.seq : Math.max(latest, entry.event.seq)
+  return latest
+}
+
+function conversationUnitCount(messages: readonly WorkbenchMessage[]): number {
+  const units = new Set<string>()
+  for (const message of messages) units.add(message.taskId === undefined ? `message:${message.id}` : `task:${message.taskId}`)
+  return units.size
 }
 
 export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMessage[] {

@@ -34,6 +34,7 @@ export interface SessionSummary {
   readonly agentPreset?: string
   readonly parentSessionId?: string
   readonly origin?: 'subagent'
+  readonly projections?: { readonly values?: Record<string, unknown> }
 }
 
 export interface HistoryEntry {

@@ -11,7 +11,7 @@ import { CredentialStore } from './security/credentials.js'
 import { WorkbenchController } from './session/workbench-controller.js'
 import { SessionTrashService } from './session/session-trash.js'
 import { ChatViewProvider } from './ui/chat-view.js'
-import { mergedVisionModelIds, visionModelIds } from './vision/model-catalog.js'
+import { auxiliaryVisionEnabledForModel, isVisionCapableModel, mergedVisionModelIds, visionModelIds } from './vision/model-catalog.js'
 
 let activeController: WorkbenchController | undefined
 let activeRuntime: RuntimeManager | undefined
@@ -164,6 +164,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       visionModel: current.visionModel,
       visionReasoningEffort: current.visionReasoningEffort,
       visionModels: await visionModels(current.visionBaseUrl, await credentials.getVisionApiKey(), current.visionModel) as readonly string[],
+      mainModelVisionCapable: isVisionCapableModel(current.model),
+      auxiliaryVisionEnabled: auxiliaryVisionEnabledForModel(current.model, current.visionModelOverrides),
+      compactionProvider: current.compactionProvider ?? '',
+      compactionModel: current.compactionModel ?? '',
       hasVisionApiKey: (await credentials.getVisionApiKey())?.trim() !== '',
       pasteFileThreshold: current.pasteFileThreshold,
       contextWindowTokens: current.contextWindowTokens,

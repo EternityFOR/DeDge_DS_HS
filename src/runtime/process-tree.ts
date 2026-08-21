@@ -28,6 +28,15 @@ export async function terminateProcessTree(child: ChildProcess, graceMs = STOP_G
   }
 }
 
+export async function terminateProcessId(pid: number): Promise<void> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Cannot terminate an invalid process id.')
+  if (process.platform === 'win32') {
+    await run(windowsSystemExecutable('taskkill.exe'), ['/pid', String(pid), '/T', '/F'])
+    return
+  }
+  try { process.kill(-pid, 'SIGTERM') } catch { process.kill(pid, 'SIGTERM') }
+}
+
 function windowsSystemExecutable(name: string): string {
   return process.env.SystemRoot === undefined ? name : path.join(process.env.SystemRoot, 'System32', name)
 }

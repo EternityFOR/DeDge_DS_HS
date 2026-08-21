@@ -20,16 +20,20 @@ export interface ContextAttachment {
 
 export class ContextCollector {
   collectSelection(maxBytes: number): ContextAttachment | undefined {
-    const editor = vscode.window.activeTextEditor
+    const editor = vscode.window.activeTextEditor?.selection.isEmpty === false
+      ? vscode.window.activeTextEditor
+      : vscode.window.visibleTextEditors.find(candidate => !candidate.selection.isEmpty)
     if (editor === undefined || editor.selection.isEmpty) return undefined
     const document = editor.document
     const selection = editor.selection
     const selected = document.getText(selection)
-    const location = `${relativeLabel(document.uri)}:${selection.start.line + 1}-${selection.end.line + 1}`
+    const startLine = selection.start.line + 1
+    const endLine = selection.end.character === 0 && selection.end.line > selection.start.line ? selection.end.line : selection.end.line + 1
+    const location = `${path.basename(document.uri.fsPath)} (${startLine}-${endLine})`
     const body = [
       `File: ${relativeLabel(document.uri)}`,
       `Language: ${document.languageId}`,
-      `Lines: ${selection.start.line + 1}-${selection.end.line + 1}`,
+      `Lines: ${startLine}-${endLine}`,
       '',
       selected,
     ].join('\n')
@@ -45,7 +49,8 @@ export class ContextCollector {
   }
 
   collectDiagnostics(maxBytes: number): ContextAttachment | undefined {
-    const uri = vscode.window.activeTextEditor?.document.uri
+    const editor = vscode.window.activeTextEditor ?? vscode.window.visibleTextEditors[0]
+    const uri = editor?.document.uri
     if (uri === undefined) return undefined
     const diagnostics = vscode.languages.getDiagnostics(uri).filter(item => item.severity <= vscode.DiagnosticSeverity.Warning)
     if (diagnostics.length === 0) return undefined
@@ -72,6 +77,27 @@ export class ContextCollector {
     )
     if (picked === undefined) return undefined
     return this.collectUri(picked.uri, maxBytes, picked.label)
+  }
+
+  async pickExternalFile(_maxBytes: number): Promise<ContextAttachment | undefined> {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      openLabel: 'Attach file',
+      title: 'Attach a file to DeepSeek Harness',
+    })
+    const uri = picked?.[0]
+    if (uri === undefined) return undefined
+    const label = path.basename(uri.fsPath)
+    return {
+      id: `file-reference:${createHash('sha256').update(uri.toString()).digest('hex').slice(0, 16)}`,
+      kind: 'file',
+      label,
+      text: `File path: ${uri.fsPath}`,
+      uri: uri.toString(),
+      truncated: false,
+    }
   }
 
   async collectUri(uri: vscode.Uri, maxBytes: number, label = relativeLabel(uri)): Promise<ContextAttachment> {
@@ -140,7 +166,9 @@ export class ContextCollector {
     const byteLength = Buffer.byteLength(value, 'utf8')
     if (pastedDirectory !== undefined && pasteFileThreshold !== undefined && byteLength > pasteFileThreshold) {
       await mkdir(pastedDirectory, { recursive: true })
-      const target = path.join(pastedDirectory, `${Date.now()}-${digest}.txt`)
+      const extension = path.extname(label) || '.txt'
+      const stem = path.basename(label, path.extname(label)).replace(/[<>:"/\\|?*\u0000-\u001f]/gu, '_').slice(0, 96) || 'attachment'
+      const target = path.join(pastedDirectory, `${stem}-${digest}${extension}`)
       await writeFile(target, value, 'utf8')
       return {
         id: `pasted-file:${digest}`,

@@ -66,7 +66,7 @@ try {
     PATH: [runtimeBin, path.dirname(node), env.PATH].filter(Boolean).join(path.delimiter),
   })
 
-  child = spawn(node, [dsh, 'web', '--patch', overlayPath, '--host', '127.0.0.1', '--port', '0'], {
+  child = spawn(node, [dsh, 'web', '--patch', overlayPath, '--host', '127.0.0.1', '--port', '0', '--no-open'], {
     cwd: root,
     env,
     shell: false,
@@ -84,11 +84,23 @@ try {
   for (const model of ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp']) {
     if (!modelIds.has(model)) throw new Error(`session.models did not advertise ${model}: ${JSON.stringify(catalog)}`)
   }
-  const command = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/compact' } })
+  const command = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/compact', images: [] } })
   if (command?.result?.kind !== 'success' && command?.result?.kind !== 'error') {
     throw new Error(`commands/execute returned a malformed command result: ${JSON.stringify(command)}`)
   }
-  console.log(`Runtime smoke passed at ${url} with Gateway ${String(description?.version ?? 'unknown')} and /compact RPC support`)
+  const visionSession = await rpc(url, 'session.create', { cwd: root, agentPreset: 'standard' })
+  await rpc(url, 'session.selectModel', { sessionId: visionSession.sessionId, provider: 'deepseek-official', model: 'deepseek-v4-flash-vision-exp', reasoningEffort: 'off' })
+  const imagePrompt = await rpc(url, 'session.prompt', {
+    sessionId: visionSession.sessionId,
+    mode: 'queue',
+    content: [
+      { type: 'image', mediaType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', name: 'smoke.png' },
+      { type: 'text', text: 'Describe this image.' },
+    ],
+  })
+  if (imagePrompt?.accepted !== true) throw new Error(`session.prompt did not accept native image content: ${JSON.stringify(imagePrompt)}`)
+  await rpc(url, 'session.cancel', { sessionId: visionSession.sessionId })
+  console.log(`Runtime smoke passed at ${url} with Gateway ${String(description?.version ?? 'unknown')}, /compact, and native image prompt support`)
 } finally {
   if (child !== undefined) await terminate(child)
   await rm(smokeRoot, { recursive: true, force: true })

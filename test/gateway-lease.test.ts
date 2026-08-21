@@ -8,6 +8,7 @@ import {
   readGatewayLease,
   tryAcquireGatewayStartupLock,
   writeGatewayLease,
+  gatewayLeaseMatchesVersion,
 } from '../src/runtime/gateway-lease.js'
 
 const temporaryDirectories: string[] = []
@@ -17,6 +18,10 @@ afterEach(async () => {
 })
 
 describe('Harness gateway lease', () => {
+  it('requires an exact bundled runtime version before attaching', () => {
+    expect(gatewayLeaseMatchesVersion({ version: '0.1.1-rc.1' }, '0.1.1-rc.1')).toBe(true)
+    expect(gatewayLeaseMatchesVersion({ version: '0.1.0-rc.7' }, '0.1.1-rc.1')).toBe(false)
+  })
   it('uses the per-user local application data directory', () => {
     expect(defaultGatewayLeasePath({ LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local' }, 'C:\\Users\\test'))
       .toBe(path.join('C:\\Users\\test\\AppData\\Local', 'DeDge', 'DeepSeekHarness', 'gateway-lease.json'))

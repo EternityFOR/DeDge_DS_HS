@@ -1,6 +1,18 @@
 const MAX_VISION_MODELS = 1_000
 export const DEEPSEEK_VISION_EXP_MODEL = 'deepseek-v4-flash-vision-exp'
 
+export function isVisionCapableModel(model: string): boolean {
+  const id = model.toLowerCase()
+  return id === DEEPSEEK_VISION_EXP_MODEL
+    || /(?:vision|multimodal|(?:^|[-_.])vl(?:$|[-_.]))/u.test(id)
+    || /^(?:gpt-(?:4o|4\.1|5(?:[.-]|$))|o[134](?:[.-]|$))/u.test(id)
+    || /^(?:claude-(?:3|sonnet-4|opus-4)|gemini-(?:1\.5|2|3)|pixtral|llama-[\w.-]*vision|glm-4v|qwen[\w.-]*-vl|kimi[\w.-]*-vl)/u.test(id)
+}
+
+export function auxiliaryVisionEnabledForModel(model: string, overrides: Readonly<Record<string, boolean>> = {}): boolean {
+  return overrides[model] ?? false
+}
+
 export function visionModelIds(payload: unknown): string[] {
   if (!isRecord(payload) || !Array.isArray(payload.data)) return []
   const models: string[] = []

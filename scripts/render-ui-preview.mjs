@@ -9,7 +9,7 @@ if (template === undefined) throw new Error('Could not locate the Webview HTML t
 
 const state = {
   phase: 'connected',
-  runtime: { phase: 'ready', version: '0.1.0-rc.7' },
+  runtime: { phase: 'ready', version: '0.1.1-rc.1' },
   hasApiKey: true,
   sessions: [
     { id: 'one', title: 'DeDge_DS_HS', running: false, blank: false },
@@ -90,7 +90,8 @@ const state = {
 const bootstrap = `<script nonce="preview">
 const previewSettings = {
   baseUrl: 'https://api.deepseek.com/', hasApiKey: true,
-  visionBaseUrl: 'https://api.deepseek.com/', visionModel: 'deepseek-v4-flash-vision-exp', visionReasoningEffort: '', visionModels: ['deepseek-v4-flash-vision-exp'], hasVisionApiKey: true,
+  visionBaseUrl: 'https://api.deepseek.com/', visionModel: 'deepseek-v4-flash-vision-exp', visionReasoningEffort: '', mainModelVisionCapable: false, auxiliaryVisionEnabled: false, visionModels: ['deepseek-v4-flash-vision-exp'], hasVisionApiKey: true,
+  compactionProvider: '', compactionModel: '',
   pasteFileThreshold: 4096, contextWindowTokens: 1000000,
   codexHome: '\${userHome}/.codex', claudeHome: '\${userHome}/.claude', handoffLaunchMode: 'clipboard',
   skillDirectories: ['\${userHome}/.codex/skills'],
@@ -134,12 +135,14 @@ window.acquireVsCodeApi = () => ({
         window.postMessage({ type: 'state', state: window.__previewState, attachments: [] }, '*')
       }, 50)
     }
-    if (message.type === 'loadOlderHistory' && window.__previewState !== undefined) {
+    if ((message.type === 'loadOlderHistory' || message.type === 'loadAllHistory') && window.__previewState !== undefined) {
       window.postMessage({ type: 'state', state: { ...window.__previewState, historyLoading: true }, attachments: [] }, '*')
       window.setTimeout(() => {
         window.__previewState = {
           ...window.__previewState,
           hasMoreHistory: false,
+          historyExpanded: true,
+          historyPageCount: 1,
           historyLoading: false,
           messages: [
             { id: 'old-u', role: 'user', text: 'This is the earlier task and must stay above the current task.', status: 'complete', taskId: 'turn:0', taskComplete: true },
@@ -151,12 +154,22 @@ window.acquireVsCodeApi = () => ({
         window.postMessage({ type: 'state', state: window.__previewState, attachments: [] }, '*')
       }, 450)
     }
+    if ((message.type === 'hideOlderHistory' || message.type === 'hideAllOlderHistory') && window.__previewState !== undefined) {
+      window.__previewState = {
+        ...window.__previewState,
+        hasMoreHistory: true,
+        historyExpanded: false,
+        historyPageCount: 0,
+        messages: window.__previewState.messages.filter(item => !String(item.id).startsWith('old-')),
+      }
+      window.postMessage({ type: 'state', state: window.__previewState, attachments: [] }, '*')
+    }
   },
   setState: value => { window.__webviewState = value },
   getState: () => window.__webviewState,
 })
 </script>`
-const payload = `<script nonce="preview">window.__previewState = ${JSON.stringify(state)}; window.postMessage({ type: 'state', state: window.__previewState, attachments: [] }, '*')</script>`
+const payload = `<script nonce="preview">window.__previewState = ${JSON.stringify(state)}; window.postMessage({ type: 'state', state: window.__previewState, attachments: [] }, '*'); window.postMessage({ type: 'settings', settings: previewSettings, open: false }, '*')</script>`
 const html = template
   .replaceAll('${webview.cspSource}', "'self'")
   .replaceAll('${nonce}', 'preview')

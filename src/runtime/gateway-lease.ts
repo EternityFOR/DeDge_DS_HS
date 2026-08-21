@@ -14,6 +14,10 @@ export interface GatewayStartupLock {
   readonly release: () => Promise<void>
 }
 
+export function gatewayLeaseMatchesVersion(lease: Pick<GatewayLease, 'version'>, expectedVersion: string): boolean {
+  return lease.version === expectedVersion
+}
+
 interface GatewayStartupLockRecord {
   readonly pid: number
   readonly nonce: string

@@ -11,9 +11,10 @@ import {
   Ellipsis,
   FileText,
   FoldVertical,
+  FolderOpen,
+  HardDrive,
   Image,
   KeyRound,
-  Layers3,
   LoaderCircle,
   ListPlus,
   Paperclip,
@@ -27,6 +28,7 @@ import {
   Square,
   TextQuote,
   TriangleAlert,
+  UnfoldVertical,
   X,
   Search,
   WandSparkles,
@@ -50,12 +52,13 @@ const iconComponents = {
   'chevrons-down': ChevronsDown,
   'corner-down-right': CornerDownRight,
   'fold-vertical': FoldVertical,
+  'folder-open': FolderOpen,
+  'hard-drive': HardDrive,
   'image': Image,
   'diff': Diff,
   'ellipsis': Ellipsis,
   'file-text': FileText,
   'key-round': KeyRound,
-  'layers-3': Layers3,
   'loader-circle': LoaderCircle,
   'list-plus': ListPlus,
   'paperclip': Paperclip,
@@ -69,6 +72,7 @@ const iconComponents = {
   'square': Square,
   'text-quote': TextQuote,
   'triangle-alert': TriangleAlert,
+  'unfold-vertical': UnfoldVertical,
   'x': X,
   'search': Search,
   'wand-sparkles': WandSparkles,
@@ -95,6 +99,7 @@ const collapsedMessages = new Set<string>()
 const expandedTasks = new Set<string>()
 const collapsedTasks = new Set<string>()
 const knownTaskIds = new Set<string>()
+const taskCompletion = new Map<string, boolean>()
 let compactThinking = true
 let skillCatalog: readonly SkillSummary[] = []
 let skillPopoverVisible = false
@@ -115,11 +120,14 @@ let pendingAttachments: readonly ContextAttachment[] = []
 let renderedSessionKey: string | undefined
 let emptyNode: HTMLElement | undefined
 let pendingAnchor: HTMLElement | undefined
-let historyLoader: HTMLButtonElement | undefined
+let historyControls: HTMLElement | undefined
+let historyLoadOne: HTMLButtonElement | undefined
+let historyLoadAll: HTMLButtonElement | undefined
+let historyHideOne: HTMLButtonElement | undefined
+let historyHideAll: HTMLButtonElement | undefined
 let historyLoadPending = false
 let historyLoadScrollHeight = 0
 let currentSettings: WorkbenchSettings | undefined
-let currentInspection: import('../webview-protocol.js').PromptInspection | undefined
 let showAllVisionModels = false
 let pendingSignature = ''
 let controlsSignature = ''
@@ -135,6 +143,8 @@ marked.setOptions({ gfm: true, breaks: false })
 
 const elements = {
   sessionTabs: required('session-tabs'),
+  foldAll: requiredButton('fold-all'),
+  expandAll: requiredButton('expand-all'),
   searchConversation: requiredButton('search-conversation'),
   searchPanel: required('search-panel'),
   searchInput: requiredInput('search-input'),
@@ -170,6 +180,8 @@ const elements = {
   deliveryMode: requiredButton('delivery-mode'),
   cancel: requiredButton('cancel'),
   compact: requiredButton('compact'),
+  compactMenu: requiredButton('compact-menu'),
+  compactModelOptions: required('compact-model-options'),
   configureContext: requiredButton('configure-context'),
   statusDot: required('status-dot'),
   statusText: required('status-text'),
@@ -179,13 +191,6 @@ const elements = {
   steerNoticeText: required('steer-notice-text'),
   steerNoticeClose: requiredButton('steer-notice-close'),
   settingsDialog: required('settings-dialog'),
-  inspectorDialog: required('inspector-dialog'),
-  inspectorClose: requiredButton('inspector-close'),
-  inspectorCopy: requiredButton('inspector-copy'),
-  inspectorScope: required('inspector-scope'),
-  inspectorNote: required('inspector-note'),
-  inspectorBody: required('inspector-body'),
-  inspectPrompt: requiredButton('inspect-prompt'),
   settingsClose: requiredButton('settings-close'),
   settingsCancel: requiredButton('settings-cancel'),
   settingsSave: requiredButton('settings-save'),
@@ -203,6 +208,7 @@ const elements = {
   settingHandoffMode: requiredSelect('setting-handoff-mode'),
   settingSkillDirectories: requiredTextArea('setting-skill-directories'),
   visionModelOptions: required('vision-model-options'),
+  visionToggle: requiredButton('vision-toggle'),
 }
 
 const persistedWebviewState = vscode.getState()
@@ -225,20 +231,20 @@ const popovers = [
     renderPresetOptions(state)
   }),
   popover('vision-model-menu', 'vision-model-popover', renderVisionModelOptions),
+  popover('compact-menu', 'compact-popover', renderCompactionModelOptions),
   popover('delivery-mode', 'delivery-popover'),
 ]
 
-bindAction('attach-selection', { type: 'attachSelection' })
-elements.inspectPrompt.addEventListener('click', () => post({ type: 'inspectPrompt', text: elements.prompt.value }))
-bindAction('attach-file', { type: 'attachFile' })
-bindAction('attach-problems', { type: 'attachDiagnostics' })
+bindAction('attach-workspace-file', { type: 'attachFile' })
+bindAction('attach-external-file', { type: 'attachExternalFile' })
 bindAction('review', { type: 'reviewChanges' })
-bindAction('review-toolbar', { type: 'reviewChanges' })
 bindAction('handoff', { type: 'handoff' })
 bindAction('set-key', { type: 'openSettings' })
 bindAction('compact', { type: 'compact' })
 bindAction('configure-context', { type: 'configureContextWindow' })
 bindAction('cancel', { type: 'cancel' })
+elements.foldAll.addEventListener('click', () => setTaskFolding('collapse'))
+elements.expandAll.addEventListener('click', () => setTaskFolding('expand'))
 requiredButton('send').addEventListener('click', send)
 for (const [id, mode] of [['delivery-auto', 'auto'], ['delivery-queue', 'queue'], ['delivery-steer', 'steer']] as const) {
   requiredButton(id).addEventListener('click', () => {
@@ -254,10 +260,12 @@ elements.steerNoticeClose.addEventListener('click', () => {
 elements.settingsClose.addEventListener('click', closeSettings)
 elements.settingsCancel.addEventListener('click', closeSettings)
 elements.settingsSave.addEventListener('click', saveSettings)
-elements.inspectorClose.addEventListener('click', () => elements.inspectorDialog.classList.add('hidden'))
-elements.inspectorCopy.addEventListener('click', copyInspection)
 elements.settingVisionModelPicker.addEventListener('change', () => {
   if (elements.settingVisionModelPicker.value !== '') elements.settingVisionModel.value = elements.settingVisionModelPicker.value
+})
+elements.visionToggle.addEventListener('click', () => {
+  if (currentSettings === undefined) return
+  post({ type: 'setVisionEnabled', enabled: !currentSettings.auxiliaryVisionEnabled })
 })
 window.addEventListener('keydown', event => {
   if (event.key === 'Escape' && !elements.settingsDialog.classList.contains('hidden')) closeSettings()
@@ -283,6 +291,22 @@ elements.compactThinkingButton.addEventListener('click', () => {
   vscode.setState({ ...(typeof persisted === 'object' && persisted !== null ? persisted : {}), compactThinking })
   if (state !== undefined) renderConversation(state)
 })
+
+function setTaskFolding(mode: 'collapse' | 'expand'): void {
+  const taskIds = new Set(state?.messages.flatMap(message => message.taskId === undefined ? [] : [message.taskId]) ?? [])
+  compactThinking = true
+  expandedTasks.clear()
+  collapsedMessages.clear()
+  if (mode === 'collapse') {
+    for (const taskId of taskIds) collapsedTasks.add(taskId)
+  } else {
+    collapsedTasks.clear()
+  }
+  applyCompactThinkingButton()
+  const persisted = vscode.getState()
+  vscode.setState({ ...(typeof persisted === 'object' && persisted !== null ? persisted : {}), compactThinking })
+  if (state !== undefined) renderConversation(state)
+}
 
 elements.prompt.addEventListener('keydown', event => {
   if (skillPopoverVisible) {
@@ -384,7 +408,6 @@ elements.conversation.addEventListener('scroll', () => {
   if (conversation.scrollTop >= maxScroll - 24) stickToBottom = true
   else if (conversation.scrollTop < maxScroll - 96) stickToBottom = false
   updateScrollBottomButton()
-  if (conversation.scrollTop <= 24) requestOlderHistory()
 })
 let resizeFrame: number | undefined
 window.addEventListener('resize', () => {
@@ -395,6 +418,7 @@ window.addEventListener('resize', () => {
       if (!item.popover.classList.contains('hidden')) positionPopover(item)
     }
     if (!elements.contextMeterAnchor.classList.contains('hidden')) positionContextTooltip()
+    fitSessionTabs()
     updateScrollBottomButton()
   })
 })
@@ -458,12 +482,18 @@ window.addEventListener('message', event => {
     resizePrompt()
     elements.prompt.focus()
   } else if (message.type === 'notice') showNotice(message.message, message.level)
+  else if (message.type === 'visionAttention') {
+    elements.visionToggle.classList.remove('attention')
+    void elements.visionToggle.offsetWidth
+    elements.visionToggle.classList.add('attention')
+    window.setTimeout(() => elements.visionToggle.classList.remove('attention'), 1_800)
+  }
   else if (message.type === 'settings') {
     currentSettings = message.settings
     renderVisionModelOptions()
+    renderVisionToggle()
     if (message.open !== false) showSettings(message.settings, message.section)
   }
-  else if (message.type === 'promptInspection') renderPromptInspection(message.inspection)
   else if (message.type === 'skills') {
     skillCatalog = message.skills
     if (skillPopoverVisible) renderSkillPopover()
@@ -545,7 +575,7 @@ function render(): void {
   updateSteerNotice(state)
   if (historyLoadPending && !state.historyLoading) {
     historyLoadPending = false
-    renderHistoryLoader(state)
+    renderHistoryControls(state)
     window.requestAnimationFrame(() => {
       elements.conversation.scrollTop += Math.max(0, elements.conversation.scrollHeight - historyLoadScrollHeight)
     })
@@ -710,10 +740,10 @@ function renderControls(snapshot: WorkbenchSnapshot): void {
 }
 
 function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
-  const visibleSessions = snapshot.sessions.filter(session => !session.blank || session.id === snapshot.activeSessionId)
+  const visibleSessions = snapshot.sessions
   const signature = JSON.stringify({
     activeSessionId: snapshot.activeSessionId,
-    sessions: visibleSessions.map(session => [session.id, session.title, session.running, session.operation]),
+    sessions: visibleSessions.map(session => [session.id, session.title, session.blank, session.updatedAt, session.running, session.operation]),
   })
   if (signature === sessionTabsSignature) return
   sessionTabsSignature = signature
@@ -771,6 +801,19 @@ function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
   })
   elements.sessionTabs.replaceChildren(...nodes)
   elements.sessionTabs.scrollLeft = scrollLeft
+  fitSessionTabs()
+}
+
+function fitSessionTabs(): void {
+  const nodes = Array.from(elements.sessionTabs.children) as HTMLElement[]
+  for (const node of nodes) node.hidden = false
+  let used = 0
+  const available = elements.sessionTabs.clientWidth
+  for (const node of nodes) {
+    const width = node.getBoundingClientRect().width
+    if (used + width > available && used > 0) node.hidden = true
+    else used += width
+  }
 }
 
 function renderModelOptions(snapshot: WorkbenchSnapshot | undefined): void {
@@ -913,16 +956,26 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     expandedTasks.clear()
     collapsedTasks.clear()
     knownTaskIds.clear()
+    taskCompletion.clear()
     taskFoldElements.clear()
     taskGroupElements.clear()
     stickToBottom = true
     emptyNode = undefined
     elements.conversation.replaceChildren()
-    historyLoader = document.createElement('button')
-    historyLoader.type = 'button'
-    historyLoader.className = 'history-loader hidden'
-    historyLoader.addEventListener('click', requestOlderHistory)
-    elements.conversation.append(historyLoader)
+    historyControls = document.createElement('div')
+    historyControls.className = 'history-controls hidden'
+    const loadGroup = document.createElement('div')
+    loadGroup.className = 'history-control-group'
+    historyLoadOne = historyControl('Load', 'Load one earlier visible history page', () => requestOlderHistory(false))
+    historyLoadAll = historyControl('All', 'Load all earlier history', () => requestOlderHistory(true))
+    loadGroup.append(historyLoadOne, historyLoadAll)
+    const hideGroup = document.createElement('div')
+    hideGroup.className = 'history-control-group'
+    historyHideOne = historyControl('Hide', 'Hide the oldest loaded history page', () => post({ type: 'hideOlderHistory' }))
+    historyHideAll = historyControl('All', 'Hide all loaded earlier history', () => post({ type: 'hideAllOlderHistory' }))
+    hideGroup.append(historyHideOne, historyHideAll)
+    historyControls.append(hideGroup, loadGroup)
+    elements.conversation.append(historyControls)
     pendingAnchor = document.createElement('div')
     pendingAnchor.className = 'pending-area'
     elements.conversation.append(pendingAnchor)
@@ -952,6 +1005,7 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     taskGroupElements.delete(taskId)
     taskFoldElements.delete(taskId)
     knownTaskIds.delete(taskId)
+    taskCompletion.delete(taskId)
     collapsedTasks.delete(taskId)
     expandedTasks.delete(taskId)
   }
@@ -992,8 +1046,8 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     elements.conversation.insertBefore(pendingSendPreview, pendingAnchor)
   }
   renderMessageSegments(messages)
-  if (historyLoader !== undefined) {
-    renderHistoryLoader(snapshot)
+  if (historyControls !== undefined) {
+    renderHistoryControls(snapshot)
   }
 
   const approvals = snapshot.approvals
@@ -1037,22 +1091,29 @@ function reorderConversationUnits(messages: readonly WorkbenchMessage[]): void {
   }
 }
 
-function renderHistoryLoader(snapshot: WorkbenchSnapshot): void {
-  if (historyLoader === undefined) return
+function renderHistoryControls(snapshot: WorkbenchSnapshot): void {
+  if (historyControls === undefined || historyLoadOne === undefined || historyLoadAll === undefined || historyHideOne === undefined || historyHideAll === undefined) return
   const loading = historyLoadPending || snapshot.historyLoading
   const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
   const operationBlocked = active?.operation !== undefined
-  historyLoader.classList.toggle('hidden', !snapshot.hasMoreHistory && !loading)
-  historyLoader.disabled = loading || operationBlocked
-  historyLoader.title = operationBlocked ? 'Wait for the current session operation to finish' : ''
-  historyLoader.replaceChildren()
-  if (loading) {
-    const spinner = svgIcon('loader-circle')
-    spinner.classList.add('history-loader-spinner')
-    historyLoader.append(spinner, document.createTextNode('Loading earlier messages...'))
-  } else {
-    historyLoader.textContent = 'Load earlier messages'
-  }
+  const canHideOne = (snapshot.historyPageCount ?? 0) > 0
+  const canHideAll = canHideOne || snapshot.historyCanHideAll === true
+  historyControls.classList.toggle('hidden', !snapshot.hasMoreHistory && !canHideAll && !loading)
+  historyLoadOne.disabled = loading || operationBlocked || !snapshot.hasMoreHistory
+  historyLoadAll.disabled = loading || operationBlocked || !snapshot.hasMoreHistory
+  historyHideOne.disabled = loading || operationBlocked || !canHideOne
+  historyHideAll.disabled = loading || operationBlocked || !canHideAll
+  historyControls.classList.toggle('loading', loading)
+}
+
+function historyControl(label: string, title: string, handler: () => void): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'history-control'
+  button.textContent = label
+  button.title = title
+  button.addEventListener('click', handler)
+  return button
 }
 
 function showPendingSendPreview(text: string, attachmentLabels: readonly string[]): void {
@@ -1118,10 +1179,17 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
     taskGroupElements.delete(taskId)
   }
   for (const [taskId, items] of groups) {
+    const complete = items.every(item => item.taskComplete === true)
     if (!knownTaskIds.has(taskId)) {
       knownTaskIds.add(taskId)
       collapsedTasks.add(taskId)
+    } else if (taskCompletion.get(taskId) === false && complete) {
+      // A live turn just finished: reveal its first-level task shell and final
+      // answer while keeping nested reasoning, tool, and Vision details folded.
+      collapsedTasks.delete(taskId)
+      expandedTasks.delete(taskId)
     }
+    taskCompletion.set(taskId, complete)
     const first = items.find(item => item.role === 'user') ?? items[0]
     const last = [...items].reverse().find(item => item.role === 'assistant' || item.role === 'system') ?? items.at(-1)
     if (first === undefined || last === undefined || first.id === last.id) continue
@@ -1679,6 +1747,7 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
   const sendUnavailable = promptUnavailableReason(snapshot)
   const steer = steerAvailable(snapshot)
   renderDeliveryMode()
+  renderVisionToggle()
   const modelControlsUnavailable = modelControlsUnavailableReason(snapshot)
   const compactionUnavailable = snapshot.agentPreset === 'minimal'
   const hasActiveTurn = snapshot.messages.some(message => message.status === 'streaming' || message.taskComplete === false)
@@ -1744,7 +1813,7 @@ function renderDeliveryMode(): void {
     : deliveryMode === 'steer' ? 'Inject into active turn' : 'After current turn'
   elements.deliveryMode.title = `Delivery mode: ${label} (${detail})`
   elements.deliveryMode.setAttribute('aria-label', elements.deliveryMode.title)
-  elements.deliveryMode.replaceChildren(svgIcon(deliveryMode === 'auto' ? 'wand-sparkles' : deliveryMode === 'steer' ? 'corner-down-right' : 'list-plus'))
+  elements.deliveryMode.replaceChildren(svgIcon('chevron-down'))
   elements.deliveryMode.classList.toggle('steer', deliveryMode === 'steer')
   for (const [id, mode] of [['delivery-auto', 'auto'], ['delivery-steer', 'steer'], ['delivery-queue', 'queue']] as const) {
     const option = requiredButton(id)
@@ -2041,12 +2110,12 @@ function startComposerResize(event: PointerEvent): void {
   elements.composerResize.addEventListener('pointercancel', finish)
 }
 
-function requestOlderHistory(): void {
+function requestOlderHistory(all: boolean): void {
   if (state?.hasMoreHistory !== true || state.historyLoading || historyLoadPending) return
   historyLoadPending = true
   historyLoadScrollHeight = elements.conversation.scrollHeight
-  renderHistoryLoader(state)
-  post({ type: 'loadOlderHistory' })
+  renderHistoryControls(state)
+  post({ type: all ? 'loadAllHistory' : 'loadOlderHistory' })
 }
 
 interface PopoverBinding {
@@ -2178,12 +2247,13 @@ function closeSettings(): void {
   elements.prompt.focus()
 }
 
+/* Removed: the preview could not edit the final Harness/provider request.
 function renderPromptInspection(inspection: import('../webview-protocol.js').PromptInspection): void {
-  currentInspection = inspection
   elements.inspectorDialog.classList.remove('hidden')
   elements.inspectorScope.textContent = inspection.scope
   elements.inspectorNote.textContent = inspection.limitation
   const layers = inspection.layers.map(layer => ({ ...layer }))
+  currentInspectionLayers = layers
   const render = (): void => {
     elements.inspectorBody.replaceChildren(...layers.map((layer, index) => {
       const card = document.createElement('article')
@@ -2239,10 +2309,11 @@ function renderPromptInspection(inspection: import('../webview-protocol.js').Pro
 }
 
 function copyInspection(): void {
-  if (currentInspection === undefined) return
-  const text = currentInspection.layers.map(layer => `### ${layer.label}\n${layer.text}`).join('\n\n')
+  if (currentInspectionLayers.length === 0) return
+  const text = currentInspectionLayers.filter(layer => layer.enabled).map(layer => `### ${layer.label}\n${layer.text}`).join('\n\n')
   post({ type: 'copyInspection', text })
 }
+*/
 
 function renderVisionModelOptions(): void {
   const settings = currentSettings
@@ -2268,6 +2339,54 @@ function renderVisionModelOptions(): void {
   elements.visionModelOptions.replaceChildren(...options)
 }
 
+function renderVisionToggle(): void {
+  const settings = currentSettings
+  const enabled = settings?.auxiliaryVisionEnabled === true
+  elements.visionToggle.classList.toggle('toggle-on', enabled)
+  elements.visionToggle.setAttribute('aria-pressed', String(enabled))
+  elements.visionToggle.title = enabled
+    ? 'Auxiliary vision enabled: images are described by an extra model before sending; click to disable'
+    : settings?.mainModelVisionCapable === true
+      ? 'Auxiliary vision off: images go directly to the selected vision-capable model'
+      : 'Auxiliary vision off: enable it to attach images to this text-only model'
+  elements.visionToggle.setAttribute('aria-label', elements.visionToggle.title)
+}
+
+function renderCompactionModelOptions(): void {
+  const settings = currentSettings
+  const catalog = state?.modelCatalog
+  if (settings === undefined) return
+  const inherited = settings.compactionModel === '' || settings.compactionProvider === ''
+  const options: HTMLElement[] = [menuOption({
+    label: 'Same as conversation',
+    description: 'Keeps provider cache reuse; recommended for most sessions',
+    selected: inherited,
+    handler: () => { post({ type: 'selectCompactionModel', provider: '', model: '' }); closePopovers() },
+  })]
+  // Keep the menu useful while the gateway catalog is still loading. The
+  // runtime can resolve these models after restart; selecting one is explicit
+  // and never changes the conversation model.
+  const groups = catalog?.groups ?? (state === undefined ? [] : [{
+    id: state.provider,
+    name: state.provider,
+    models: [
+      { id: state.model, name: state.model },
+      ...(state.model === 'deepseek-v4-flash' ? [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }, { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision Exp' }] : []),
+    ],
+  }])
+  for (const group of groups) {
+    for (const model of group.models) {
+      options.push(menuOption({
+        label: model.name,
+        description: `${group.name} · restarts the local Harness runtime`,
+        selected: settings.compactionProvider === group.id && settings.compactionModel === model.id,
+        handler: () => { post({ type: 'selectCompactionModel', provider: group.id, model: model.id }); closePopovers() },
+      }))
+    }
+  }
+  elements.compactModelOptions.replaceChildren(...options)
+}
+
 function saveSettings(): void {
   const previous = currentSettings
   if (previous === undefined) return
@@ -2283,6 +2402,10 @@ function saveSettings(): void {
       visionReasoningEffort: elements.settingVisionReasoning.value,
       visionModels: previous.visionModels,
       hasVisionApiKey: previous.hasVisionApiKey,
+      mainModelVisionCapable: previous.mainModelVisionCapable,
+      auxiliaryVisionEnabled: previous.auxiliaryVisionEnabled,
+      compactionProvider: previous.compactionProvider,
+      compactionModel: previous.compactionModel,
       pasteFileThreshold,
       contextWindowTokens,
       codexHome: elements.settingCodexHome.value.trim(),

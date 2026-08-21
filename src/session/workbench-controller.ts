@@ -5,10 +5,12 @@ import * as path from 'node:path'
 import * as vscode from 'vscode'
 import type { ConfigurationService, HarnessConfiguration } from '../config/configuration.js'
 import { buildPrompt, type ContextAttachment, ContextCollector } from '../context/context-collector.js'
-import type { GatewayClient } from '../gateway/gateway-client.js'
+import type { GatewayClient, PromptContentPart } from '../gateway/gateway-client.js'
 import { parseContextPressureProjection, parsePermissionProjection, type HostFrame, type MuxFrame, type SessionEvent, type SessionSummary } from '../gateway/protocol.js'
 import { listSkills, parseSkillRefs, readSkillBody, type SkillSummary } from '../skills/skill-catalog.js'
 import { describeImage } from '../vision/vision-client.js'
+import { resolveVisionRoute } from '../vision/routing.js'
+import { auxiliaryVisionEnabledForModel, isVisionCapableModel } from '../vision/model-catalog.js'
 import { errorMessage, type Logger } from '../platform/logger.js'
 import type { CredentialStore } from '../security/credentials.js'
 import type { RuntimeManager } from '../runtime/runtime-manager.js'
@@ -26,7 +28,6 @@ export class WorkbenchController implements vscode.Disposable {
   private readonly store: SessionStore
   private readonly sessionOperations: SessionOperationCoordinator
   private gateway: GatewayClient | undefined
-  private suppressAutoCreate = false
   private readonly deletedSessions = new Set<string>()
   private skillCatalogCache: { readonly key: string; readonly at: number; readonly items: Promise<SkillSummary[]> } | undefined
   private runtimeSubscription: vscode.Disposable
@@ -115,9 +116,8 @@ export class WorkbenchController implements vscode.Disposable {
       const visibleSessions = this.store.snapshot().sessions
       const target = remembered !== undefined && visibleSessions.some(item => item.id === remembered)
         ? remembered
-        : visibleSessions[0]?.id
-      if (target === undefined && !this.suppressAutoCreate) await this.newSession()
-      else if (target !== undefined) await this.selectSession(target)
+        : visibleSessions.find(item => !item.blank)?.id ?? visibleSessions[0]?.id
+      if (target !== undefined) await this.selectSession(target)
       this.store.setPhase('connected')
       this.publish()
     } catch (error) {
@@ -189,7 +189,7 @@ export class WorkbenchController implements vscode.Disposable {
     ])
   }
 
-  async loadOlderHistory(): Promise<void> {
+  async loadOlderHistory(all = false): Promise<void> {
     const snapshot = this.store.snapshot()
     const sessionId = snapshot.activeSessionId
     if (sessionId === undefined || !snapshot.hasMoreHistory || snapshot.historyLoading) return
@@ -202,20 +202,28 @@ export class WorkbenchController implements vscode.Disposable {
     try {
       // Gateway pages may contain only internal events that do not project into
       // visible messages. Advance the raw event cursor until the UI gains a unit.
-      for (let page = 0; page < 8; page++) {
+      for (let page = 0; page < (all ? Number.MAX_SAFE_INTEGER : 8); page++) {
         const history = await this.requireGateway().history(sessionId, 40, beforeSeq)
         const entries = history.events ?? []
         const nextBeforeSeq: number = entries.reduce((minimum, entry) => Math.min(minimum, entry.event.seq), beforeSeq)
         const advanced = nextBeforeSeq < beforeSeq
         const hasMore = history.hasMore === true && advanced
-        this.store.prependHistory(sessionId, entries, hasMore)
-        if (!hasMore || conversationUnitCount(this.store.snapshot().messages) > initialUnits) break
+        this.store.prependHistory(sessionId, entries, hasMore, false)
+        if (!hasMore || (!all && conversationUnitCount(this.store.snapshot().messages) > initialUnits)) break
         beforeSeq = nextBeforeSeq
       }
     } finally {
+      this.store.markHistoryPage(sessionId, earliestSeq)
       this.store.setHistoryLoading(false)
       this.publish()
     }
+  }
+
+  hideOlderHistory(all = false): void {
+    const sessionId = this.store.snapshot().activeSessionId
+    if (sessionId === undefined) return
+    this.store.hideOlderHistory(sessionId, all)
+    this.publish()
   }
 
   async send(text: string, attachments: readonly ContextAttachment[] = [], mode: 'queue' | 'steer' = 'queue', onProgress?: (progress: WorkbenchSendProgress) => void): Promise<void> {
@@ -229,7 +237,7 @@ export class WorkbenchController implements vscode.Disposable {
     const sessionId = snapshot.activeSessionId
     if (sessionId === undefined) throw new Error('Wait for an active Harness session before sending.')
     const resolved = await this.resolveAttachments(normalized, attachments, onProgress)
-    const prompt = buildPrompt(normalized, resolved)
+    const prompt = nativePromptContent(normalized, resolved)
     const result = await this.requireGateway().prompt(sessionId, prompt, mode)
     if (result.accepted === false) throw new Error('Harness rejected the prompt.')
   }
@@ -290,8 +298,7 @@ export class WorkbenchController implements vscode.Disposable {
     if (snapshot.activeSessionId === sessionId) await this.context.workspaceState.update('activeSessionId', undefined)
     this.deletedSessions.add(sessionId)
     await this.context.workspaceState.update('deletedSessions.v1', [...this.deletedSessions])
-    this.suppressAutoCreate = true
-    try {
+    {
       if (sourcePath === undefined) {
         const archived = await this.requireGateway().archiveSession(sessionId)
         this.store.replaceArchivedSessions(archived.archivedSessionIds)
@@ -300,14 +307,24 @@ export class WorkbenchController implements vscode.Disposable {
       if (sourcePath !== undefined) {
         const trashed = await this.sessionTrash.moveToTrash(runtimeVersion, sessionId, sourcePath)
         this.logger.info(`Moved session "${session.title}" (${session.id}) to recovery storage: ${trashed.directory}`)
-        this.deletedSessions.delete(sessionId)
-        await this.context.workspaceState.update('deletedSessions.v1', [...this.deletedSessions])
       }
       this.store.removeSession(sessionId)
       this.publish()
       await this.start()
-    } finally {
-      this.suppressAutoCreate = false
+      // The local directory move and Harness' session index are separate stores.
+      // Re-archive after restart so a non-active session cannot reappear in session.list.
+      if (sourcePath !== undefined) {
+        try {
+          const archived = await this.requireGateway().archiveSession(sessionId)
+          this.store.replaceArchivedSessions(archived.archivedSessionIds ?? [])
+        } catch (error) {
+          this.logger.warn(`Harness index cleanup skipped for deleted session ${sessionId}: ${errorMessage(error)}`)
+        }
+      }
+      this.deletedSessions.delete(sessionId)
+      await this.context.workspaceState.update('deletedSessions.v1', [...this.deletedSessions])
+      this.store.removeSession(sessionId)
+      this.publish()
     }
     return sourcePath === undefined
       ? 'Session removed from the workbench (no persisted data was found on disk).'
@@ -315,15 +332,26 @@ export class WorkbenchController implements vscode.Disposable {
   }
 
   async attachSelection(): Promise<ContextAttachment | undefined> {
-    return this.contextCollector.collectSelection(this.configuration.get().contextMaxBytes)
+    const maxBytes = this.configuration.get().contextMaxBytes
+    const selection = this.contextCollector.collectSelection(maxBytes)
+    if (selection === undefined) return undefined
+    const attachment = await this.attachManagedTextFile(`${selection.label}.txt`, selection.text, maxBytes)
+    return { ...attachment, label: selection.label }
   }
 
   async attachDiagnostics(): Promise<ContextAttachment | undefined> {
-    return this.contextCollector.collectDiagnostics(this.configuration.get().contextMaxBytes)
+    const maxBytes = this.configuration.get().contextMaxBytes
+    const diagnostics = this.contextCollector.collectDiagnostics(maxBytes)
+    if (diagnostics === undefined) return undefined
+    return this.attachManagedTextFile('current-file-problems.txt', diagnostics.text, maxBytes)
   }
 
   async attachFile(): Promise<ContextAttachment | undefined> {
     return this.contextCollector.pickFile(this.configuration.get().contextMaxBytes)
+  }
+
+  async attachExternalFile(): Promise<ContextAttachment | undefined> {
+    return this.contextCollector.pickExternalFile(this.configuration.get().contextMaxBytes)
   }
 
   async attachUri(uri: vscode.Uri): Promise<ContextAttachment> {
@@ -343,10 +371,18 @@ export class WorkbenchController implements vscode.Disposable {
     return attachment
   }
 
+  private async attachManagedTextFile(name: string, text: string, maxBytes: number): Promise<ContextAttachment> {
+    const directory = this.pastedDirectory()
+    const attachment = await this.contextCollector.collectTextFile(name, text, maxBytes, directory, 0)
+    void this.cleanupPastedFiles(directory)
+    return attachment
+  }
+
   async deletePastedFile(target: string): Promise<void> {
     const directory = this.pastedDirectory()
     const resolved = path.resolve(target)
     if (!resolved.startsWith(directory + path.sep)) return
+    if (vscode.workspace.textDocuments.some(document => document.uri.scheme === 'file' && path.resolve(document.uri.fsPath) === resolved)) return
     await rm(resolved, { force: true }).catch(() => undefined)
   }
 
@@ -417,13 +453,16 @@ export class WorkbenchController implements vscode.Disposable {
     }
     for (const attachment of attachments) {
       const imagePending = attachment.kind === 'image'
-      const text = imagePending ? `[Vision conversion pending for ${attachment.label}]` : attachment.text
-      layers.push({ id: attachment.id, label: attachment.label, source: attachment.kind, detail: imagePending ? 'Image will be described before session.prompt' : attachment.truncated ? 'Content truncated by attachment budget' : 'Staged context attachment', text, bytes: Buffer.byteLength(text, 'utf8'), enabled: true })
+      const auxiliary = auxiliaryVisionEnabledForModel(configuration.model, configuration.visionModelOverrides)
+      const text = imagePending
+        ? auxiliary ? `[Auxiliary vision conversion pending for ${attachment.label}]` : `[Native image bytes for ${attachment.label} are omitted from this text preview]`
+        : attachment.text
+      layers.push({ id: attachment.id, label: attachment.label, source: attachment.kind, detail: imagePending ? auxiliary ? 'Image will be described by the auxiliary model before session.prompt' : 'Image will be sent as native Harness image content' : attachment.truncated ? 'Content truncated by attachment budget' : 'Staged context attachment', text, bytes: Buffer.byteLength(text, 'utf8'), enabled: true })
     }
     if (input.trim() !== '') layers.push({ id: 'user-input', label: 'User message', source: 'Composer', detail: 'Exact current draft', text: input, bytes: Buffer.byteLength(input, 'utf8'), enabled: true })
     return {
       scope: 'Plugin preflight prompt layers',
-      limitation: 'This view shows data assembled by the extension. Harness may add provider system instructions, tool schemas, preset internals, and compaction state after session.prompt; rc.7 does not expose that final provider request through Gateway.',
+      limitation: 'This view shows data assembled by the extension. Harness may add provider system instructions, tool schemas, preset internals, and compaction state after session.prompt; the final provider request is not exposed through Gateway.',
       layers,
     }
   }
@@ -448,8 +487,13 @@ export class WorkbenchController implements vscode.Disposable {
         output.push(await this.skillAttachment(skill))
       }
     }
+    const configuration = this.configuration.get()
+    const useAuxiliaryVision = auxiliaryVisionEnabledForModel(configuration.model, configuration.visionModelOverrides)
     for (const attachment of attachments) {
-      if (attachment.kind === 'image') output.push(await this.imageAttachment(attachment, onProgress))
+      if (attachment.kind === 'image' && useAuxiliaryVision) output.push(await this.imageAttachment(attachment, onProgress))
+      else if (attachment.kind === 'image' && !isVisionCapableModel(configuration.model)) {
+        throw new Error(`The selected model "${configuration.model}" is not known to accept images. Enable the auxiliary vision model or select a vision-capable main model.`)
+      }
       else output.push(attachment)
     }
     return output
@@ -460,19 +504,16 @@ export class WorkbenchController implements vscode.Disposable {
       throw new Error(`${attachment.label} is too large for the vision endpoint; reduce the image or raise dedgeDeepSeekHarness.vision.maxBytes.`)
     }
     const configuration = this.configuration.get()
-    const apiKey = await this.credentials.getVisionApiKey()
-    if (apiKey === undefined || apiKey.trim() === '') {
-      throw new Error('No vision API key is stored; run the "Configure Vision API Key" command before attaching images.')
-    }
-    onProgress?.({ type: 'vision-start', label: attachment.label, model: configuration.visionModel })
+    const vision = resolveVisionRoute(configuration, await this.credentials.getApiKey(), await this.credentials.getVisionApiKey())
+    onProgress?.({ type: 'vision-start', label: attachment.label, model: vision.model })
     const description = await describeImage({
-      baseUrl: configuration.visionBaseUrl,
-      model: configuration.visionModel,
-      reasoningEffort: configuration.visionReasoningEffort,
-      apiKey,
+      baseUrl: vision.baseUrl,
+      model: vision.model,
+      reasoningEffort: vision.reasoningEffort,
+      apiKey: vision.apiKey,
       maxBytes: configuration.visionMaxBytes,
     }, { fileName: attachment.label, mimeType: attachment.image.mimeType, dataBase64: attachment.image.dataBase64 })
-    onProgress?.({ type: 'vision-complete', label: attachment.label, model: configuration.visionModel, text: description })
+    onProgress?.({ type: 'vision-complete', label: attachment.label, model: vision.model, text: description })
     const label = attachment.label.replace(/^Image: /u, '')
     return {
       id: attachment.id,
@@ -481,7 +522,7 @@ export class WorkbenchController implements vscode.Disposable {
       text: `Vision description of ${label}:\n\n${description}`,
       ...(attachment.uri === undefined ? {} : { uri: attachment.uri }),
       truncated: false,
-      visionModel: configuration.visionModel,
+      visionModel: vision.model,
     }
   }
 
@@ -633,6 +674,20 @@ export class WorkbenchController implements vscode.Disposable {
     this.publish()
   }
 
+  async setVisionEnabled(enabled: boolean): Promise<void> {
+    const configuration = this.configuration.get()
+    await this.configuration.updateSetting('vision.modelOverrides', { ...configuration.visionModelOverrides, [configuration.model]: enabled })
+  }
+
+  async selectCompactionModel(provider: string, model: string): Promise<void> {
+    if (this.store.snapshot().sessions.some(session => session.running || session.operation !== undefined)) {
+      throw new Error('Wait for active session work to finish before changing the compaction model.')
+    }
+    await this.configuration.updateSetting('compaction.provider', provider)
+    await this.configuration.updateSetting('compaction.model', model)
+    await this.restart()
+  }
+
   async restart(): Promise<void> {
     this.gateway?.dispose()
     this.gateway = undefined
@@ -752,6 +807,10 @@ export class WorkbenchController implements vscode.Disposable {
       this.store.setContextPressure(frame.sessionId, parseContextPressureProjection(frame.value))
       return this.publish()
     }
+    if (frame.type === 'session/projection' && frame.key === 'title' && typeof frame.value === 'string') {
+      this.store.setSessionTitle(frame.sessionId, frame.value)
+      return this.publish()
+    }
     if (frame.type === 'session/projection' && frame.key === 'permissions') {
       this.store.setPermissions(frame.sessionId, parsePermissionProjection(frame.value))
       return this.publish()
@@ -850,6 +909,19 @@ export class WorkbenchController implements vscode.Disposable {
       return false
     }
   }
+}
+
+function nativePromptContent(input: string, attachments: readonly ContextAttachment[]): string | readonly PromptContentPart[] {
+  const images = attachments.filter(attachment => attachment.kind === 'image')
+  if (images.length === 0) return buildPrompt(input, attachments)
+  const text = buildPrompt(input, attachments.filter(attachment => attachment.kind !== 'image'))
+  return [
+    ...images.map(attachment => {
+      if (attachment.image === undefined || attachment.image.dataBase64 === '') throw new Error(`${attachment.label} has no image data.`)
+      return { type: 'image' as const, mediaType: attachment.image.mimeType, data: attachment.image.dataBase64, name: attachment.label.replace(/^Image: /u, '') }
+    }),
+    ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+  ]
 }
 
 function workspaceDirectory(): string {

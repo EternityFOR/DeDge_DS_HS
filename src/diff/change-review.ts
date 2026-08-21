@@ -19,39 +19,29 @@ export class ChangeReviewService {
       void vscode.window.showInformationMessage('No Git working tree changes to review.')
       return
     }
-    const picked = await vscode.window.showQuickPick(entries.map(entry => ({
-      label: entry.path,
-      description: entry.status,
-      entry,
-    })), { title: 'Review workspace changes' })
-    if (picked === undefined) return
-    const working = vscode.Uri.file(path.join(root, picked.entry.path))
-    if (picked.entry.untracked) {
+    const picked = await vscode.window.showQuickPick(entries.map(entry => ({ label: entry.path, description: entry.status, entry })), { title: 'Review workspace changes' })
+    if (picked !== undefined) await this.openNativeDiff(root, picked.entry)
+  }
+
+  private async openNativeDiff(root: string, entry: StatusEntry): Promise<void> {
+    const working = vscode.Uri.file(path.join(root, entry.path))
+    if (entry.untracked) {
       await vscode.window.showTextDocument(working)
       return
     }
-    const baseEntry = picked.entry.originalPath ?? picked.entry.path
-    const baseBytes = picked.entry.added
-      ? Buffer.alloc(0)
-      : await gitBuffer(root, ['show', `HEAD:${baseEntry.replaceAll(path.sep, '/')}`])
-    const baseDir = path.join(this.layout.snapshots, 'git-head')
-    const basePath = path.join(baseDir, picked.entry.path)
+    const baseEntry = entry.originalPath ?? entry.path
+    const baseBytes = entry.added ? Buffer.alloc(0) : await gitBuffer(root, ['show', `HEAD:${baseEntry.replaceAll(path.sep, '/')}`])
+    const basePath = path.join(this.layout.snapshots, 'git-head', entry.path)
     await mkdir(path.dirname(basePath), { recursive: true })
     await writeFile(basePath, baseBytes)
     let workingUri = working
-    if (picked.entry.deleted) {
-      const deletedPath = path.join(this.layout.snapshots, 'working-tree', picked.entry.path)
+    if (entry.deleted) {
+      const deletedPath = path.join(this.layout.snapshots, 'working-tree', entry.path)
       await mkdir(path.dirname(deletedPath), { recursive: true })
       await writeFile(deletedPath, Buffer.alloc(0))
       workingUri = vscode.Uri.file(deletedPath)
     }
-    await vscode.commands.executeCommand(
-      'vscode.diff',
-      vscode.Uri.file(basePath),
-      workingUri,
-      `${picked.entry.path} (HEAD -> Working Tree)`,
-      { preview: true },
-    )
+    await vscode.commands.executeCommand('vscode.diff', vscode.Uri.file(basePath), workingUri, `${entry.path} (HEAD -> Working Tree)`, { preview: true })
   }
 }
 
@@ -72,17 +62,9 @@ export function parseStatus(value: string): StatusEntry[] {
     if (record === undefined || record.length < 4) continue
     const status = record.slice(0, 2)
     const file = record.slice(3)
-    const renamedOrCopied = status.includes('R') || status.includes('C')
-    const originalPath = renamedOrCopied ? records[index + 1] : undefined
+    const originalPath = status.includes('R') || status.includes('C') ? records[index + 1] : undefined
     if (originalPath !== undefined) index++
-    entries.push({
-      status,
-      path: file,
-      untracked: status === '??',
-      added: status.includes('A'),
-      deleted: status.includes('D'),
-      ...(originalPath === undefined ? {} : { originalPath }),
-    })
+    entries.push({ status, path: file, untracked: status === '??', added: status.includes('A'), deleted: status.includes('D'), ...(originalPath === undefined ? {} : { originalPath }) })
   }
   return entries
 }

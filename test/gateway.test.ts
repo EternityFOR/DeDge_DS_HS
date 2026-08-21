@@ -51,6 +51,24 @@ describe('Gateway JSON frame parsing', () => {
     }
   })
 
+  it('uses the persistent projected title from session.list before history is opened', async () => {
+    const originalFetch = globalThis.fetch
+    try {
+      globalThis.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+        const request = JSON.parse(String(init?.body)) as { rpcId: string }
+        return new Response(JSON.stringify({
+          type: 'server-response',
+          rpcId: request.rpcId,
+          result: { ok: true, value: { items: [{ sessionId: 'session-1', updatedAt: 1, running: false, blank: false, projections: { asOfSeq: 8, values: { title: 'Vision capability test' } } }] } },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      })
+      const client = new GatewayClient('http://127.0.0.1:1/', {} as never)
+      await expect(client.listSessions()).resolves.toMatchObject({ items: [{ sessionId: 'session-1', title: 'Vision capability test' }] })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   it('uses the generated commands/execute route and parses its command result', async () => {
     const originalFetch = globalThis.fetch
     try {
@@ -69,7 +87,7 @@ describe('Gateway JSON frame parsing', () => {
       const client = new GatewayClient('http://127.0.0.1:1/', {} as never)
       await expect(client.executeCommand('session-1', '/compact')).resolves.toEqual({ result: { kind: 'success', text: 'Compacted 12 history items.' } })
       expect(requestedUrl).toBe('http://127.0.0.1:1/api/commands/execute')
-      expect(requestedBody).toMatchObject({ method: 'commands/execute', payload: { args: { agentId: 'session-1', line: '/compact' } } })
+      expect(requestedBody).toMatchObject({ method: 'commands/execute', payload: { args: { agentId: 'session-1', line: '/compact', images: [] } } })
     } finally {
       globalThis.fetch = originalFetch
     }

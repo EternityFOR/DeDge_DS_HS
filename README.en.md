@@ -62,11 +62,11 @@ See [Session handoff](docs/session-handoff.md) for the full boundary.
 
 | Component | Pinned version |
 | --- | --- |
-| DeepSeek Harness | `0.1.0-rc.7` |
+| DeepSeek Harness | `0.1.1-rc.1` |
 | Node.js | `22.22.3` |
 | pnpm | `11.21.0` |
 
-`0.1.0-rc.7` is the bundled upstream DeepSeek Harness version; it is separate from the extension version `0.1.35`.
+`0.1.1-rc.1` is the bundled upstream DeepSeek Harness version; it is separate from the extension version `0.1.46`.
 
 The source and CI support native Windows x64, Linux x64, and macOS runners. Only packages explicitly attached to a GitHub Release or published to Marketplace are release artifacts.
 

@@ -1,4 +1,5 @@
 import type { HarnessConfiguration } from '../config/configuration.js'
+import { isVisionCapableModel } from '../vision/model-catalog.js'
 
 export function renderRuntimeOverlay(configuration: HarnessConfiguration): string {
   const thinking = configuration.reasoningEffort === 'off' ? 'disabled' : 'enabled'
@@ -18,6 +19,7 @@ export function renderRuntimeOverlay(configuration: HarnessConfiguration): strin
       `      - id: ${JSON.stringify(model.id)}`,
       `        name: ${JSON.stringify(model.name)}`,
       `        contextWindow: ${configuration.contextWindowTokens}`,
+      ...(isVisionCapableModel(model.id) ? ['        inputModalities: [text, image]'] : []),
     ]),
     '',
     '- id: agent-default-model',
@@ -28,6 +30,12 @@ export function renderRuntimeOverlay(configuration: HarnessConfiguration): strin
     '- id: agent-presets',
     '  config:',
     `    default: ${JSON.stringify(configuration.agentPreset)}`,
+    '',
+    '- id: compaction-basic',
+    '  config:',
+    ...(configuration.compactionProvider === undefined || configuration.compactionProvider === '' || configuration.compactionModel === undefined || configuration.compactionModel === ''
+      ? []
+      : [`    summarizationProvider: ${JSON.stringify(configuration.compactionProvider)}`, `    summarizationModel: ${JSON.stringify(configuration.compactionModel)}`]),
     '',
     '- id: permission',
     '  config:',

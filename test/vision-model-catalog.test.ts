@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEEPSEEK_VISION_EXP_MODEL, mergedVisionModelIds, recommendedVisionModels, visionModelIds } from '../src/vision/model-catalog.js'
+import { auxiliaryVisionEnabledForModel, DEEPSEEK_VISION_EXP_MODEL, isVisionCapableModel, mergedVisionModelIds, recommendedVisionModels, visionModelIds } from '../src/vision/model-catalog.js'
 
 describe('Vision model catalog', () => {
   it('keeps models beyond the old 100-entry cutoff and removes duplicates', () => {
@@ -23,5 +23,14 @@ describe('Vision model catalog', () => {
     expect(mergedVisionModelIds('https://api.deepseek.com/', [], '')).toContain(DEEPSEEK_VISION_EXP_MODEL)
     expect(mergedVisionModelIds('https://gateway.example/v1/', ['custom-vl'], 'selected-vl'))
       .toEqual(['custom-vl', 'selected-vl'])
+  })
+
+  it('recognizes common multimodal model families but keeps auxiliary vision off by default', () => {
+    for (const model of ['deepseek-v4-flash-vision-exp', 'gpt-5.6-sol', 'claude-sonnet-4.5', 'gemini-3-pro', 'qwen3-vl']) {
+      expect(isVisionCapableModel(model), model).toBe(true)
+      expect(auxiliaryVisionEnabledForModel(model), model).toBe(false)
+    }
+    expect(isVisionCapableModel('deepseek-v4-flash')).toBe(false)
+    expect(auxiliaryVisionEnabledForModel('deepseek-v4-flash', { 'deepseek-v4-flash': true })).toBe(true)
   })
 })
