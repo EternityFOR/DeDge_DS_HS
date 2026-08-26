@@ -51,6 +51,33 @@ describe('Gateway JSON frame parsing', () => {
     }
   })
 
+  it('sends native queue edit, steer, and remove mutations', async () => {
+    const originalFetch = globalThis.fetch
+    const payloads: unknown[] = []
+    try {
+      globalThis.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { rpcId: string; payload?: unknown }
+        payloads.push(body.payload)
+        return new Response(JSON.stringify({
+          type: 'server-response',
+          rpcId: body.rpcId,
+          result: { ok: true, value: { accepted: true } },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      })
+      const client = new GatewayClient('http://127.0.0.1:1/', {} as never)
+      await client.updateQueueItem('session-1', 'message-1', { kind: 'edit', content: [{ type: 'text', text: 'Revised prompt' }] })
+      await client.updateQueueItem('session-1', 'message-1', { kind: 'steer' })
+      await client.removeQueueItem('session-1', 'message-1')
+      expect(payloads).toEqual([
+        { sessionId: 'session-1', itemId: 'message-1', action: { kind: 'edit', content: [{ type: 'text', text: 'Revised prompt' }] } },
+        { sessionId: 'session-1', itemId: 'message-1', action: { kind: 'steer' } },
+        { sessionId: 'session-1', itemId: 'message-1', action: { kind: 'remove' } },
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   it('uses the persistent projected title from session.list before history is opened', async () => {
     const originalFetch = globalThis.fetch
     try {

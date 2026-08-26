@@ -10,6 +10,7 @@ import { RuntimeManager } from './runtime/runtime-manager.js'
 import { CredentialStore } from './security/credentials.js'
 import { WorkbenchController } from './session/workbench-controller.js'
 import { SessionTrashService } from './session/session-trash.js'
+import { hasActiveTurn, hasAutonomousActivity } from './session/interaction-readiness.js'
 import { ChatViewProvider } from './ui/chat-view.js'
 import { auxiliaryVisionEnabledForModel, isVisionCapableModel, mergedVisionModelIds, visionModelIds } from './vision/model-catalog.js'
 
@@ -34,7 +35,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const setApiKey = async (): Promise<void> => {
     const endpoint = await vscode.window.showInputBox({
-      title: 'DeepSeek connection [1/2] - API base URL',
+      title: 'Model connection [1/2] - API base URL',
       prompt: 'Use the official endpoint or an http/https OpenAI-compatible sub2 endpoint.',
       value: configuration.get().baseUrl,
       ignoreFocusOut: true,
@@ -48,9 +49,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
     })
     if (endpoint === undefined) return
-    const existing = await credentials.getApiKey()
+    const normalizedEndpoint = normalizeBaseUrl(endpoint)
+    const existing = await credentials.getApiKey(normalizedEndpoint)
     const value = await vscode.window.showInputBox({
-      title: 'DeepSeek connection [2/2] - API key',
+      title: 'Model connection [2/2] - API key',
       prompt: existing === undefined
         ? 'Stored only in VS Code SecretStorage and passed to the local Harness process.'
         : 'Enter a replacement key, or leave blank to keep the existing SecretStorage value.',
@@ -59,11 +61,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       validateInput: input => existing === undefined && input.trim() === '' ? 'The API key cannot be empty.' : undefined,
     })
     if (value === undefined) return
-    const normalizedEndpoint = normalizeBaseUrl(endpoint)
-    if (value.trim() !== '') await credentials.setApiKey(value.trim())
+    if (value.trim() !== '') await credentials.setApiKey(value.trim(), normalizedEndpoint)
     await configuration.update('baseUrl', normalizedEndpoint)
     if (runtime.state.phase === 'ready') await controller.restart()
-    void vscode.window.showInformationMessage('DeepSeek API credentials configured. The key remains in SecretStorage.')
+    void vscode.window.showInformationMessage('Model API credentials configured for this endpoint. The key remains in SecretStorage.')
   }
 
   const showDiagnostics = async (): Promise<void> => {
@@ -110,7 +111,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const picked = await vscode.window.showQuickPick([
       {
         label: '$(key) API key and base URL',
-        description: 'DeepSeek connection for the local runtime',
+        description: 'Model connection for the local runtime',
         detail: 'Endpoint and key stored in SecretStorage; used by every Harness session.',
         action: 'api',
       },
@@ -159,7 +160,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const current = configuration.get()
     return {
       baseUrl: current.baseUrl,
-      hasApiKey: (await credentials.getApiKey())?.trim() !== '',
+      hasApiKey: (await credentials.getApiKey(current.baseUrl))?.trim() !== '',
       visionBaseUrl: current.visionBaseUrl,
       visionModel: current.visionModel,
       visionReasoningEffort: current.visionReasoningEffort,
@@ -175,10 +176,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       claudeHome: current.claudeHome,
       handoffLaunchMode: current.handoffLaunchMode,
       skillDirectories: current.skillDirectories,
+      scheduleEnabled: current.scheduleEnabled,
     }
   }
+  const assertScheduleRestartSafe = (): void => {
+    const snapshot = controller.snapshot()
+    const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
+    if (active?.running === true || hasActiveTurn(snapshot) || hasAutonomousActivity(snapshot)) {
+      throw new Error('Stop the active Harness task before changing scheduled follow-ups; enabling or disabling dsh-schedule restarts the local runtime.')
+    }
+  }
+  const setScheduleEnabled = async (enabled: boolean): Promise<void> => {
+    const current = configuration.get()
+    if (current.scheduleEnabled === enabled) return
+    assertScheduleRestartSafe()
+    await configuration.updateSetting('schedule.enabled', enabled)
+    if (runtime.state.phase === 'ready') await controller.restart()
+    void vscode.window.showInformationMessage(enabled
+      ? 'Scheduled follow-ups enabled. The official dsh-schedule plugin is now mounted for new Harness agents.'
+      : 'Scheduled follow-ups disabled. The official dsh-schedule plugin will be removed after the runtime restart.')
+  }
   const saveSettings = async (settings: import('./ui/webview-protocol.js').WorkbenchSettings & { readonly apiKey?: string; readonly visionApiKey?: string }): Promise<void> => {
-    await configuration.update('baseUrl', settings.baseUrl)
+    const normalizedBaseUrl = normalizeBaseUrl(settings.baseUrl)
+    const current = configuration.get()
+    const baseUrlChanged = normalizedBaseUrl !== current.baseUrl
+    const scheduleChanged = settings.scheduleEnabled !== current.scheduleEnabled
+    if (scheduleChanged) assertScheduleRestartSafe()
+    await configuration.update('baseUrl', normalizedBaseUrl)
     await configuration.updateSetting('context.pasteFileThreshold', settings.pasteFileThreshold)
     await configuration.updateSetting('vision.baseUrl', settings.visionBaseUrl)
     await configuration.updateSetting('vision.model', settings.visionModel)
@@ -187,9 +211,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await configuration.updateSetting('handoff.claudeHome', settings.claudeHome)
     await configuration.updateSetting('handoff.launchMode', settings.handoffLaunchMode)
     await configuration.updateSetting('skills.directories', [...settings.skillDirectories])
+    await configuration.updateSetting('schedule.enabled', settings.scheduleEnabled)
     await configuration.updateContextWindowTokens(settings.contextWindowTokens)
-    if (settings.apiKey !== undefined && settings.apiKey.trim() !== '') await credentials.setApiKey(settings.apiKey.trim())
+    if (settings.apiKey !== undefined && settings.apiKey.trim() !== '') await credentials.setApiKey(settings.apiKey.trim(), normalizedBaseUrl)
     if (settings.visionApiKey !== undefined && settings.visionApiKey.trim() !== '') await credentials.setVisionApiKey(settings.visionApiKey.trim())
+    if ((baseUrlChanged || scheduleChanged) && runtime.state.phase === 'ready') await controller.restart()
   }
 
   const visionModels = async (baseUrl: string, apiKey: string | undefined, selected: string): Promise<string[]> => {
@@ -211,6 +237,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     configureContextWindow,
     getSettings,
     saveSettings,
+    setScheduleEnabled,
   })
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 20)
   status.name = 'DeepSeek Harness'
@@ -360,9 +387,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     })),
     vscode.commands.registerCommand('dedgeDeepSeekHarness.setApiKey', () => run(setApiKey)),
     vscode.commands.registerCommand('dedgeDeepSeekHarness.clearApiKey', () => run(async () => {
-      const clear = await vscode.window.showWarningMessage('Clear the DeepSeek API key from VS Code SecretStorage?', { modal: true }, 'Clear')
+      const clear = await vscode.window.showWarningMessage('Clear the API key saved for the current endpoint from VS Code SecretStorage?', { modal: true }, 'Clear')
       if (clear !== 'Clear') return
-      await credentials.clearApiKey()
+      await credentials.clearApiKey(configuration.get().baseUrl)
       if (runtime.state.phase === 'ready') await controller.restart()
     })),
     vscode.commands.registerCommand('dedgeDeepSeekHarness.addSelection', () => run(() => view.attachSelection())),

@@ -6,7 +6,7 @@ function configuration(overrides: Partial<HarnessConfiguration> = {}): HarnessCo
   return {
     runtimeMode: 'bundled', runtimeCommand: '', runtimeNodePath: '', startTimeoutMs: 90_000,
     provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard',
-    permissionMode: 'workspace-write', baseUrl: 'https://api.deepseek.com/', autoStart: true,
+    permissionMode: 'workspace-write', baseUrl: 'https://api.deepseek.com/', autoStart: true, scheduleEnabled: false,
     contextMaxBytes: 32_768, contextWindowTokens: 1_000_000, pasteFileThreshold: 4_096,
     codexHome: '~/.codex', claudeHome: '~/.claude', codexCommand: '', claudeCommand: '', handoffMaxBytes: 65_536,
     handoffLaunchMode: 'clipboard', skillDirectories: [], visionBaseUrl: 'https://vision.example/v1/', visionModel: 'gpt-vision',

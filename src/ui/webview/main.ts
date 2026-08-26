@@ -1,6 +1,7 @@
 import DOMPurify from 'dompurify'
 import {
   ArrowLeftRight,
+  CalendarClock,
   Check,
   ChevronDown,
   ChevronUp,
@@ -18,6 +19,7 @@ import {
   LoaderCircle,
   ListPlus,
   Paperclip,
+  Pause,
   Pencil,
   Plus,
   Send,
@@ -28,6 +30,7 @@ import {
   Square,
   TextQuote,
   TriangleAlert,
+  Trash2,
   UnfoldVertical,
   X,
   Search,
@@ -38,7 +41,7 @@ import type { ContextAttachment } from '../../context/context-collector.js'
 import { recommendedVisionModels } from '../../vision/model-catalog.js'
 import type { SkillSummary } from '../../skills/skill-catalog.js'
 import type { WorkbenchMessage, WorkbenchSnapshot } from '../../session/types.js'
-import { modelControlsUnavailableReason, promptUnavailableReason, steerAvailable } from '../../session/interaction-readiness.js'
+import { hasActiveTurn, hasAgentActivity, hasAutonomousActivity, modelControlsUnavailableReason, promptUnavailableReason, steerAvailable } from '../../session/interaction-readiness.js'
 import type { HostToWebviewMessage, WebviewToHostMessage, WorkbenchSettings } from '../webview-protocol.js'
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewToHostMessage): void; setState(value: unknown): void; getState(): unknown }
@@ -46,6 +49,7 @@ declare function acquireVsCodeApi(): { postMessage(message: WebviewToHostMessage
 const vscode = acquireVsCodeApi()
 const iconComponents = {
   'arrow-left-right': ArrowLeftRight,
+  'calendar-clock': CalendarClock,
   'check': Check,
   'chevron-down': ChevronDown,
   'chevron-up': ChevronUp,
@@ -62,6 +66,7 @@ const iconComponents = {
   'loader-circle': LoaderCircle,
   'list-plus': ListPlus,
   'paperclip': Paperclip,
+  'pause': Pause,
   'pencil': Pencil,
   'plus': Plus,
   'send': Send,
@@ -72,6 +77,7 @@ const iconComponents = {
   'square': Square,
   'text-quote': TextQuote,
   'triangle-alert': TriangleAlert,
+  'trash-2': Trash2,
   'unfold-vertical': UnfoldVertical,
   'x': X,
   'search': Search,
@@ -80,6 +86,11 @@ const iconComponents = {
 type IconName = keyof typeof iconComponents
 const contextCircumference = 2 * Math.PI * 5.5
 const maxStreamingChars = 32_768
+const baseUrlPresets = [
+  { value: 'https://api.deepseek.com/', label: 'DeepSeek official' },
+  { value: 'https://api.openai.com/v1/', label: 'OpenAI' },
+  { value: 'https://api.anthropic.com/v1/', label: 'Anthropic' },
+] as const
 
 let state: WorkbenchSnapshot | undefined
 let attachments: readonly ContextAttachment[] = []
@@ -89,9 +100,20 @@ let sendPending = false
 let pendingSendPreview: HTMLElement | undefined
 let pendingSendText: string | undefined
 let pendingSendBaselineCount = 0
+let pendingSendMode: 'queue' | 'steer' = 'queue'
+let pendingSendBaselineIds = new Set<string>()
 let steerPendingText: string | undefined
+let pendingQueueText: string | undefined
+let pendingQueueLabels: readonly string[] = []
+let pendingQueueBaselineIds = new Set<string>()
 type DeliveryMode = 'auto' | 'queue' | 'steer'
 let deliveryMode: DeliveryMode = 'queue'
+let queueCollapsed = true
+let queueEditingId: string | undefined
+let queueEditingText = ''
+let queueSessionId: string | undefined
+let queueSignature = ''
+const queueBusyItems = new Set<string>()
 let pasteFileThreshold = 4_096
 let scrollBottomButton: HTMLButtonElement | undefined
 let stickToBottom = true
@@ -100,6 +122,7 @@ const expandedTasks = new Set<string>()
 const collapsedTasks = new Set<string>()
 const knownTaskIds = new Set<string>()
 const taskCompletion = new Map<string, boolean>()
+const taskInterruption = new Map<string, boolean>()
 let compactThinking = true
 let skillCatalog: readonly SkillSummary[] = []
 let skillPopoverVisible = false
@@ -157,6 +180,10 @@ const elements = {
   searchRegex: requiredInput('search-regex'),
   searchCount: required('search-count'),
   conversation: required('conversation'),
+  queueDock: required('queue-dock'),
+  queueToggle: requiredButton('queue-toggle'),
+  queueLabel: required('queue-label'),
+  queueList: required('queue-list'),
   prompt: requiredTextArea('prompt'),
   composerResize: required('composer-resize'),
   composerBox: required('composer-box'),
@@ -178,6 +205,7 @@ const elements = {
   modelMenu: requiredButton('model-menu'),
   send: requiredButton('send'),
   deliveryMode: requiredButton('delivery-mode'),
+  scheduleToggle: requiredButton('schedule-toggle'),
   cancel: requiredButton('cancel'),
   compact: requiredButton('compact'),
   compactMenu: requiredButton('compact-menu'),
@@ -194,8 +222,10 @@ const elements = {
   settingsClose: requiredButton('settings-close'),
   settingsCancel: requiredButton('settings-cancel'),
   settingsSave: requiredButton('settings-save'),
+  settingBaseUrlPicker: requiredSelect('setting-base-url-picker'),
   settingBaseUrl: requiredInput('setting-base-url'),
   settingApiKey: requiredInput('setting-api-key'),
+  settingApiKeyStatus: required('setting-api-key-status'),
   settingVisionUrl: requiredInput('setting-vision-url'),
   settingVisionModel: requiredInput('setting-vision-model'),
   settingVisionModelPicker: requiredSelect('setting-vision-model-picker'),
@@ -203,6 +233,7 @@ const elements = {
   settingVisionKey: requiredInput('setting-vision-key'),
   settingPasteThreshold: requiredInput('setting-paste-threshold'),
   settingContextWindow: requiredInput('setting-context-window'),
+  settingScheduleEnabled: requiredInput('setting-schedule-enabled'),
   settingCodexHome: requiredInput('setting-codex-home'),
   settingClaudeHome: requiredInput('setting-claude-home'),
   settingHandoffMode: requiredSelect('setting-handoff-mode'),
@@ -229,6 +260,7 @@ const popovers = [
     renderModelOptions(state)
     renderReasoningOptions(state)
     renderPresetOptions(state)
+    post({ type: 'refreshModelCatalog' })
   }),
   popover('vision-model-menu', 'vision-model-popover', renderVisionModelOptions),
   popover('compact-menu', 'compact-popover', renderCompactionModelOptions),
@@ -253,6 +285,12 @@ for (const [id, mode] of [['delivery-auto', 'auto'], ['delivery-queue', 'queue']
     document.getElementById('delivery-popover')?.classList.add('hidden')
   })
 }
+elements.queueToggle.addEventListener('click', () => {
+  if (queueBusyItems.size > 0 || queueEditingId !== undefined || (state === undefined ? 0 : queueDisplayItems(state).length) <= 1) return
+  queueCollapsed = !queueCollapsed
+  queueSignature = ''
+  if (state !== undefined) renderQueueDock(state)
+})
 elements.steerNoticeClose.addEventListener('click', () => {
   steerPendingText = undefined
   elements.steerNotice.classList.add('hidden')
@@ -260,12 +298,22 @@ elements.steerNoticeClose.addEventListener('click', () => {
 elements.settingsClose.addEventListener('click', closeSettings)
 elements.settingsCancel.addEventListener('click', closeSettings)
 elements.settingsSave.addEventListener('click', saveSettings)
+elements.settingBaseUrlPicker.addEventListener('change', () => {
+  const selected = elements.settingBaseUrlPicker.value
+  if (selected !== '') elements.settingBaseUrl.value = selected
+  updateApiKeyStatus()
+})
+elements.settingBaseUrl.addEventListener('input', updateApiKeyStatus)
 elements.settingVisionModelPicker.addEventListener('change', () => {
   if (elements.settingVisionModelPicker.value !== '') elements.settingVisionModel.value = elements.settingVisionModelPicker.value
 })
 elements.visionToggle.addEventListener('click', () => {
   if (currentSettings === undefined) return
   post({ type: 'setVisionEnabled', enabled: !currentSettings.auxiliaryVisionEnabled })
+})
+elements.scheduleToggle.addEventListener('click', () => {
+  if (currentSettings === undefined) return
+  post({ type: 'setScheduleEnabled', enabled: !currentSettings.scheduleEnabled })
 })
 window.addEventListener('keydown', event => {
   if (event.key === 'Escape' && !elements.settingsDialog.classList.contains('hidden')) closeSettings()
@@ -435,6 +483,7 @@ window.addEventListener('message', event => {
         pendingSendPreview?.remove()
         pendingSendPreview = undefined
         pendingSendText = undefined
+        pendingSendBaselineIds = new Set<string>()
       }
     }
     scheduleRender()
@@ -446,18 +495,39 @@ window.addEventListener('message', event => {
       resizePrompt()
     }
     elements.prompt.focus()
-    showPendingSendPreview(message.text, message.attachments.map(item => item.label))
+    pendingSendMode = message.mode ?? 'queue'
+    if (pendingSendMode === 'steer') {
+      pendingQueueText = undefined
+      pendingQueueLabels = []
+      pendingQueueBaselineIds = new Set<string>()
+      showPendingSendPreview(message.text, message.attachments.map(item => item.label), pendingSendMode)
+    } else {
+      pendingSendPreview?.remove()
+      pendingSendPreview = undefined
+      pendingQueueText = message.text
+      pendingQueueLabels = message.attachments.map(item => item.label)
+      pendingQueueBaselineIds = new Set(state?.queueItems?.map(item => item.id) ?? [])
+      queueSignature = ''
+      if (state !== undefined) renderQueueDock(state)
+    }
     pendingSendText = message.text
     pendingSendBaselineCount = state?.messages.filter(item => item.role === 'user' && item.text === message.text).length ?? 0
+    pendingSendBaselineIds = new Set(state?.messages.map(item => item.id) ?? [])
+    if (state !== undefined) placePendingSendPreview(state.messages)
     if (state !== undefined) renderStatus(state)
   } else if (message.type === 'sendProgress') {
     renderPendingVisionProgress(message.progress)
   } else if (message.type === 'sendSettled') {
     sendPending = false
+    pendingQueueText = undefined
+    pendingQueueLabels = []
+    pendingQueueBaselineIds = new Set<string>()
+    queueSignature = ''
     if (!message.accepted) {
       pendingSendPreview?.remove()
       pendingSendPreview = undefined
       pendingSendText = undefined
+      pendingSendBaselineIds = new Set<string>()
       steerPendingText = undefined
       elements.steerNotice.classList.add('hidden')
       if (elements.prompt.value.trim() === '') {
@@ -476,6 +546,14 @@ window.addEventListener('message', event => {
     }
     if (state !== undefined) renderStatus(state)
     elements.prompt.focus()
+  } else if (message.type === 'queueActionSettled') {
+    queueBusyItems.delete(message.itemId)
+    if (message.accepted && queueEditingId === message.itemId) {
+      queueEditingId = undefined
+      queueEditingText = ''
+    }
+    queueSignature = ''
+    if (state !== undefined) renderQueueDock(state)
   } else if (message.type === 'setDraft') {
     elements.prompt.value = message.text
     vscode.setState({ draft: message.text })
@@ -492,6 +570,7 @@ window.addEventListener('message', event => {
     currentSettings = message.settings
     renderVisionModelOptions()
     renderVisionToggle()
+    if (state !== undefined) renderScheduleToggle(state)
     if (message.open !== false) showSettings(message.settings, message.section)
   }
   else if (message.type === 'skills') {
@@ -569,6 +648,7 @@ function render(): void {
   renderControls(state)
   renderContextMeter(state)
   renderConversation(state)
+  renderQueueDock(state)
   renderAttachments()
   renderStatus(state)
   if (!elements.searchPanel.classList.contains('hidden') && elements.searchInput.value !== '') scheduleConversationSearch()
@@ -725,6 +805,7 @@ function renderControls(snapshot: WorkbenchSnapshot): void {
   const signature = [
     snapshot.provider, snapshot.model, snapshot.reasoningEffort, snapshot.agentPreset,
     snapshot.permissionMode, snapshot.approvalPolicy ?? 'ask', String(snapshot.permissionChanging), snapshot.phase,
+    hasAutonomousActivity(snapshot),
     snapshot.modelCatalog === undefined ? 'u' : 'd',
     snapshot.presetCatalog === undefined ? 'u' : 'd',
     snapshot.permissionOptions === undefined ? null : snapshot.permissionOptions,
@@ -737,12 +818,206 @@ function renderControls(snapshot: WorkbenchSnapshot): void {
   renderReasoningOptions(snapshot)
   renderPresetOptions(snapshot)
   renderPermissionOptions(snapshot)
+  renderScheduleToggle(snapshot)
+}
+
+function renderQueueDock(snapshot: WorkbenchSnapshot): void {
+  const activeSessionId = snapshot.activeSessionId
+  if (queueSessionId !== activeSessionId) {
+    queueSessionId = activeSessionId
+    queueCollapsed = true
+    queueEditingId = undefined
+    queueEditingText = ''
+    queueBusyItems.clear()
+    queueSignature = ''
+  }
+  const items = queueDisplayItems(snapshot)
+  for (const id of [...queueBusyItems]) if (!items.some(item => item.id === id)) queueBusyItems.delete(id)
+  if (queueEditingId !== undefined && !items.some(item => item.id === queueEditingId)) {
+    queueEditingId = undefined
+    queueEditingText = ''
+  }
+  const signature = JSON.stringify([
+    items.map(item => [item.id, item.placement, item.text, item.preview, item.hasNonText]),
+    queueCollapsed,
+    queueEditingId,
+    [...queueBusyItems].sort(),
+  ])
+  if (signature === queueSignature) return
+  queueSignature = signature
+  const expanded = items.length <= 1 || !queueCollapsed || queueEditingId !== undefined || queueBusyItems.size > 0
+  elements.queueDock.classList.toggle('hidden', items.length === 0)
+  elements.queueToggle.classList.toggle('hidden', items.length <= 1)
+  elements.queueToggle.setAttribute('aria-expanded', String(expanded))
+  const queuedCount = items.filter(item => item.placement === 'queued').length
+  const steeringCount = items.length - queuedCount
+  const label = steeringCount === 0
+    ? `${String(queuedCount)} queued ${queuedCount === 1 ? 'message' : 'messages'}`
+    : `${String(queuedCount)} queued, ${String(steeringCount)} steering`
+  elements.queueLabel.textContent = label
+  elements.queueToggle.replaceChildren(svgIcon('list-plus'), elements.queueLabel, svgIcon(expanded ? 'chevron-down' : 'chevron-up'))
+  elements.queueList.hidden = !expanded
+  elements.queueList.replaceChildren(...items.map(item => renderQueueRow(item, snapshot)))
+  if (queueEditingId !== undefined) {
+    const input = Array.from(elements.queueList.querySelectorAll<HTMLInputElement>('input[data-queue-item-id]')).find(candidate => candidate.dataset.queueItemId === queueEditingId)
+    if (input !== undefined) {
+      input.focus()
+      input.setSelectionRange(input.value.length, input.value.length)
+    }
+  }
+}
+
+function visibleQueueItems(snapshot: WorkbenchSnapshot): NonNullable<WorkbenchSnapshot['queueItems']>[number][] {
+  return (snapshot.queueItems ?? []).filter(item => item.sourceKind === 'user' && (item.placement === 'queued' || item.placement === 'steering'))
+}
+
+function queueDisplayItems(snapshot: WorkbenchSnapshot): NonNullable<WorkbenchSnapshot['queueItems']>[number][] {
+  const items = visibleQueueItems(snapshot)
+  if (pendingQueueText === undefined) return items
+  // Once the authoritative queue frame contains the just-submitted text, let
+  // that row replace the local sending placeholder instead of showing a
+  // duplicate while the prompt receipt is still settling.
+  if (items.some(item => item.placement === 'queued' && item.text === pendingQueueText && !pendingQueueBaselineIds.has(item.id))) return items
+  const preview = [pendingQueueText, ...pendingQueueLabels.map(label => `[${label}]`)].join(' ').replace(/\s+/gu, ' ').trim()
+  return [{
+    id: 'pending:queue-send',
+    placement: 'queued',
+    sourceKind: 'user',
+    text: pendingQueueText,
+    preview: preview.length > 200 ? `${preview.slice(0, 197).trimEnd()}...` : preview,
+    ...(pendingQueueLabels.length > 0 ? { hasNonText: true } : {}),
+  }, ...items]
+}
+
+function renderQueueRow(item: NonNullable<WorkbenchSnapshot['queueItems']>[number], snapshot: WorkbenchSnapshot): HTMLElement {
+  const row = document.createElement('div')
+  const busy = queueBusyItems.has(item.id)
+  row.className = `queue-row${item.placement === 'steering' ? ' queue-row-steering' : ''}${busy ? ' queue-busy' : ''}`
+  row.dataset.queueItemId = item.id
+  if (queueDisplayItems(snapshot).length === 1) row.append(svgIcon('list-plus'))
+  if (item.id === 'pending:queue-send') {
+    const preview = document.createElement('span')
+    preview.className = 'queue-preview'
+    preview.textContent = item.preview ?? item.text ?? 'Sending...'
+    preview.title = item.text ?? item.preview ?? 'Sending queued message'
+    row.append(preview)
+    const status = document.createElement('span')
+    status.className = 'queue-steering-label'
+    status.textContent = 'Sending...'
+    row.append(status)
+    return row
+  }
+  if (queueEditingId === item.id && item.text !== undefined && item.hasNonText !== true) {
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.className = 'queue-editor'
+    input.dataset.queueItemId = item.id
+    input.value = queueEditingText
+    input.setAttribute('aria-label', 'Edit queued message')
+    input.addEventListener('input', () => {
+      queueEditingText = input.value
+      const save = row.querySelector<HTMLButtonElement>('.queue-action')
+      if (save !== null && !busy) save.disabled = queueEditingText.trim() === ''
+    })
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        queueEditingId = undefined
+        queueEditingText = ''
+        queueSignature = ''
+        if (state !== undefined) renderQueueDock(state)
+      } else if (event.key === 'Enter' && !event.isComposing) {
+        event.preventDefault()
+        if (queueEditingText.trim() !== '') startQueueAction(item.id, { type: 'editQueueItem', itemId: item.id, text: queueEditingText })
+      }
+    })
+    row.append(input)
+    const actions = document.createElement('span')
+    actions.className = 'queue-actions'
+    actions.append(
+      queueActionButton('check', 'Save queued message', busy || queueEditingText.trim() === '', () => {
+        if (queueEditingText.trim() !== '') startQueueAction(item.id, { type: 'editQueueItem', itemId: item.id, text: queueEditingText })
+      }),
+      queueActionButton('x', 'Cancel edit', busy, () => {
+        queueEditingId = undefined
+        queueEditingText = ''
+        queueSignature = ''
+        if (state !== undefined) renderQueueDock(state)
+      }),
+    )
+    row.append(actions)
+    return row
+  }
+
+  const preview = document.createElement('span')
+  preview.className = 'queue-preview'
+  preview.textContent = item.preview ?? item.text ?? '[non-text message]'
+  preview.title = item.text ?? item.preview ?? 'Queued message'
+  row.append(preview)
+  if (item.placement === 'steering') {
+    const status = document.createElement('span')
+    status.className = 'queue-steering-label'
+    status.textContent = busy ? 'Steering...' : 'Steering'
+    row.append(status)
+    return row
+  }
+
+  const actions = document.createElement('span')
+  actions.className = 'queue-actions'
+  if (busy) {
+    const status = document.createElement('span')
+    status.className = 'queue-steering-label'
+    status.textContent = 'Working...'
+    row.append(status)
+  }
+  const editable = item.text !== undefined && item.hasNonText !== true
+  actions.append(queueActionButton('pencil', editable ? 'Edit queued message' : 'Only text-only queued messages can be edited', busy || !editable, () => {
+    if (!editable || busy || item.text === undefined) return
+    queueEditingId = item.id
+    queueEditingText = item.text
+    queueSignature = ''
+    if (state !== undefined) renderQueueDock(state)
+  }))
+  const running = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)?.running === true
+  const steerAllowed = running || (editable && !item.hasNonText)
+  actions.append(queueActionButton('corner-down-right', steerAllowed ? 'Steer this queued message into the active turn' : 'Resume the session before steering an image or attachment', busy || !steerAllowed, () => {
+    if (steerAllowed && !busy) startQueueAction(item.id, { type: 'steerQueueItem', itemId: item.id })
+  }))
+  actions.append(queueActionButton('trash-2', 'Remove queued message', busy, () => {
+    if (!busy) startQueueAction(item.id, { type: 'removeQueueItem', itemId: item.id })
+  }))
+  row.append(actions)
+  return row
+}
+
+function queueActionButton(icon: IconName, title: string, disabled: boolean, handler: () => void): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'queue-action'
+  button.disabled = disabled
+  button.title = title
+  button.setAttribute('aria-label', title)
+  button.append(svgIcon(icon))
+  button.addEventListener('click', event => {
+    event.preventDefault()
+    if (!button.disabled) handler()
+  })
+  return button
+}
+
+function startQueueAction(itemId: string, message: Extract<WebviewToHostMessage, { readonly type: 'steerQueueItem' | 'removeQueueItem' | 'editQueueItem' }>): void {
+  if (queueBusyItems.has(itemId)) return
+  queueBusyItems.add(itemId)
+  queueSignature = ''
+  if (state !== undefined) renderQueueDock(state)
+  post(message)
 }
 
 function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
   const visibleSessions = snapshot.sessions
   const signature = JSON.stringify({
     activeSessionId: snapshot.activeSessionId,
+    autonomous: hasAutonomousActivity(snapshot),
     sessions: visibleSessions.map(session => [session.id, session.title, session.blank, session.updatedAt, session.running, session.operation]),
   })
   if (signature === sessionTabsSignature) return
@@ -755,7 +1030,8 @@ function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
     wrapper.setAttribute('role', 'presentation')
     const button = document.createElement('button')
     button.type = 'button'
-    button.className = `session-tab${session.running ? ' running' : ''}${session.operation === undefined ? '' : ' operation'}`
+    const autonomous = session.id === activeId && hasAutonomousActivity(snapshot)
+    button.className = `session-tab${session.running ? ' running' : ''}${autonomous ? ' autonomous' : ''}${session.operation === undefined ? '' : ' operation'}`
     button.disabled = session.operation !== undefined
     button.setAttribute('role', 'tab')
     button.setAttribute('aria-selected', String(session.id === activeId))
@@ -767,7 +1043,9 @@ function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
           ? `${session.title} - stopping response`
           : session.operation === 'compacting'
             ? `${session.title} - compacting context`
-          : `${session.title}${session.running ? ' - response in progress' : ''}`
+          : autonomous
+            ? `${session.title} - agent continuing autonomously`
+            : `${session.title}${session.running ? ' - response in progress' : ''}`
     const label = document.createElement('span')
     label.className = 'session-tab-label'
     label.textContent = session.title
@@ -778,7 +1056,7 @@ function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
     const manage = document.createElement('button')
     manage.type = 'button'
     manage.className = 'session-tab-manage'
-    manage.disabled = session.running || session.operation !== undefined
+    manage.disabled = session.running || autonomous || session.operation !== undefined
     manage.title = session.operation === 'deleting'
       ? 'Deletion in progress'
       : session.operation === 'archiving'
@@ -787,7 +1065,7 @@ function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
           ? 'Stop in progress'
           : session.operation === 'compacting'
             ? 'Context compaction in progress'
-          : session.running ? 'Finish or cancel the response before managing this session' : `Archive or delete ${session.title}`
+          : autonomous ? 'Stop the autonomous agent task before managing this session' : session.running ? 'Finish or cancel the response before managing this session' : `Archive or delete ${session.title}`
     manage.setAttribute('aria-label', manage.title)
     const icon = svgIcon(session.operation === undefined ? 'ellipsis' : 'loader-circle')
     if (session.operation !== undefined) icon.classList.add('session-operation-icon')
@@ -927,11 +1205,11 @@ function renderPermissionOptions(snapshot: WorkbenchSnapshot | undefined): void 
   const current = permissionOptions.find(option => option.id === currentId) ?? permissionOptions[1]
   elements.permissionLabel.textContent = current?.short ?? snapshot.permissionMode
   const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
-  const disabled = snapshot.permissionChanging || snapshot.phase !== 'connected' || active === undefined || active.running || active.operation !== undefined
+  const disabled = snapshot.permissionChanging || snapshot.phase !== 'connected' || active === undefined || active.running || hasAutonomousActivity(snapshot) || active.operation !== undefined
   elements.permissionMenu.disabled = disabled
   elements.permissionMenu.title = snapshot.permissionChanging
     ? 'Changing file permissions...'
-    : active?.running === true ? 'Stop the current response before changing file permissions' : 'File access permissions'
+    : hasAutonomousActivity(snapshot) ? 'Stop the autonomous agent task before changing file permissions' : active?.running === true ? 'Stop the current response before changing file permissions' : 'File access permissions'
   elements.permissionOptions.replaceChildren(...permissionOptions.map(option => menuOption({
     label: option.label,
     description: option.description,
@@ -957,6 +1235,7 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     collapsedTasks.clear()
     knownTaskIds.clear()
     taskCompletion.clear()
+    taskInterruption.clear()
     taskFoldElements.clear()
     taskGroupElements.clear()
     stickToBottom = true
@@ -1006,6 +1285,7 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     taskFoldElements.delete(taskId)
     knownTaskIds.delete(taskId)
     taskCompletion.delete(taskId)
+    taskInterruption.delete(taskId)
     collapsedTasks.delete(taskId)
     expandedTasks.delete(taskId)
   }
@@ -1042,7 +1322,7 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
   }
   renderTaskFolds(messages)
   reorderConversationUnits(messages)
-  if (pendingSendPreview !== undefined && pendingSendPreview.isConnected && pendingAnchor !== undefined) {
+  if (!placePendingSendPreview(messages) && pendingSendPreview !== undefined && pendingSendPreview.isConnected && pendingAnchor !== undefined) {
     elements.conversation.insertBefore(pendingSendPreview, pendingAnchor)
   }
   renderMessageSegments(messages)
@@ -1116,7 +1396,7 @@ function historyControl(label: string, title: string, handler: () => void): HTML
   return button
 }
 
-function showPendingSendPreview(text: string, attachmentLabels: readonly string[]): void {
+function showPendingSendPreview(text: string, attachmentLabels: readonly string[], mode: 'queue' | 'steer' = 'queue'): void {
   pendingSendPreview?.remove()
   pendingSendPreview = document.createElement('article')
   pendingSendPreview.className = 'message user pending-send'
@@ -1124,7 +1404,7 @@ function showPendingSendPreview(text: string, attachmentLabels: readonly string[
   head.className = 'message-head'
   const label = document.createElement('span')
   label.className = 'message-role-label'
-  label.textContent = 'You'
+  label.textContent = mode === 'steer' ? 'You · Steer' : 'You'
   const status = document.createElement('span')
   status.className = 'message-send-status'
   status.textContent = 'Sending...'
@@ -1140,6 +1420,44 @@ function showPendingSendPreview(text: string, attachmentLabels: readonly string[
   if (pendingAnchor !== undefined) elements.conversation.insertBefore(pendingSendPreview, pendingAnchor)
   else elements.conversation.append(pendingSendPreview)
   elements.conversation.scrollTop = elements.conversation.scrollHeight
+}
+
+/**
+ * Keep a pending steer prompt in the active task's visual timeline. Harness
+ * admits steer prompts into the next-step inbox before it writes the durable
+ * user/message event, so a composer-only preview must not sit after the whole
+ * task while the previous step is still producing output.
+ */
+function placePendingSendPreview(messages: readonly WorkbenchMessage[]): boolean {
+  const preview = pendingSendPreview
+  if (preview === undefined || pendingSendMode !== 'steer') return false
+  const activeTaskIds = new Set(messages
+    .filter(message => message.taskId !== undefined && message.taskComplete !== true)
+    .map(message => message.taskId as string))
+  const taskId = [...activeTaskIds].findLast(id => taskGroupElements.has(id))
+  if (taskId === undefined) return false
+  const group = taskGroupElements.get(taskId)
+  if (group === undefined) return false
+  const toggle = group.querySelector<HTMLElement>('.task-collapse-all')
+  if (collapsedTasks.has(taskId)) {
+    if (toggle?.nextSibling !== preview) group.insertBefore(preview, toggle?.nextSibling ?? null)
+    return true
+  }
+  const fold = group.querySelector<HTMLElement>('.task-fold-summary')
+  if (fold === null) return false
+  const directMessages = Array.from(group.children).filter((node): node is HTMLElement => node.classList.contains('message'))
+  const firstNewMessage = directMessages.find(node => {
+    const id = node.dataset.messageId
+    return id !== undefined && !pendingSendBaselineIds.has(id)
+  })
+  if (firstNewMessage !== undefined) {
+    group.insertBefore(preview, firstNewMessage)
+  } else {
+    const lastMessage = directMessages.at(-1)
+    if (lastMessage !== undefined) group.insertBefore(preview, lastMessage.nextSibling)
+    else group.insertBefore(preview, fold.nextSibling)
+  }
+  return true
 }
 
 function renderPendingVisionProgress(progress: import('../../session/types.js').WorkbenchSendProgress): void {
@@ -1180,20 +1498,39 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
   }
   for (const [taskId, items] of groups) {
     const complete = items.every(item => item.taskComplete === true)
+    const interrupted = items.some(item => item.taskInterrupted === true)
+    const wasInterrupted = taskInterruption.get(taskId) === true
     if (!knownTaskIds.has(taskId)) {
       knownTaskIds.add(taskId)
       collapsedTasks.add(taskId)
-    } else if (taskCompletion.get(taskId) === false && complete) {
+    } else if (interrupted && !wasInterrupted) {
+      // A user stop is a settled task, but it must remain compact. This is
+      // deliberately a transition: a later render must not undo a manual
+      // expansion of the interrupted task.
+      collapsedTasks.add(taskId)
+      expandedTasks.delete(taskId)
+    } else if (!interrupted && taskCompletion.get(taskId) === false && complete) {
       // A live turn just finished: reveal its first-level task shell and final
       // answer while keeping nested reasoning, tool, and Vision details folded.
       collapsedTasks.delete(taskId)
       expandedTasks.delete(taskId)
     }
     taskCompletion.set(taskId, complete)
+    taskInterruption.set(taskId, interrupted)
     const first = items.find(item => item.role === 'user') ?? items[0]
-    const last = [...items].reverse().find(item => item.role === 'assistant' || item.role === 'system') ?? items.at(-1)
-    if (first === undefined || last === undefined || first.id === last.id) continue
-    const middle = items.filter(item => item.id !== first.id && item.id !== last.id)
+    if (first === undefined) continue
+    const firstIndex = items.findIndex(item => item.id === first.id)
+    const latestInsertedIndex = complete
+      ? -1
+      : [...items].findLastIndex(item => item.role === 'user' && item.id !== first.id)
+    const final = [...items].reverse().find(item => item.role === 'assistant' || item.role === 'system')
+    const fallbackTail = final ?? (interrupted || !complete ? items.at(-1) : undefined)
+    const visibleTailItems = latestInsertedIndex > firstIndex
+      ? items.slice(latestInsertedIndex)
+      : fallbackTail === undefined ? [] : [fallbackTail]
+    const visibleTailIds = new Set(visibleTailItems.map(item => item.id))
+    const middle = items.filter(item => item.id !== first.id && !visibleTailIds.has(item.id))
+    if (visibleTailItems.length === 0) continue
     const collapsed = compactThinking && !expandedTasks.has(taskId) && middle.length > 0
     for (const item of items) {
       const node = messageElements.get(item.id)
@@ -1202,7 +1539,7 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
       node?.classList.toggle('task-intermediate', intermediate)
       if (item.role === 'user') {
         const role = node?.querySelector('.message-role-label')
-        if (role !== null && role !== undefined) role.textContent = intermediate ? 'You · Steer' : 'You'
+        if (role !== null && role !== undefined) role.textContent = item.id === first.id ? 'You' : 'You · Steer'
       }
     }
 
@@ -1229,7 +1566,7 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
     const tools = middle.filter(item => item.role === 'tool').length
     const inserted = middle.filter(item => item.role === 'user').length
     const details = [
-      items.some(item => item.taskComplete !== true) ? 'current task' : '',
+      interrupted ? 'stopped task' : items.some(item => item.taskComplete !== true) ? 'current task' : '',
       `${String(middle.length)} intermediate ${middle.length === 1 ? 'item' : 'items'}`,
       reasoning === 0 ? '' : `${String(reasoning)} reasoning`,
       tools === 0 ? '' : `${String(tools)} tools`,
@@ -1237,7 +1574,10 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
     ].filter(Boolean).join(' · ')
     const label = fold.querySelector('span')
     if (label !== null) label.textContent = `${collapsed ? 'Show' : 'Hide'} ${details}`
-    fold.title = collapsed ? 'Show the intermediate work in this completed task' : 'Hide the intermediate work in this completed task'
+    const taskState = interrupted ? 'stopped' : complete ? 'completed' : 'active'
+    fold.title = collapsed
+      ? `Show the intermediate work in this ${taskState} task`
+      : `Hide the intermediate work in this ${taskState} task`
     fold.setAttribute('aria-expanded', String(!collapsed))
     fold.querySelector('svg')?.classList.toggle('collapsed', collapsed)
     const nodes = items.map(item => messageElements.get(item.id)).filter((node): node is HTMLElement => node !== undefined)
@@ -1262,8 +1602,10 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
       taskToggle.querySelector('svg')?.classList.toggle('collapsed', wholeCollapsed)
       for (const node of nodes) node.classList.toggle('task-all-hidden', wholeCollapsed)
       fold.classList.toggle('task-all-hidden', wholeCollapsed)
-      const remainingNodes = nodes.filter(node => node !== firstNode)
-      group.replaceChildren(taskToggle, firstNode, fold, ...remainingNodes)
+      const nodeById = new Map(items.map((item, index) => [item.id, nodes[index]] as const))
+      const foldedNodes = middle.map(item => nodeById.get(item.id)).filter((node): node is HTMLElement => node !== undefined)
+      const tailNodes = visibleTailItems.map(item => nodeById.get(item.id)).filter((node): node is HTMLElement => node !== undefined)
+      group.replaceChildren(taskToggle, firstNode, fold, ...foldedNodes, ...tailNodes)
     }
   }
 }
@@ -1350,7 +1692,7 @@ function pendingAreaSignature(approvals: WorkbenchSnapshot['approvals'], questio
 }
 
 function messageSignature(message: WorkbenchMessage): string {
-  return `${message.id}\u0000${message.seq ?? ''}\u0000${message.status ?? ''}\u0000${message.text.length}\u0000${message.textLength ?? ''}\u0000${message.title ?? ''}\u0000${message.attachments === undefined ? '' : message.attachments.map(attachment => attachment.kind + attachment.label).join(',')}`
+  return `${message.id}\u0000${message.seq ?? ''}\u0000${message.status ?? ''}\u0000${message.text.length}\u0000${message.textLength ?? ''}\u0000${message.title ?? ''}\u0000${message.taskInterrupted === true ? 'interrupted' : ''}\u0000${message.attachments === undefined ? '' : message.attachments.map(attachment => attachment.kind + attachment.label).join(',')}`
 }
 
 function renderMessage(message: WorkbenchMessage): HTMLElement {
@@ -1748,13 +2090,31 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
   const steer = steerAvailable(snapshot)
   renderDeliveryMode()
   renderVisionToggle()
+  renderScheduleToggle(snapshot)
   const modelControlsUnavailable = modelControlsUnavailableReason(snapshot)
   const compactionUnavailable = snapshot.agentPreset === 'minimal'
-  const hasActiveTurn = snapshot.messages.some(message => message.status === 'streaming' || message.taskComplete === false)
-  elements.cancel.classList.toggle('hidden', !running || !hasActiveTurn)
+  const activeTurn = hasActiveTurn(snapshot)
+  const autonomous = hasAutonomousActivity(snapshot)
+  const autonomousWaiting = autonomous && !running
+  const agentWork = hasAgentActivity(snapshot)
+  elements.cancel.classList.toggle('hidden', !agentWork)
+  elements.cancel.classList.toggle('autonomous', autonomousWaiting)
   elements.cancel.disabled = cancelling
-  elements.cancel.title = cancelling ? 'Stop request is being processed' : 'Stop'
+  elements.cancel.title = cancelling
+    ? 'Stop request is being processed'
+    : autonomousWaiting
+      ? 'Pause autonomous agent task and remove agent-owned queued prompts'
+      : running
+        ? 'Stop current response'
+      : 'Stop agent task'
   elements.cancel.setAttribute('aria-label', elements.cancel.title)
+  const cancelIconState = cancelling ? 'cancelling' : autonomousWaiting ? 'autonomous' : 'response'
+  if (elements.cancel.dataset.state !== cancelIconState) {
+    elements.cancel.dataset.state = cancelIconState
+    const icon = svgIcon(cancelling ? 'loader-circle' : autonomousWaiting ? 'pause' : 'square')
+    if (cancelling) icon.classList.add('session-operation-icon')
+    elements.cancel.replaceChildren(icon)
+  }
   elements.send.classList.toggle('hidden', false)
   const effectiveSteer = steer && (deliveryMode === 'steer' || deliveryMode === 'auto')
   elements.send.classList.toggle('steer', effectiveSteer)
@@ -1768,7 +2128,7 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
   elements.modelMenu.disabled = modelControlsUnavailable !== undefined
   elements.modelMenu.title = modelControlsUnavailable ?? 'Model, reasoning, and agent preset'
   elements.modelMenu.setAttribute('aria-label', elements.modelMenu.title)
-  const compactDisabled = snapshot.phase !== 'connected' || active === undefined || running || sendPending || active.operation !== undefined || compactionUnavailable
+  const compactDisabled = snapshot.phase !== 'connected' || active === undefined || activeTurn || sendPending || active.operation !== undefined || compactionUnavailable
   elements.compact.disabled = compactDisabled
   const compactIconState = compacting ? 'compacting' : 'idle'
   if (elements.compact.dataset.state !== compactIconState) {
@@ -1781,8 +2141,8 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
     ? 'Compacting context; session actions are temporarily locked'
     : sendPending
       ? 'Wait for the current message to finish submitting before compacting context'
-    : running
-    ? 'Compact unavailable while a response is in progress'
+    : activeTurn
+    ? 'Compact unavailable while an agent task is in progress'
     : compactionUnavailable
       ? 'Compact unavailable in the Minimal agent preset'
       : compactDisabled
@@ -1800,6 +2160,10 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
   elements.statusText.textContent = phase === 'ready'
     ? compacting
       ? 'Compacting context...'
+      : autonomousWaiting
+      ? 'Agent continuing autonomously - Pause available'
+      : running
+      ? 'Response in progress - Stop available'
       : modelUnavailable
       ? 'Selected model is unavailable'
       : `${snapshot.runtime.version ?? 'Harness'}${snapshot.hasApiKey ? '' : ' - API key required'}`
@@ -2214,8 +2578,28 @@ function showNotice(message: string, level: 'info' | 'warning' | 'error'): void 
 function showSettings(settings: WorkbenchSettings, section?: 'connection' | 'vision' | 'context' | 'handoff' | 'skills'): void {
   currentSettings = settings
   elements.settingBaseUrl.value = settings.baseUrl
+  const endpointOptions = baseUrlPresets.map(preset => {
+    const option = document.createElement('option')
+    option.value = preset.value
+    option.textContent = preset.label
+    return option
+  })
+  if (!baseUrlPresets.some(preset => preset.value === settings.baseUrl)) {
+    const custom = document.createElement('option')
+    custom.value = ''
+    custom.textContent = 'Custom endpoint (current)'
+    endpointOptions.push(custom)
+  } else {
+    const custom = document.createElement('option')
+    custom.value = ''
+    custom.textContent = 'Custom endpoint...'
+    endpointOptions.push(custom)
+  }
+  elements.settingBaseUrlPicker.replaceChildren(...endpointOptions)
+  elements.settingBaseUrlPicker.value = baseUrlPresets.some(preset => preset.value === settings.baseUrl) ? settings.baseUrl : ''
   elements.settingApiKey.value = ''
   elements.settingApiKey.placeholder = settings.hasApiKey ? 'Configured - leave blank to keep' : 'Enter API key'
+  updateApiKeyStatus()
   elements.settingVisionUrl.value = settings.visionBaseUrl
   elements.settingVisionModel.value = settings.visionModel
   elements.settingVisionReasoning.value = settings.visionReasoningEffort
@@ -2234,12 +2618,24 @@ function showSettings(settings: WorkbenchSettings, section?: 'connection' | 'vis
   elements.settingVisionKey.placeholder = settings.hasVisionApiKey ? 'Configured - leave blank to keep' : 'Enter Vision API key'
   elements.settingPasteThreshold.value = String(settings.pasteFileThreshold)
   elements.settingContextWindow.value = String(settings.contextWindowTokens)
+  elements.settingScheduleEnabled.checked = settings.scheduleEnabled === true
   elements.settingCodexHome.value = settings.codexHome
   elements.settingClaudeHome.value = settings.claudeHome
   elements.settingHandoffMode.value = settings.handoffLaunchMode
   elements.settingSkillDirectories.value = settings.skillDirectories.join('\n')
   elements.settingsDialog.classList.remove('hidden')
   if (section !== undefined) document.getElementById(`settings-${section}`)?.scrollIntoView({ block: 'start' })
+}
+
+function updateApiKeyStatus(): void {
+  if (currentSettings === undefined) return
+  const currentUrl = elements.settingBaseUrl.value.trim()
+  const unchanged = currentUrl === currentSettings.baseUrl
+  elements.settingApiKeyStatus.textContent = unchanged
+    ? currentSettings.hasApiKey
+      ? 'Saved in SecretStorage for this endpoint'
+      : 'No key saved for this endpoint'
+    : 'Save to check the key saved for this endpoint'
 }
 
 function closeSettings(): void {
@@ -2352,6 +2748,29 @@ function renderVisionToggle(): void {
   elements.visionToggle.setAttribute('aria-label', elements.visionToggle.title)
 }
 
+function renderScheduleToggle(snapshot: WorkbenchSnapshot): void {
+  const settings = currentSettings
+  const enabled = settings?.scheduleEnabled === true
+  const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
+  const blocked = settings === undefined
+    || snapshot.runtime.phase !== 'ready'
+    || active?.running === true
+    || active?.operation !== undefined
+    || hasActiveTurn(snapshot)
+    || hasAutonomousActivity(snapshot)
+  elements.scheduleToggle.classList.toggle('toggle-on', enabled)
+  elements.scheduleToggle.setAttribute('aria-pressed', String(enabled))
+  elements.scheduleToggle.disabled = blocked
+  elements.scheduleToggle.title = settings === undefined
+    ? 'Loading scheduled follow-up setting...'
+    : blocked && (active?.running === true || hasActiveTurn(snapshot) || hasAutonomousActivity(snapshot))
+      ? 'Stop the active Harness task before changing scheduled follow-ups'
+      : enabled
+        ? 'Scheduled follow-ups enabled: official dsh-schedule is mounted; reminders run only while this Harness session stays live. Click to disable (runtime restart required).'
+        : 'Scheduled follow-ups disabled: click to mount the official dsh-schedule plugin (runtime restart required)'
+  elements.scheduleToggle.setAttribute('aria-label', elements.scheduleToggle.title)
+}
+
 function renderCompactionModelOptions(): void {
   const settings = currentSettings
   const catalog = state?.modelCatalog
@@ -2408,6 +2827,7 @@ function saveSettings(): void {
       compactionModel: previous.compactionModel,
       pasteFileThreshold,
       contextWindowTokens,
+      scheduleEnabled: elements.settingScheduleEnabled.checked,
       codexHome: elements.settingCodexHome.value.trim(),
       claudeHome: elements.settingClaudeHome.value.trim(),
       handoffLaunchMode: elements.settingHandoffMode.value === 'cli' ? 'cli' : 'clipboard',

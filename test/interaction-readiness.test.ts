@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { modelControlsUnavailableReason, promptUnavailableReason, steerAvailable } from '../src/session/interaction-readiness.js'
+import { hasAgentActivity, hasActiveTurn, hasAutonomousActivity, modelControlsUnavailableReason, promptUnavailableReason, steerAvailable } from '../src/session/interaction-readiness.js'
 import type { WorkbenchSnapshot } from '../src/session/types.js'
 
 function snapshot(overrides: Partial<WorkbenchSnapshot> = {}): WorkbenchSnapshot {
@@ -71,6 +71,27 @@ describe('workbench interaction readiness', () => {
 
   it('offers steering only for a running session', () => {
     expect(steerAvailable(snapshot())).toBe(false)
+  })
+
+  it('keeps a stop path for an autonomous task between running projections', () => {
+    const waiting = snapshot({ messages: [{ id: 'task-1', role: 'assistant', text: 'Waiting.', taskId: 'turn:1', taskComplete: false }] })
+    expect(hasActiveTurn(waiting)).toBe(true)
+    expect(promptUnavailableReason(waiting)).toContain('autonomous task')
+    expect(modelControlsUnavailableReason(waiting)).toContain('agent task')
+  })
+
+  it('recognizes official queue and background-job frames while session status is idle', () => {
+    const queue = snapshot({ queueItems: [{ id: 'agent-1', placement: 'queued', sourceKind: 'plugin' }] })
+    expect(hasAutonomousActivity(queue)).toBe(true)
+    expect(hasAgentActivity(queue)).toBe(true)
+    expect(promptUnavailableReason(queue)).toContain('autonomous task')
+
+    const job = snapshot({ jobs: [{ id: 'bash-1', kind: 'bash', label: 'running task', status: 'running' }] })
+    expect(hasAutonomousActivity(job)).toBe(true)
+    expect(hasAgentActivity(job)).toBe(true)
+
+    const userQueue = snapshot({ queueItems: [{ id: 'user-1', placement: 'queued', sourceKind: 'user' }] })
+    expect(hasAutonomousActivity(userQueue)).toBe(false)
   })
 
   it('keeps model controls available when the current model is not routable', () => {

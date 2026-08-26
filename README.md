@@ -6,7 +6,7 @@
 
 [Marketplace](https://marketplace.visualstudio.com/items?itemName=diractive-edge.dedge-deepseek-harness-vscode) · [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) · [Changelog](CHANGELOG.md) · [隐私](PRIVACY.md) · [安全](SECURITY.md) · [支持](SUPPORT.md)
 
-> 当前版本为 `0.1.46`。发布产物优先验证 Windows 10/11 x64；DeepSeek Harness 上游仍处于 developer preview，升级前请阅读变更日志和已知限制。
+> 当前版本为 `0.1.49`。发布产物优先验证 Windows 10/11 x64；DeepSeek Harness 上游仍处于 developer preview，升级前请阅读变更日志和已知限制。
 
 ## 主要能力
 
@@ -18,6 +18,7 @@
 - 只读载入本机 Codex、Claude Code 会话，并通过隔离文本交接在三个平台之间继续工作。
 - Windows 进程使用参数数组和 `shell: false` 启动，避免把路径、参数或提示词交给 PowerShell/cmd 二次解析。
 - API Key 只保存在 VS Code `SecretStorage`；Gateway 只监听随机的 `127.0.0.1` 端口。
+- `deepseek-official` 使用 Harness 原生 DeepSeek 适配器；将 `provider` 改为其他路由时，扩展会挂载 Harness 内置的多提供方 `pi-ai` 适配器，可接 OpenAI-compatible 网关，provider 名包含 `anthropic` 或 `claude` 时使用 Anthropic Messages 协议。
 - Runtime 就绪时发布不含凭据的本机 lease，供 DeDge Orbit 复用同一个 Gateway；退出时只清理属于当前进程的 lease。
 
 ## 安装
@@ -28,14 +29,14 @@
 
 ### 从 VSIX 安装
 
-1. 从 [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) 下载与 extension host 匹配的文件，例如 `dedge-deepseek-harness-vscode-0.1.46-win32-x64.vsix`。
+1. 从 [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) 下载与 extension host 匹配的文件，例如 `dedge-deepseek-harness-vscode-0.1.49-win32-x64.vsix`。
 2. 在 VS Code 扩展视图右上角菜单选择 **Install from VSIX...**。
 3. 安装完成后按 VS Code 提示重新加载窗口。
 
 也可以显式安装：
 
 ```powershell
-code --install-extension .\dedge-deepseek-harness-vscode-0.1.46-win32-x64.vsix
+code --install-extension .\dedge-deepseek-harness-vscode-0.1.49-win32-x64.vsix
 ```
 
 Remote SSH、WSL 和 Dev Container 使用远端 extension host 的操作系统与架构，不是本地 UI 的平台。平台 VSIX 不能混用。
@@ -103,7 +104,7 @@ Codex / Claude / DeepSeek source session (read-only)
 
 | Extension host | VSIX target | 当前状态 |
 | --- | --- | --- |
-| Windows 10/11 x64 | `win32-x64` | `0.1.46` 完整验证目标 |
+| Windows 10/11 x64 | `win32-x64` | `0.1.49` 完整验证目标 |
 | Linux x64 | `linux-x64` | 源码支持；发布前需要原生 runner 验证 |
 | macOS Apple Silicon | `darwin-arm64` | 源码支持；发布前需要原生 runner 验证 |
 | Windows ARM64 / Linux ARM64 / macOS Intel | 对应 target | 需要对应原生 runner 或设备验证 |

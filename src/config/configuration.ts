@@ -22,6 +22,7 @@ export interface HarnessConfiguration {
   readonly approvalPolicy?: ApprovalPolicy
   readonly baseUrl: string
   readonly autoStart: boolean
+  readonly scheduleEnabled: boolean
   readonly contextMaxBytes: number
   readonly contextWindowTokens: number
   readonly pasteFileThreshold: number
@@ -76,6 +77,7 @@ export class ConfigurationService implements vscode.Disposable {
       approvalPolicy: oneOf(config.get<string>('approvalPolicy'), ['ask', 'approve-for-me'], 'ask'),
       baseUrl,
       autoStart: config.get<boolean>('autoStart', true),
+      scheduleEnabled: config.get<boolean>('schedule.enabled', false),
       contextMaxBytes: bounded(config.get<number>('context.maxBytes'), 1_024, 131_072, 32_768),
       contextWindowTokens: bounded(config.get<number>('context.windowTokens'), 16_384, 16_000_000, DEFAULT_CONTEXT_WINDOW_TOKENS),
       pasteFileThreshold: bounded(config.get<number>('context.pasteFileThreshold'), 1_024, 131_072, 4_096),

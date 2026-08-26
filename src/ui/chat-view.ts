@@ -22,6 +22,7 @@ export interface ChatViewActions {
   readonly configureContextWindow: () => Promise<void>
   readonly getSettings: () => Promise<WorkbenchSettings>
   readonly saveSettings: (settings: WorkbenchSettings & { readonly apiKey?: string; readonly visionApiKey?: string }) => Promise<void>
+  readonly setScheduleEnabled: (enabled: boolean) => Promise<void>
 }
 
 type SessionPickerAction = 'new-session' | 'browse-sessions' | 'load-codex' | 'load-claude' | 'handoff-current'
@@ -39,6 +40,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private statePostTimer: ReturnType<typeof setTimeout> | undefined
   private statePostScheduled = false
   private pendingImageFiles: readonly { readonly name: string; readonly dataUrl: string }[] = []
+  private readonly queueActions = new Set<string>()
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -254,6 +256,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   dispose(): void {
     if (this.statePostTimer !== undefined) clearTimeout(this.statePostTimer)
+    this.queueActions.clear()
     this.controllerSubscription.dispose()
   }
 
@@ -289,7 +292,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       this.attachments = this.attachments.filter(item => !sentIds.has(item.id))
       // Release the composer immediately, matching Codex's image-send UX. Vision conversion and
       // the Harness RPC continue in this handler; failures are reported through sendSettled.
-      await this.post({ type: 'sendStarted', text: message.text, attachments: attachments.map(item => ({ label: item.label })) })
+      await this.post({ type: 'sendStarted', text: message.text, attachments: attachments.map(item => ({ label: item.label })), mode: message.mode ?? 'queue' })
       await this.postState()
       try {
         await this.controller.send(message.text, attachments, message.mode ?? 'queue', progress => { void this.post({ type: 'sendProgress', progress }) })
@@ -305,6 +308,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         await this.postState()
       }
       return
+    }
+    if (message.type === 'steerQueueItem' || message.type === 'removeQueueItem' || message.type === 'editQueueItem') {
+      return this.handleQueueAction(message)
     }
     if (message.type === 'newSession') return this.run(() => this.controller.newSession())
     if (message.type === 'selectSession') return this.run(() => this.controller.selectSession(message.sessionId))
@@ -334,6 +340,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         this.pendingImageFiles = []
         for (const file of pending) this.upsertAttachment(await this.controller.attachImageData(file.name, file.dataUrl))
       }
+    })
+    if (message.type === 'setScheduleEnabled') return this.run(async () => {
+      await this.actions.setScheduleEnabled(message.enabled)
+      await this.post({ type: 'settings', settings: await this.actions.getSettings(), open: false })
     })
     if (message.type === 'attachFile') return this.run(async () => {
       const item = await this.controller.attachFile()
@@ -394,6 +404,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       await this.controller.selectModel(message.provider, message.model, message.reasoningEffort)
       await this.post({ type: 'settings', settings: await this.actions.getSettings(), open: false })
     })
+    if (message.type === 'refreshModelCatalog') return this.run(() => this.controller.refreshModels())
     if (message.type === 'setVisionEnabled') return this.run(async () => {
       await this.controller.setVisionEnabled(message.enabled)
       const settings = await this.actions.getSettings()
@@ -445,6 +456,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private upsertAttachment(attachment: ContextAttachment): void {
     this.attachments = [...this.attachments.filter(item => item.id !== attachment.id), attachment]
     void this.postState()
+  }
+
+  private async handleQueueAction(message: Extract<WebviewToHostMessage, { readonly type: 'steerQueueItem' | 'removeQueueItem' | 'editQueueItem' }>): Promise<void> {
+    const itemId = message.itemId
+    if (this.queueActions.has(itemId)) return
+    this.queueActions.add(itemId)
+    try {
+      if (message.type === 'steerQueueItem') await this.controller.steerQueueItem(itemId)
+      else if (message.type === 'removeQueueItem') await this.controller.removeQueueItem(itemId)
+      else await this.controller.editQueueItem(itemId, message.text)
+      await this.post({ type: 'queueActionSettled', itemId, accepted: true })
+      await this.postState()
+    } catch (error) {
+      const detail = errorMessage(error)
+      this.logger.error(`Queue action failed for ${itemId}`, error)
+      await this.post({ type: 'notice', level: 'error', message: conciseNotice(detail) })
+      await this.post({ type: 'queueActionSettled', itemId, accepted: false })
+      await this.postState()
+    } finally {
+      this.queueActions.delete(itemId)
+    }
   }
 
   private async restorePendingHandoff(): Promise<void> {
@@ -510,6 +542,8 @@ function parseWebviewMessage(value: unknown): WebviewToHostMessage {
     || type === 'compact' || type === 'configureContextWindow' || type === 'handoff' || type === 'showLogs' || type === 'reviewChanges' || type === 'diagnose') return { type }
   if (type === 'saveSettings' && isRecord(value.settings)) return { type, settings: parseSettings(value.settings) }
   if (type === 'send' && typeof value.text === 'string') return { type, text: value.text, ...(value.mode === 'queue' || value.mode === 'steer' ? { mode: value.mode } : {}) }
+  if ((type === 'steerQueueItem' || type === 'removeQueueItem') && typeof value.itemId === 'string' && value.itemId.length <= 256) return { type, itemId: value.itemId }
+  if (type === 'editQueueItem' && typeof value.itemId === 'string' && value.itemId.length <= 256 && typeof value.text === 'string' && value.text.length <= 1_048_576) return { type, itemId: value.itemId, text: value.text }
   if (type === 'selectSession' && typeof value.sessionId === 'string' && value.sessionId.length <= 256) return { type, sessionId: value.sessionId }
   if (type === 'manageSession' && typeof value.sessionId === 'string' && value.sessionId.length <= 256) return { type, sessionId: value.sessionId }
   if (type === 'attachUris' && Array.isArray(value.uris) && value.uris.length <= 20 && value.uris.every(item => typeof item === 'string' && item.length <= 8_192)) {
@@ -533,8 +567,10 @@ function parseWebviewMessage(value: unknown): WebviewToHostMessage {
     const answers = value.answers.map(parseQuestionAnswer)
     return { type, rpcId: value.rpcId, answers }
   }
+  if (type === 'refreshModelCatalog') return { type }
   if (type === 'selectModel' && typeof value.provider === 'string' && typeof value.model === 'string') return { type, provider: value.provider, model: value.model, ...(typeof value.reasoningEffort === 'string' ? { reasoningEffort: value.reasoningEffort } : {}) }
   if (type === 'setVisionEnabled' && typeof value.enabled === 'boolean') return { type, enabled: value.enabled }
+  if (type === 'setScheduleEnabled' && typeof value.enabled === 'boolean') return { type, enabled: value.enabled }
   if (type === 'selectCompactionModel' && typeof value.provider === 'string' && typeof value.model === 'string') return { type, provider: value.provider, model: value.model }
   if (type === 'selectPreset' && typeof value.preset === 'string') return { type, preset: value.preset }
   if (type === 'selectPermission' && typeof value.permission === 'string') return { type, permission: value.permission }
@@ -548,7 +584,7 @@ function parseSettings(value: Record<string, unknown>): WebviewToHostMessage ext
   return {
     baseUrl: text('baseUrl'), hasApiKey: value.hasApiKey === true, visionBaseUrl: text('visionBaseUrl'), visionModel: text('visionModel'), visionReasoningEffort: text('visionReasoningEffort'), mainModelVisionCapable: value.mainModelVisionCapable === true, auxiliaryVisionEnabled: value.auxiliaryVisionEnabled === true, compactionProvider: text('compactionProvider'), compactionModel: text('compactionModel'), visionModels: Array.isArray(value.visionModels) ? value.visionModels.filter(item => typeof item === 'string') as string[] : [],
     hasVisionApiKey: value.hasVisionApiKey === true, pasteFileThreshold: number('pasteFileThreshold', 4_096), contextWindowTokens: number('contextWindowTokens', 1_000_000),
-    codexHome: text('codexHome'), claudeHome: text('claudeHome'), handoffLaunchMode: text('handoffLaunchMode') === 'cli' ? 'cli' : 'clipboard', skillDirectories: directories,
+    codexHome: text('codexHome'), claudeHome: text('claudeHome'), handoffLaunchMode: text('handoffLaunchMode') === 'cli' ? 'cli' : 'clipboard', skillDirectories: directories, scheduleEnabled: value.scheduleEnabled === true,
     ...(text('apiKey') === '' ? {} : { apiKey: text('apiKey') }), ...(text('visionApiKey') === '' ? {} : { visionApiKey: text('visionApiKey') }),
   } as never
 }
@@ -609,6 +645,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .icon-button { display: inline-grid; place-items: center; flex: 0 0 24px; width: 24px; height: 24px; padding: 0; color: var(--vscode-icon-foreground); background: transparent; border-radius: 3px; cursor: pointer; }
     .icon-button svg, .menu-button svg, .menu-option svg { width: 14px; height: 14px; stroke-width: 1.9; }
     .icon-button:hover { background: var(--vscode-toolbar-hoverBackground); }
+    #cancel.autonomous { color: var(--vscode-charts-yellow); }
     .icon-button:focus-visible, .menu-button:focus-visible, .menu-option:focus-visible, .context-meter:focus-visible, .session-tab:focus-visible, .session-tab-manage:focus-visible, .command:focus-visible, textarea:focus-visible, input:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
     .icon-button[disabled] { opacity: .45; cursor: default; }
     .session-toolbar { position: relative; z-index: 25; display: flex; align-items: stretch; width: 100%; max-width: 100%; overflow: hidden; border-bottom: 1px solid var(--vscode-panel-border); }
@@ -634,8 +671,11 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .session-tab:hover { background: var(--vscode-list-hoverBackground); color: var(--vscode-foreground); }
     .session-tab[disabled] { cursor: default; opacity: .72; }
     .session-tab.operation { color: var(--vscode-progressBar-background); }
+    .session-tab.autonomous { color: var(--vscode-charts-yellow); }
     .session-tab[aria-selected="true"] { border-bottom-color: var(--vscode-focusBorder); color: var(--vscode-foreground); }
     .session-tab.running::after { content: ''; flex: 0 0 5px; width: 5px; height: 5px; margin-left: 6px; border-radius: 50%; background: var(--vscode-progressBar-background); }
+    .session-tab.autonomous::after { content: ''; flex: 0 0 5px; width: 5px; height: 5px; margin-left: 6px; border-radius: 50%; background: var(--vscode-charts-yellow); animation: autonomous-pulse 1.2s ease-in-out infinite alternate; }
+    @keyframes autonomous-pulse { from { opacity: .45; } to { opacity: 1; } }
     .session-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     .session-tab-manage { display: grid; place-items: center; flex: 0 0 22px; width: 22px; height: 30px; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); cursor: pointer; opacity: 0; }
     .session-tab-wrap:hover .session-tab-manage, .session-tab-manage:focus-visible, .session-tab[aria-selected="true"] + .session-tab-manage { opacity: .78; }
@@ -749,6 +789,28 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .steer-notice button { display: grid; place-items: center; flex: 0 0 16px; width: 16px; height: 16px; padding: 0; background: transparent; color: inherit; cursor: pointer; border-radius: 3px; }
     .steer-notice button:hover { background: var(--vscode-toolbar-hoverBackground); }
     .steer-notice svg { width: 12px; height: 12px; }
+    .queue-dock { min-width: 0; max-width: 100%; margin: 0 0 6px; border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 78%, transparent); border-radius: 4px; background: color-mix(in srgb, var(--vscode-editor-inactiveSelectionBackground) 32%, var(--vscode-sideBar-background)); overflow: hidden; }
+    .queue-header { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 27px; padding: 4px 7px; border: 0; color: var(--vscode-descriptionForeground); background: transparent; text-align: left; font: 11px/1.25 var(--vscode-font-family); cursor: pointer; }
+    .queue-header:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
+    .queue-header > svg:first-child { flex: 0 0 13px; width: 13px; height: 13px; color: var(--vscode-charts-orange); }
+    .queue-header > svg:last-child { flex: 0 0 12px; width: 12px; height: 12px; margin-left: auto; }
+    .queue-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .queue-list { display: grid; gap: 1px; padding: 0 5px 5px; }
+    .queue-list[hidden] { display: none !important; }
+    .queue-row { display: flex; align-items: center; gap: 5px; min-width: 0; min-height: 27px; padding: 3px 2px 3px 5px; border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 48%, transparent); }
+    .queue-row:first-child { border-top: 0; }
+    .queue-row > svg { flex: 0 0 13px; width: 13px; height: 13px; color: var(--vscode-charts-orange); }
+    .queue-row-steering { color: var(--vscode-charts-orange); }
+    .queue-preview { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-foreground); font-size: 11px; }
+    .queue-row-steering .queue-preview { color: var(--vscode-charts-orange); }
+    .queue-editor { min-width: 0; flex: 1 1 auto; height: 23px; border: 1px solid var(--vscode-focusBorder); border-radius: 3px; padding: 2px 5px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); font: 11px/1.25 var(--vscode-font-family); }
+    .queue-actions { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 1px; }
+    .queue-action { display: grid; place-items: center; flex: 0 0 22px; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 3px; color: var(--vscode-descriptionForeground); background: transparent; cursor: pointer; }
+    .queue-action:hover:not([disabled]) { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+    .queue-action[disabled] { cursor: default; opacity: .38; }
+    .queue-action svg { width: 13px; height: 13px; }
+    .queue-busy svg { animation: session-operation-spin 800ms linear infinite; }
+    .queue-steering-label { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 10px; }
     .task-middle-hidden { display: none !important; }
     .task-all-hidden { display: none !important; }
     .task-collapse-all { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 26px; padding: 4px 8px; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 65%, transparent); color: var(--vscode-descriptionForeground); background: transparent; text-align: left; font-size: 11px; cursor: pointer; }
@@ -776,6 +838,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .composer-right { flex: 1 1 0; justify-content: flex-end; overflow: hidden; }
     .composer-right > .icon-button, .composer-right > .context-meter-anchor, .composer-right > #send, .composer-right > #cancel { flex: 0 0 24px; }
     .composer-right .model-anchor { flex: 1 1 52px; min-width: 24px; max-width: 132px; overflow: hidden; }
+    .composer-right .schedule-anchor { flex: 0 0 24px; }
     .composer-right .vision-anchor { flex: 0 0 36px; width: 36px; }
     .split-control { display: inline-flex; align-items: center; flex: 0 0 auto; border-radius: 3px; overflow: visible; }
     .split-control > .icon-button { flex: 0 0 22px; width: 22px; }
@@ -839,6 +902,9 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .settings-body { overflow: auto; padding: 10px 14px; }
     .settings-section { display: grid; gap: 6px; margin-bottom: 14px; }
     .settings-section h3 { margin: 0; font-size: 11px; color: var(--vscode-descriptionForeground); }
+    .settings-check { display: flex !important; grid-template-columns: none; align-items: center; gap: 6px; }
+    .settings-check input { width: auto !important; min-height: auto !important; margin: 0; }
+    .credential-status { color: var(--vscode-testing-iconPassed, var(--vscode-charts-green)); font-size: 10px; font-weight: 500; }
     .settings-section label { display: grid; gap: 3px; color: var(--vscode-descriptionForeground); font-size: 10px; }
     .settings-section input, .settings-section select, .settings-section textarea { min-height: 24px; width: 100%; border: 1px solid var(--vscode-input-border); background: var(--vscode-input-background); color: var(--vscode-input-foreground); padding: 3px 6px; font: 11px/1.3 var(--vscode-font-family); }
     .settings-section select { height: 24px; }
@@ -853,6 +919,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     }
     @media (max-width: 360px) {
       .compact-anchor, #delivery-mode { display: none; }
+      .schedule-anchor { display: none; }
       .composer-right .model-anchor { max-width: 104px; }
     }
     @media (max-width: 280px) {
@@ -867,9 +934,10 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     <section id="settings-dialog" class="settings-dialog hidden" aria-label="DeepSeek Harness settings">
       <div class="settings-title"><h2>DeepSeek Harness settings</h2><button id="settings-close" class="icon-button settings-close" title="Close settings" aria-label="Close settings"><i data-lucide="x"></i></button></div>
       <div class="settings-body">
-        <section id="settings-connection" class="settings-section"><h3>DeepSeek connection</h3><label>Base URL<input id="setting-base-url" type="url"></label><label>API key<input id="setting-api-key" type="password" placeholder="Leave blank to keep the stored key"></label></section>
+        <section id="settings-connection" class="settings-section"><h3>Model connection</h3><label>Endpoint preset<select id="setting-base-url-picker"><option value="https://api.deepseek.com/">DeepSeek official</option><option value="https://api.openai.com/v1/">OpenAI</option><option value="https://api.anthropic.com/v1/">Anthropic</option><option value="">Custom endpoint...</option></select></label><label>Base URL<input id="setting-base-url" type="url"></label><label>API key <span id="setting-api-key-status" class="credential-status"></span><input id="setting-api-key" type="password" placeholder="Leave blank to keep the stored key"></label></section>
         <section id="settings-vision" class="settings-section"><h3>Auxiliary vision model</h3><p class="settings-note">Optional image preprocessor controlled by the image button in the composer. It makes an extra model request before Harness receives the prompt. Leave it off when the selected main model accepts images directly.</p><label>Base URL<input id="setting-vision-url" type="url" title="OpenAI-compatible auxiliary vision endpoint. The extension calls /models and /chat/completions on this URL."></label><label>Model<input id="setting-vision-model" title="Enter any compatible auxiliary vision model id manually."><select id="setting-vision-model-picker" title="Models returned by the auxiliary endpoint. Obvious image-generation and code-review-only models are hidden here."><option value="">Select an endpoint model...</option></select></label><label>Reasoning effort<select id="setting-vision-reasoning" title="Optional reasoning_effort for the auxiliary vision request. Default sends no reasoning parameter."><option value="">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Maximum</option></select></label><label>API key<input id="setting-vision-key" type="password" title="Stored only in VS Code SecretStorage; never included in the workspace or VSIX." placeholder="Leave blank to keep the stored key"></label></section>
         <section id="settings-context" class="settings-section"><h3>Context</h3><label>Convert pasted text to an attachment at (bytes)<input id="setting-paste-threshold" type="number" min="2048" max="131072"></label><label>Context window (tokens)<input id="setting-context-window" type="number" min="16384" max="16000000"></label></section>
+        <section id="settings-automation" class="settings-section"><h3>Automation</h3><label class="settings-check"><input id="setting-schedule-enabled" type="checkbox"><span>Enable scheduled follow-ups</span></label><p class="settings-note">Mounts the official dsh-schedule plugin. It adds session-local after, absolute-time, and fixed-rate reminders; changing this setting restarts the local Harness runtime.</p></section>
         <section id="settings-handoff" class="settings-section"><h3>Handoff</h3><label>Codex home<input id="setting-codex-home"></label><label>Claude home<input id="setting-claude-home"></label><label title="Clipboard copies an isolated take-over prompt without starting a process. CLI starts the native Codex or Claude command in a new VS Code terminal. In both modes the source session remains unchanged.">Delivery mode<select id="setting-handoff-mode"><option value="clipboard">Clipboard</option><option value="cli">CLI</option></select></label></section>
         <section id="settings-skills" class="settings-section"><h3>Skills</h3><label>Directories (one per line)<textarea id="setting-skill-directories" rows="3"></textarea></label></section>
       </div>
@@ -879,6 +947,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     <section id="search-panel" class="search-panel hidden" aria-label="Search current session"><div class="search-row"><input id="search-input" type="search" placeholder="Search in current session"><button id="search-selection" class="icon-button search-selection" title="Search selected text" aria-label="Search selected text"><i data-lucide="text-quote"></i></button><button id="search-prev" class="icon-button" title="Previous match" aria-label="Previous match"><i data-lucide="chevron-up"></i></button><button id="search-next" class="icon-button" title="Next match" aria-label="Next match"><i data-lucide="chevron-down"></i></button><button id="search-close" class="icon-button" title="Close search" aria-label="Close search"><i data-lucide="x"></i></button></div><div class="search-options"><label><input id="search-case" type="checkbox"> Aa</label><label><input id="search-word" type="checkbox"> Word</label><label><input id="search-regex" type="checkbox"> .* </label><span id="search-count"></span></div></section>
     <main id="conversation" class="conversation"><div class="empty">DeepSeek Harness</div></main>
     <footer class="composer">
+      <section id="queue-dock" class="queue-dock hidden" aria-live="polite" aria-label="Queued messages"><button id="queue-toggle" class="queue-header" type="button" aria-expanded="false"><i data-lucide="list-plus"></i><span id="queue-label" class="queue-label"></span><i data-lucide="chevron-down"></i></button><div id="queue-list" class="queue-list"></div></section>
       <div id="attachments" class="attachments"></div>
       <div id="steer-notice" class="steer-notice hidden"><span id="steer-notice-text">Steer message queued.</span><button id="steer-notice-close" title="Dismiss" aria-label="Dismiss"><i data-lucide="x"></i></button></div>
       <div id="composer-box" class="composer-box">
@@ -909,6 +978,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
               </span>
               <span id="context-tooltip" class="context-tooltip" role="tooltip"><span>Context window:</span><strong id="context-percent">0% full</strong><span id="context-figures" class="context-figures">0 / 1M tokens used</span><span id="context-trigger" class="context-figures">Auto compact at 800K</span></span>
             </span></button><button id="compact-menu" class="icon-button split-arrow" title="Compaction, folding, and context settings" aria-label="Compaction, folding, and context settings" aria-expanded="false"><i data-lucide="chevron-down"></i></button><div id="compact-popover" class="popover align-right hidden" role="menu"><div class="menu-heading">Compaction model</div><div id="compact-model-options" class="menu-options"></div><button id="compact-thinking" class="menu-option" role="menuitem" aria-pressed="false"><i data-lucide="fold-vertical"></i><span class="menu-option-copy"><span class="menu-option-label">Fold completed tasks</span><span class="menu-option-description">Collapse reasoning, tools, and nested process details</span></span></button><button id="configure-context" class="menu-option" role="menuitem"><i data-lucide="settings-2"></i><span class="menu-option-copy"><span class="menu-option-label">Context settings</span><span class="menu-option-description">Capacity and automatic threshold</span></span></button></div></div>
+            <div class="menu-anchor schedule-anchor"><button id="schedule-toggle" class="icon-button" title="Scheduled follow-ups" aria-label="Scheduled follow-ups" aria-pressed="false"><i data-lucide="calendar-clock"></i></button></div>
             <div class="menu-anchor model-anchor">
               <button id="model-menu" class="menu-button" title="Models are loading" aria-label="Models are loading" aria-expanded="false" disabled><span id="model-label" class="menu-label">Model</span><i class="chevron" data-lucide="chevron-down"></i></button>
               <div id="model-popover" class="popover model-popover align-right hidden" role="menu">

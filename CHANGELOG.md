@@ -4,6 +4,43 @@
 
 ## [Unreleased]
 
+## [0.1.49] - 2026-08-27
+
+### Added
+
+- Added a compact QueueDock for user-owned Harness inbox items. Queued prompts expose inline Edit, Steer, and Remove actions without leaking image data or internal plugin context into the conversation timeline.
+- Added queue-aware status projection for user prompts and autonomous jobs, including explicit ownership labels so user controls remain separate from agent-controlled work.
+
+### Fixed
+
+- Steer now follows the native Harness queue update path while a task is running. When a paused session has a text-only queued prompt, the extension removes it from the inbox and wakes the session with a steer prompt so it can continue without creating a duplicate message.
+- Queue actions are serialized and temporarily disabled per item, preventing repeated delete/steer requests while the authoritative queue state is catching up.
+- Mixed or image-bearing queued prompts remain protected while paused; the UI asks the user to resume before attempting a rebuild that could duplicate attachment payloads.
+- Queue previews redact attachment bodies and cap text previews, keeping Base64 data and private payloads out of the webview state.
+
+## [0.1.48] - 2026-08-26
+
+### Fixed
+
+- Steer previews now remain inside the active task timeline while Harness admits the message into its next-step inbox. New reasoning and tool output is rendered below the inserted prompt instead of above it or at the session bottom.
+- Pending steer previews survive task-group rerenders and are replaced by the durable `user/message` event without duplicate messages.
+- Inserted user messages consistently use the `You · Steer` role label.
+
+### Changed
+
+- Added the opt-in official `@deepseek-ai/dsh-schedule` mount and calendar-clock control for session-local scheduled follow-ups.
+
+## [0.1.47] - 2026-08-26
+
+### Fixed
+
+- Projected Harness `session/queue` and `session/jobs` state so an idle `Waiting` gap between autonomous turns remains visibly controllable.
+- Added a distinct autonomous-task Pause action and status indicator; user-owned queued prompts remain separate from agent-owned goal/plugin prompts.
+- Stopping an autonomous task now cancels the agent and removes agent-owned queued prompts, preventing an immediate self-triggered continuation.
+- User-stopped turns now remain settled and foldable. Interrupted Harness output is marked as a stopped task, kept compact after the stop, and remains manually expandable without being re-expanded on later renders.
+- Added an opt-in `dsh-schedule` switch using the official Harness patch layer. It mounts session-local scheduled follow-ups only after a controlled runtime restart.
+- Steered or inserted user messages now remain in chronological order at the active task tail; subsequent output no longer renders above the inserted message inside the previous fold.
+
 ## [0.1.46] - 2026-08-22
 
 ### Fixed
@@ -504,7 +541,10 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.35...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.49...HEAD
+[0.1.49]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.49
+[0.1.48]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.48
+[0.1.47]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.47
 [0.1.13]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.13
 [0.1.12]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.12
 [0.1.11]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.11

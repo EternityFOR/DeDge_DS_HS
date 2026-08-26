@@ -61,6 +61,37 @@ describe('session event projection', () => {
     ])
   })
 
+  it('keeps a user-stopped task settled and marks the whole fold as interrupted', () => {
+    const messages = projectMessages([
+      entry('user/message', 1, { source: { kind: 'user' }, content: [{ type: 'text', text: 'Start a long task' }] }),
+      entry('turn/start', 2, {}),
+      entry('assistant/message', 3, { turn: 1, step: 1, message: { content: [{ type: 'reasoning', text: 'Partial work' }] } }),
+      entry('tool/call', 4, { callId: 'call-1', name: 'read_file', arguments: {} }),
+      entry('assistant/message', 5, { turn: 1, step: 2, message: { interrupted: true, content: [{ type: 'text', text: 'Stopped here.' }] } }),
+    ])
+
+    expect(messages.map(message => [message.text, message.taskId, message.taskComplete, message.taskInterrupted])).toEqual([
+      ['Start a long task', 'turn:2', true, true],
+      ['Partial work', 'turn:2', true, true],
+      ['{}', 'turn:2', true, true],
+      ['Stopped here.', 'turn:2', true, true],
+    ])
+  })
+
+  it('recognizes cancelled turn-end events when no interrupted assistant message is emitted', () => {
+    const messages = projectMessages([
+      entry('user/message', 1, { source: { kind: 'user' }, content: [{ type: 'text', text: 'Stop me' }] }),
+      entry('turn/start', 2, {}),
+      entry('assistant/message', 3, { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'Partial result' }] } }),
+      entry('turn/end', 4, { reason: { kind: 'cancelled' } }),
+    ])
+
+    expect(messages.map(message => [message.taskComplete, message.taskInterrupted])).toEqual([
+      [true, true],
+      [true, true],
+    ])
+  })
+
   it('bounds verbose reasoning in workbench snapshots while retaining its original length', () => {
     const reasoning = 'x'.repeat(80_000)
     const messages = projectMessages([
@@ -100,6 +131,47 @@ describe('session event projection', () => {
     const snapshot = store.snapshot()
     expect(snapshot.sessions).toEqual([{ id: 's-1', title: 'Review', running: false, blank: false, updatedAt: 12 }])
     expect(snapshot.messages).toEqual([{ id: 'error:3', role: 'system', text: 'rate limited', status: 'error', seq: 3, time: 12 }])
+  })
+
+  it('projects transient queue and background-job state for an idle active session', () => {
+    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000, pasteFileThreshold: 8_192 })
+    store.addSession({ sessionId: 's-1', blank: false, running: false })
+    store.setActive('s-1')
+    store.setSessionQueue('s-1', [{ id: 'wake-1', placement: 'queued', message: { source: { kind: 'plugin', plugin: 'goal' } } }, { id: 'user-1', placement: 'queued', message: { source: { kind: 'user' } } }])
+    store.setSessionJobs('s-1', [{ id: 'job-1', kind: 'bash', label: 'npm test', status: 'running' }])
+
+    expect(store.snapshot().queueItems).toEqual([
+      { id: 'wake-1', placement: 'queued', sourceKind: 'plugin' },
+      { id: 'user-1', placement: 'queued', sourceKind: 'user' },
+    ])
+    expect(store.snapshot().jobs).toEqual([{ id: 'job-1', kind: 'bash', label: 'npm test', status: 'running' }])
+  })
+
+  it('projects user queue text while redacting non-text content', () => {
+    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000, pasteFileThreshold: 8_192 })
+    store.addSession({ sessionId: 's-1', blank: false, running: false })
+    store.setActive('s-1')
+    store.setSessionQueue('s-1', [
+      {
+        id: 'text-1',
+        placement: 'queued',
+        message: { source: { kind: 'user' }, content: [{ type: 'text', text: '  Continue the review  ' }] },
+      },
+      {
+        id: 'mixed-1',
+        placement: 'queued',
+        message: {
+          source: { kind: 'user' },
+          content: [{ type: 'text', text: 'Inspect this image' }, { type: 'image', data: 'private-base64-data' }],
+        },
+      },
+    ])
+
+    expect(store.snapshot().queueItems).toEqual([
+      { id: 'text-1', placement: 'queued', sourceKind: 'user', text: '  Continue the review  ', preview: 'Continue the review' },
+      { id: 'mixed-1', placement: 'queued', sourceKind: 'user', text: 'Inspect this image', preview: 'Inspect this image [image]', hasNonText: true },
+    ])
+    expect(JSON.stringify(store.snapshot().queueItems)).not.toContain('private-base64-data')
   })
 
   it('projects active-session catalogs and keeps duplicate question ids in separate RPC batches', () => {

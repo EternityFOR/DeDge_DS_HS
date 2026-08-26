@@ -14,6 +14,12 @@ export type PromptContentPart =
   | { readonly type: 'text'; readonly text: string }
   | { readonly type: 'image'; readonly mediaType: string; readonly data: string; readonly name?: string }
 
+/** A mutation of one still-pending Harness inbox item. */
+export type QueueAction =
+  | { readonly kind: 'remove' }
+  | { readonly kind: 'steer' }
+  | { readonly kind: 'edit'; readonly content: readonly PromptContentPart[] }
+
 export class GatewayClient implements vscode.Disposable {
   private stream: EventStream | undefined
 
@@ -77,6 +83,17 @@ export class GatewayClient implements vscode.Disposable {
     const value: unknown = await this.call('session.cancel', { sessionId })
     if (!isRecord(value) || value.accepted !== true) throw new Error('Harness did not acknowledge the stop request.')
     return { accepted: true }
+  }
+
+  updateQueueItem(sessionId: string, itemId: string, action: QueueAction): Promise<{ readonly accepted: true }> {
+    return this.call('session.updateQueue', { sessionId, itemId, action }).then(value => {
+      if (!isRecord(value) || value.accepted !== true) throw new Error(`Harness did not acknowledge the queue-item ${action.kind} request.`)
+      return { accepted: true }
+    })
+  }
+
+  removeQueueItem(sessionId: string, itemId: string): Promise<{ readonly accepted: true }> {
+    return this.updateQueueItem(sessionId, itemId, { kind: 'remove' })
   }
 
   async models(sessionId: string): Promise<ModelCatalog> {

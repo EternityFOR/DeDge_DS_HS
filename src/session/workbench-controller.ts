@@ -14,9 +14,9 @@ import { auxiliaryVisionEnabledForModel, isVisionCapableModel } from '../vision/
 import { errorMessage, type Logger } from '../platform/logger.js'
 import type { CredentialStore } from '../security/credentials.js'
 import type { RuntimeManager } from '../runtime/runtime-manager.js'
-import type { PendingApproval, PendingQuestion, QuestionAnswer, WorkbenchSendProgress, WorkbenchSnapshot } from './types.js'
+import type { PendingApproval, PendingQuestion, QuestionAnswer, WorkbenchQueueItem, WorkbenchSendProgress, WorkbenchSnapshot } from './types.js'
 import { SessionOperationCoordinator } from './session-operations.js'
-import { promptUnavailableReason } from './interaction-readiness.js'
+import { autonomousQueueItems, hasActiveTurn, hasAutonomousActivity, promptUnavailableReason } from './interaction-readiness.js'
 import { SessionStore } from './session-store.js'
 import { SessionTrashService } from './session-trash.js'
 import { validateQuestionAnswers } from './question-answers.js'
@@ -33,6 +33,10 @@ export class WorkbenchController implements vscode.Disposable {
   private runtimeSubscription: vscode.Disposable
   private configurationSubscription: vscode.Disposable
   private startTask: Promise<void> | undefined
+  private modelRefreshTask: Promise<void> | undefined
+  private lastConfiguration: HarnessConfiguration
+  private readonly internalConfigurationValues = new Map<'provider' | 'model', string>()
+  private readonly queueActionTasks = new Map<string, Promise<void>>()
   private disposed = false
   private publishTimer: ReturnType<typeof setTimeout> | undefined
   private publishScheduled = false
@@ -47,7 +51,8 @@ export class WorkbenchController implements vscode.Disposable {
     private readonly logger: Logger,
     private readonly sessionTrash: SessionTrashService,
   ) {
-    this.store = new SessionStore(toStoreConfiguration(configuration.get()))
+    this.lastConfiguration = configuration.get()
+    this.store = new SessionStore(toStoreConfiguration(this.lastConfiguration))
     this.sessionOperations = new SessionOperationCoordinator({
       onStart: (sessionId, operation) => {
         this.store.setSessionOperation(sessionId, operation)
@@ -65,7 +70,10 @@ export class WorkbenchController implements vscode.Disposable {
       this.publish()
     })
     this.configurationSubscription = configuration.onDidChange(next => {
+      const previous = this.lastConfiguration
+      this.lastConfiguration = next
       this.store.setConfiguration(toStoreConfiguration(next))
+      this.handleExternalModelConfigurationChange(previous, next)
       this.publish()
     })
   }
@@ -90,7 +98,7 @@ export class WorkbenchController implements vscode.Disposable {
     this.store.setPhase('connecting')
     this.publish()
     try {
-      const apiKey = await this.credentials.getApiKey()
+      const apiKey = await this.credentials.getApiKey(this.configuration.get().baseUrl)
       this.store.setCredentials(apiKey !== undefined && apiKey.trim() !== '')
       const url = await this.runtime.start()
       this.gateway?.dispose()
@@ -242,13 +250,126 @@ export class WorkbenchController implements vscode.Disposable {
     if (result.accepted === false) throw new Error('Harness rejected the prompt.')
   }
 
+  /** Remove one user-visible pending inbox item. A concurrent consumer winning
+   * the race is treated as success: the authoritative queue frame will remove
+   * the row shortly afterwards. */
+  removeQueueItem(itemId: string): Promise<void> {
+    return this.runQueueAction(itemId, async () => {
+      await this.ensureStarted()
+      const target = this.queueTarget(itemId)
+      if (target === undefined) return
+      try {
+        await this.requireGateway().removeQueueItem(target.sessionId, target.item.id)
+      } catch (error) {
+        if (isQueueItemNotFound(error)) return
+        throw error
+      }
+    })
+  }
+
+  /** Replace a text-only pending inbox item without changing its position. */
+  editQueueItem(itemId: string, text: string): Promise<void> {
+    return this.runQueueAction(itemId, async () => {
+      const normalized = text.trim()
+      if (normalized === '') throw new Error('A queued message cannot be empty.')
+      await this.ensureStarted()
+      const target = this.queueTarget(itemId)
+      if (target === undefined) return
+      if (target.item.text === undefined || target.item.hasNonText === true) {
+        throw new Error('Only text-only queued messages can be edited.')
+      }
+      try {
+        await this.requireGateway().updateQueueItem(target.sessionId, target.item.id, {
+          kind: 'edit',
+          content: [{ type: 'text', text }],
+        })
+      } catch (error) {
+        if (isQueueItemNotFound(error)) return
+        throw error
+      }
+    })
+  }
+
+  /** Move a queued user prompt into the active step. Harness only accepts the
+   * strict mutation while running; after cancellation we perform an explicit
+   * text-only remove-and-wake handoff so the queued prompt can still proceed. */
+  steerQueueItem(itemId: string): Promise<void> {
+    return this.runQueueAction(itemId, async () => {
+      await this.ensureStarted()
+      let target = this.queueTarget(itemId)
+      if (target === undefined) return
+      if (target.item.placement === 'steering') return
+      if (target.item.placement !== 'queued') return
+      const gateway = this.requireGateway()
+      try {
+        await gateway.updateQueueItem(target.sessionId, target.item.id, { kind: 'steer' })
+        return
+      } catch (error) {
+        if (isQueueItemNotFound(error)) return
+        if (!isSteerUnavailable(error)) throw error
+      }
+
+      // The cancellation projection can lag the runtime by one event. Retry
+      // the native strict operation once if the agent is now running again.
+      const latest = this.queueTarget(itemId)
+      if (latest === undefined) return
+      target = latest
+      if (target.item.placement !== 'queued') return
+      const active = this.store.snapshot().sessions.find(session => session.id === target?.sessionId)
+      if (active?.running === true) {
+        try {
+          await gateway.updateQueueItem(target.sessionId, target.item.id, { kind: 'steer' })
+          return
+        } catch (error) {
+          if (isQueueItemNotFound(error)) return
+          if (!isSteerUnavailable(error)) throw error
+        }
+      }
+      if (target.item.text === undefined || target.item.hasNonText === true) {
+        throw new Error('This queued message includes an image or attachment. Resume the session before steering it so its original content is preserved.')
+      }
+
+      // There is no atomic remove-and-steer RPC for an idle agent. Remove first
+      // to avoid duplicate delivery, then compensate with an ordinary queue if
+      // the wake-up request fails.
+      try {
+        await gateway.removeQueueItem(target.sessionId, target.item.id)
+      } catch (error) {
+        if (isQueueItemNotFound(error)) return
+        throw error
+      }
+      try {
+        const result = await gateway.prompt(target.sessionId, target.item.text, 'steer')
+        if (result.accepted === false) throw new Error('Harness rejected the paused-session steer request.')
+      } catch (error) {
+        try {
+          const fallback = await gateway.prompt(target.sessionId, target.item.text, 'queue')
+          if (fallback.accepted === false) throw new Error('Harness rejected the compensation queue request.')
+          this.logger.warn(`Paused-session steer for queue item ${target.item.id} was re-queued after wake-up failure.`)
+        } catch (compensationError) {
+          this.logger.error(`Queued message ${target.item.id} could not be restored after a failed paused-session steer. ${errorMessage(compensationError)}`, compensationError)
+        }
+        throw error
+      }
+    })
+  }
+
   cancel(): Promise<void> {
-    const sessionId = this.store.snapshot().activeSessionId
+    const snapshot = this.store.snapshot()
+    const sessionId = snapshot.activeSessionId
     if (sessionId === undefined) return Promise.resolve()
-    const session = this.store.snapshot().sessions.find(item => item.id === sessionId)
-    if (session?.running !== true) return Promise.resolve()
+    const session = snapshot.sessions.find(item => item.id === sessionId)
+    if (session?.running !== true && !hasActiveTurn(snapshot) && !hasAutonomousActivity(snapshot)) return Promise.resolve()
     return this.sessionOperations.run(sessionId, 'cancelling', async () => {
-      await this.requireGateway().cancel(sessionId)
+      const gateway = this.requireGateway()
+      if (session?.running === true || hasActiveTurn(snapshot) || hasAutonomousActivity(snapshot)) await gateway.cancel(sessionId)
+      const agentQueue = autonomousQueueItems(snapshot)
+      if (agentQueue.length > 0) {
+        await Promise.all(agentQueue.map(item => gateway.removeQueueItem(sessionId, item.id).catch(error => {
+          this.logger.warn(`Could not remove autonomous queue item ${item.id}: ${errorMessage(error)}`)
+        })))
+      }
+      this.sessionOperations.finish(sessionId, 'cancelling')
       if (!await this.waitForCancellation(sessionId, 5_000)) {
         this.sessionOperations.finish(sessionId, 'cancelling')
         throw new Error('Harness accepted the stop request but the active tool or model call has not stopped yet. You can press Stop again; see Output > DeepSeek Harness for details.')
@@ -269,8 +390,8 @@ export class WorkbenchController implements vscode.Disposable {
     const snapshot = this.store.snapshot()
     const session = snapshot.sessions.find(item => item.id === sessionId)
     if (session === undefined) return
-    if (session.running) throw new Error('A session cannot be archived while its response is in progress.')
     const wasActive = snapshot.activeSessionId === sessionId
+    if (session.running || (wasActive && hasActiveTurn(snapshot))) throw new Error('A session cannot be archived while its agent task is in progress.')
     const result = await this.requireGateway().archiveSession(sessionId)
     this.store.replaceArchivedSessions(result.archivedSessionIds)
     if (!wasActive) return this.publish()
@@ -284,8 +405,8 @@ export class WorkbenchController implements vscode.Disposable {
     const snapshot = this.store.snapshot()
     const session = snapshot.sessions.find(item => item.id === sessionId)
     if (session === undefined) return 'Session is no longer available.'
-    if (snapshot.sessions.some(item => item.running)) {
-      throw new Error('Finish or cancel all running responses before deleting a session because the local Harness runtime must restart.')
+    if (snapshot.sessions.some(item => item.running) || hasActiveTurn(snapshot)) {
+      throw new Error('Finish or cancel all agent tasks before deleting a session because the local Harness runtime must restart.')
     }
     const runtimeVersion = this.runtime.state.version
     if (runtimeVersion === undefined) throw new Error('The Harness runtime version is unavailable; deletion was refused.')
@@ -504,7 +625,7 @@ export class WorkbenchController implements vscode.Disposable {
       throw new Error(`${attachment.label} is too large for the vision endpoint; reduce the image or raise dedgeDeepSeekHarness.vision.maxBytes.`)
     }
     const configuration = this.configuration.get()
-    const vision = resolveVisionRoute(configuration, await this.credentials.getApiKey(), await this.credentials.getVisionApiKey())
+    const vision = resolveVisionRoute(configuration, await this.credentials.getApiKey(configuration.baseUrl), await this.credentials.getVisionApiKey())
     onProgress?.({ type: 'vision-start', label: attachment.label, model: vision.model })
     const description = await describeImage({
       baseUrl: vision.baseUrl,
@@ -561,8 +682,8 @@ export class WorkbenchController implements vscode.Disposable {
     const sessionId = snapshot.activeSessionId
     if (sessionId === undefined) return 'No active session to compact.'
     if (snapshot.agentPreset === 'minimal') throw new Error('Context compaction is unavailable in the Minimal agent preset.')
-    if (snapshot.sessions.find(session => session.id === sessionId)?.running === true) {
-      throw new Error('Context cannot be compacted while a response is in progress.')
+    if (snapshot.sessions.find(session => session.id === sessionId)?.running === true || hasActiveTurn(snapshot)) {
+      throw new Error('Context cannot be compacted while an agent task is in progress.')
     }
     return this.sessionOperations.run(sessionId, 'compacting', async () => {
       let result: Awaited<ReturnType<GatewayClient['executeCommand']>>
@@ -618,10 +739,29 @@ export class WorkbenchController implements vscode.Disposable {
     const currentCatalog = this.store.snapshot().modelCatalog
     if (currentCatalog === undefined) await this.refreshModelCatalog(gateway, sessionId)
     else this.store.setModelCatalog(sessionId, { ...currentCatalog, current: result.selected, routable: true })
+    this.internalConfigurationValues.set('provider', result.selected.provider)
+    this.internalConfigurationValues.set('model', result.selected.model)
     await this.configuration.update('provider', result.selected.provider)
     await this.configuration.update('model', result.selected.model)
     if (result.selected.reasoningEffort !== undefined) await this.configuration.update('reasoningEffort', result.selected.reasoningEffort)
+    await this.refreshModelCatalog(gateway, sessionId)
     this.publish()
+  }
+
+  async refreshModels(): Promise<void> {
+    if (this.modelRefreshTask !== undefined) return this.modelRefreshTask
+    const task = (async () => {
+      await this.ensureStarted()
+      const sessionId = this.store.snapshot().activeSessionId
+      if (sessionId === undefined) return
+      await this.refreshModelCatalog(this.requireGateway(), sessionId)
+    })()
+    this.modelRefreshTask = task
+    try {
+      await task
+    } finally {
+      if (this.modelRefreshTask === task) this.modelRefreshTask = undefined
+    }
   }
 
   async selectPreset(preset: string): Promise<void> {
@@ -713,7 +853,26 @@ export class WorkbenchController implements vscode.Disposable {
     this.configurationSubscription.dispose()
     this.gateway?.dispose()
     this.gateway = undefined
+    this.queueActionTasks.clear()
     this.changed.dispose()
+  }
+
+  private queueTarget(itemId: string): { readonly sessionId: string; readonly item: WorkbenchQueueItem } | undefined {
+    const snapshot = this.store.snapshot()
+    const sessionId = snapshot.activeSessionId
+    if (sessionId === undefined) return undefined
+    const item = snapshot.queueItems?.find(candidate => candidate.id === itemId)
+    return item === undefined || item.sourceKind !== 'user' ? undefined : { sessionId, item }
+  }
+
+  private runQueueAction(itemId: string, action: () => Promise<void>): Promise<void> {
+    const current = this.queueActionTasks.get(itemId)
+    if (current !== undefined) return current
+    const task = Promise.resolve().then(action).finally(() => {
+      if (this.queueActionTasks.get(itemId) === task) this.queueActionTasks.delete(itemId)
+    })
+    this.queueActionTasks.set(itemId, task)
+    return task
   }
 
   private async ensureRuntimeOnly(): Promise<void> {
@@ -746,8 +905,8 @@ export class WorkbenchController implements vscode.Disposable {
       .join('\n')
       .slice(0, 6_000)
     if (transcript.trim() === '') return
-    const apiKey = await this.credentials.getApiKey()
     const configuration = this.configuration.get()
+    const apiKey = await this.credentials.getApiKey(configuration.baseUrl)
     if (apiKey?.trim() === undefined || apiKey.trim() === '' || configuration.model.trim() === '') return
     try {
       const endpoint = new URL('chat/completions', configuration.baseUrl.endsWith('/') ? configuration.baseUrl : `${configuration.baseUrl}/`)
@@ -780,6 +939,23 @@ export class WorkbenchController implements vscode.Disposable {
     }
   }
 
+  private handleExternalModelConfigurationChange(previous: HarnessConfiguration, next: HarnessConfiguration): void {
+    const providerChanged = previous.provider !== next.provider
+    const modelChanged = previous.model !== next.model
+    if (!providerChanged && !modelChanged) return
+    const providerAppliedInternally = !providerChanged || this.internalConfigurationValues.get('provider') === next.provider
+    const modelAppliedInternally = !modelChanged || this.internalConfigurationValues.get('model') === next.model
+    if (providerChanged) this.internalConfigurationValues.delete('provider')
+    if (modelChanged) this.internalConfigurationValues.delete('model')
+    if (providerAppliedInternally && modelAppliedInternally) return
+    if (this.runtime.state.phase !== 'ready') return
+    if (this.store.snapshot().sessions.some(session => session.running)) {
+      this.logger.warn('Provider/model settings changed while a Harness response is running; the new route will apply after the next runtime restart.')
+      return
+    }
+    void this.restart().catch(error => this.logger.error('Could not restart Harness after provider/model settings changed.', error))
+  }
+
   private async refreshPresetCatalog(gateway: GatewayClient): Promise<void> {
     try {
       this.store.setPresetCatalog(await gateway.presets())
@@ -801,6 +977,14 @@ export class WorkbenchController implements vscode.Disposable {
     if (frame.type === 'session/projection' && frame.key === 'status' && isRunningValue(frame.value)) {
       this.store.setRunning(frame.sessionId, frame.value.running)
       if (!frame.value.running) this.sessionOperations.finish(frame.sessionId, 'cancelling')
+      return this.publish()
+    }
+    if (frame.type === 'session/queue') {
+      this.store.setSessionQueue(frame.sessionId, frame.items)
+      return this.publish()
+    }
+    if (frame.type === 'session/jobs') {
+      this.store.setSessionJobs(frame.sessionId, frame.jobs)
       return this.publish()
     }
     if (frame.type === 'session/projection' && frame.key === 'contextPressure') {
@@ -953,6 +1137,14 @@ function conversationUnitCount(messages: WorkbenchSnapshot['messages']): number 
 
 function isRunningValue(value: unknown): value is { readonly running: boolean } {
   return typeof value === 'object' && value !== null && 'running' in value && typeof value.running === 'boolean'
+}
+
+function isQueueItemNotFound(error: unknown): boolean {
+  return errorMessage(error).includes('queue-item-not-found')
+}
+
+function isSteerUnavailable(error: unknown): boolean {
+  return errorMessage(error).includes('steer-unavailable')
 }
 
 function presetForNewSession(preferred: string, catalog: WorkbenchSnapshot['presetCatalog']): string {

@@ -2,7 +2,7 @@
   "name": "dedge-deepseek-harness-vscode",
   "displayName": "DeDge DeepSeek Harness",
   "description": "Self-contained DeepSeek Harness coding agent for VS Code with a Windows-safe runtime and isolated Codex/Claude handoffs.",
-  "version": "0.1.46",
+  "version": "0.1.49",
   "publisher": "diractive-edge",
   "private": true,
   "packageManager": "pnpm@11.21.0",
@@ -296,7 +296,7 @@
         "dedgeDeepSeekHarness.provider": {
           "type": "string",
           "default": "deepseek-official",
-          "description": "Harness provider route."
+          "description": "Harness provider route. deepseek-official uses the native DeepSeek adapter; other routes use the bundled multi-provider pi-ai adapter."
         },
         "dedgeDeepSeekHarness.reasoningEffort": {
           "type": "string",
@@ -339,13 +339,19 @@
         "dedgeDeepSeekHarness.baseUrl": {
           "type": "string",
           "default": "https://api.deepseek.com/",
-          "description": "DeepSeek or OpenAI-compatible API base URL. The official DeepSeek endpoint is used by default; self-hosted and sub2 endpoints may be configured here.",
+          "description": "DeepSeek, Anthropic-compatible, or OpenAI-compatible API base URL. The official DeepSeek endpoint is used by default; self-hosted and sub2 endpoints may be configured here.",
           "scope": "machine"
         },
         "dedgeDeepSeekHarness.autoStart": {
           "type": "boolean",
           "default": true,
           "description": "Keep one shared bundled runtime available after VS Code finishes starting, even when the workbench is closed."
+        },
+        "dedgeDeepSeekHarness.schedule.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Mount the official DeepSeek Harness dsh-schedule plugin. It adds session-local scheduled follow-ups and requires a Harness restart when changed.",
+          "scope": "machine"
         },
         "dedgeDeepSeekHarness.context.maxBytes": {
           "type": "number",

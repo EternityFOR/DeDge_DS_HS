@@ -20,6 +20,7 @@ export interface WorkbenchSettings {
   readonly hasVisionApiKey: boolean
   readonly pasteFileThreshold: number
   readonly contextWindowTokens: number
+  readonly scheduleEnabled: boolean
   readonly codexHome: string
   readonly claudeHome: string
   readonly handoffLaunchMode: 'clipboard' | 'cli'
@@ -29,9 +30,10 @@ export interface WorkbenchSettings {
 
 export type HostToWebviewMessage =
   | { readonly type: 'state'; readonly state: WorkbenchSnapshot; readonly attachments: readonly ContextAttachment[] }
-  | { readonly type: 'sendStarted'; readonly text: string; readonly attachments: readonly { readonly label: string }[] }
+  | { readonly type: 'sendStarted'; readonly text: string; readonly attachments: readonly { readonly label: string }[]; readonly mode?: 'queue' | 'steer' }
   | { readonly type: 'sendProgress'; readonly progress: WorkbenchSendProgress }
   | { readonly type: 'sendSettled'; readonly accepted: boolean; readonly text: string }
+  | { readonly type: 'queueActionSettled'; readonly itemId: string; readonly accepted: boolean }
   | { readonly type: 'setDraft'; readonly text: string }
   | { readonly type: 'notice'; readonly level: 'info' | 'warning' | 'error'; readonly message: string }
   | { readonly type: 'visionAttention' }
@@ -42,6 +44,9 @@ export type HostToWebviewMessage =
 export type WebviewToHostMessage =
   | { readonly type: 'ready' }
   | { readonly type: 'send'; readonly text: string; readonly mode?: 'queue' | 'steer' }
+  | { readonly type: 'steerQueueItem'; readonly itemId: string }
+  | { readonly type: 'removeQueueItem'; readonly itemId: string }
+  | { readonly type: 'editQueueItem'; readonly itemId: string; readonly text: string }
   | { readonly type: 'newSession' }
   | { readonly type: 'selectSession'; readonly sessionId: string }
   | { readonly type: 'loadOlderHistory' }
@@ -71,9 +76,11 @@ export type WebviewToHostMessage =
   | { readonly type: 'approve'; readonly approvalId: string; readonly outcome: 'allowed-once' | 'rejected' }
   | { readonly type: 'answerQuestions'; readonly rpcId: string; readonly answers: readonly QuestionAnswer[] }
   | { readonly type: 'selectModel'; readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
+  | { readonly type: 'refreshModelCatalog' }
   | { readonly type: 'selectPreset'; readonly preset: string }
   | { readonly type: 'selectPermission'; readonly permission: string }
   | { readonly type: 'setVisionEnabled'; readonly enabled: boolean }
+  | { readonly type: 'setScheduleEnabled'; readonly enabled: boolean }
   | { readonly type: 'selectCompactionModel'; readonly provider: string; readonly model: string }
   | { readonly type: 'showLogs' }
   | { readonly type: 'reviewChanges' }

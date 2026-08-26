@@ -69,6 +69,7 @@ describe('runtime overlay rendering', () => {
       permissionMode: 'workspace-write',
       baseUrl: 'https://api.deepseek.com/',
       autoStart: true,
+      scheduleEnabled: false,
       contextMaxBytes: 32_768,
       contextWindowTokens: 1_000_000,
       codexHome: '${userHome}/.codex',
@@ -99,6 +100,7 @@ describe('runtime overlay rendering', () => {
       runtimeMode: 'bundled', runtimeCommand: '', runtimeNodePath: '', startTimeoutMs: 90_000,
       provider: 'deepseek-official', model: 'private-reasoner', reasoningEffort: 'high', agentPreset: 'standard',
       permissionMode: 'workspace-write', approvalPolicy: 'ask', baseUrl: 'https://api.deepseek.com/', autoStart: true,
+      scheduleEnabled: false,
       contextMaxBytes: 32_768, contextWindowTokens: 1_000_000, pasteFileThreshold: 4_096,
       codexHome: '${userHome}/.codex', claudeHome: '${userHome}/.claude', codexCommand: '', claudeCommand: '',
       handoffMaxBytes: 65_536, handoffLaunchMode: 'clipboard', skillDirectories: ['${userHome}/.codex/skills'],
@@ -109,5 +111,40 @@ describe('runtime overlay rendering', () => {
     expect(overlay).toContain('id: "deepseek-v4-pro"')
     expect(overlay).toContain('id: "deepseek-v4-flash-vision-exp"')
     expect(overlay).toContain('id: "private-reasoner"')
+  })
+
+  it('mounts the generic pi-ai route for non-DeepSeek providers', () => {
+    const configuration = {
+      runtimeMode: 'bundled', runtimeCommand: '', runtimeNodePath: '', startTimeoutMs: 90_000,
+      provider: 'openai', model: 'gpt-5-mini', reasoningEffort: 'high', agentPreset: 'standard',
+      permissionMode: 'workspace-write', approvalPolicy: 'ask', baseUrl: 'https://gateway.example/v1/', autoStart: true,
+      scheduleEnabled: false,
+      contextMaxBytes: 32_768, contextWindowTokens: 1_000_000, pasteFileThreshold: 4_096,
+      codexHome: '${userHome}/.codex', claudeHome: '${userHome}/.claude', codexCommand: '', claudeCommand: '',
+      handoffMaxBytes: 65_536, handoffLaunchMode: 'clipboard', skillDirectories: ['${userHome}/.codex/skills'],
+      visionBaseUrl: '', visionModel: '', visionReasoningEffort: '', visionMaxBytes: 4_194_304,
+    } satisfies HarnessConfiguration
+    const overlay = renderRuntimeOverlay(configuration)
+    expect(overlay).toContain('id: llm-pi-ai')
+    expect(overlay).toContain('"openai":')
+    expect(overlay).toContain('api: "openai-completions"')
+    expect(overlay).toContain('baseURL: "https://gateway.example/v1/"')
+    expect(overlay).not.toContain('id: llm-deepseek')
+    expect(overlay.match(/id: llm-pi-ai/gu)?.length).toBe(1)
+  })
+
+  it('inserts the official schedule plugin only when explicitly enabled', () => {
+    const base = {
+      runtimeMode: 'bundled', runtimeCommand: '', runtimeNodePath: '', startTimeoutMs: 90_000,
+      provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard',
+      permissionMode: 'workspace-write', approvalPolicy: 'ask', baseUrl: 'https://api.deepseek.com/', autoStart: true,
+      scheduleEnabled: false,
+      contextMaxBytes: 32_768, contextWindowTokens: 1_000_000, pasteFileThreshold: 4_096,
+      codexHome: '${userHome}/.codex', claudeHome: '${userHome}/.claude', codexCommand: '', claudeCommand: '',
+      handoffMaxBytes: 65_536, handoffLaunchMode: 'clipboard', skillDirectories: ['${userHome}/.codex/skills'],
+      visionBaseUrl: '', visionModel: '', visionReasoningEffort: '', visionMaxBytes: 4_194_304,
+    } satisfies HarnessConfiguration
+    expect(renderRuntimeOverlay(base)).not.toContain('@deepseek-ai/dsh-schedule')
+    expect(renderRuntimeOverlay({ ...base, scheduleEnabled: true })).toContain("name: '@deepseek-ai/dsh-schedule'")
   })
 })

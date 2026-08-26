@@ -1,6 +1,6 @@
 import { isRecord, type ContextPressureProjection, type HistoryEntry, type ModelCatalog, type PermissionProjection, type PresetCatalog, type SessionEvent, type SessionSummary } from '../gateway/protocol.js'
 import type { RuntimeState } from '../runtime/types.js'
-import type { PendingApproval, PendingQuestion, SessionOperation, WorkbenchMessage, WorkbenchPhase, WorkbenchSession, WorkbenchSnapshot } from './types.js'
+import type { PendingApproval, PendingQuestion, SessionOperation, WorkbenchJob, WorkbenchMessage, WorkbenchPhase, WorkbenchQueueItem, WorkbenchSession, WorkbenchSnapshot } from './types.js'
 import { projectUserPrompt } from './prompt-projection.js'
 
 export interface StoreConfiguration {
@@ -34,6 +34,8 @@ export class SessionStore {
   private presetCatalog: PresetCatalog | undefined
   private readonly contextPressure = new Map<string, ContextPressureProjection>()
   private readonly permissions = new Map<string, PermissionProjection>()
+  private readonly queueItems = new Map<string, WorkbenchQueueItem[]>()
+  private readonly jobs = new Map<string, WorkbenchJob[]>()
   private permissionChanging = false
   private readonly sessionOperations = new Map<string, SessionOperation>()
   private configuration: StoreConfiguration
@@ -53,6 +55,8 @@ export class SessionStore {
     this.presetCatalog = undefined
     this.contextPressure.clear()
     this.permissions.clear()
+    this.queueItems.clear()
+    this.jobs.clear()
   }
 
   clearPendingInteractions(): void {
@@ -106,6 +110,8 @@ export class SessionStore {
     this.historyExpanded.delete(sessionId)
     this.historyPageStarts.delete(sessionId)
     this.contextPressure.delete(sessionId)
+    this.queueItems.delete(sessionId)
+    this.jobs.delete(sessionId)
     this.sessionOperations.delete(sessionId)
     if (this.activeSessionId === sessionId) this.activeSessionId = undefined
   }
@@ -154,6 +160,14 @@ export class SessionStore {
 
   setPermissionChanging(value: boolean): void {
     this.permissionChanging = value
+  }
+
+  setSessionQueue(sessionId: string, items: readonly unknown[]): void {
+    this.queueItems.set(sessionId, items.map((item, index) => projectQueueItem(item, index)))
+  }
+
+  setSessionJobs(sessionId: string, items: readonly unknown[]): void {
+    this.jobs.set(sessionId, items.map((item, index) => projectJob(item, index)))
   }
 
   replaceHistory(sessionId: string, entries: readonly HistoryEntry[], hasMore = false): void {
@@ -263,6 +277,8 @@ export class SessionStore {
     const activeSession = this.activeSessionId === undefined ? undefined : this.sessions.get(this.activeSessionId)
     const activeContextPressure = this.activeSessionId === undefined ? undefined : this.contextPressure.get(this.activeSessionId)
     const activePermissions = this.activeSessionId === undefined ? undefined : this.permissions.get(this.activeSessionId)
+    const activeQueue = this.activeSessionId === undefined ? undefined : this.queueItems.get(this.activeSessionId)
+    const activeJobs = this.activeSessionId === undefined ? undefined : this.jobs.get(this.activeSessionId)
     return {
       phase: this.phase,
       runtime: this.runtime,
@@ -270,6 +286,8 @@ export class SessionStore {
       sessions,
       ...(this.activeSessionId === undefined ? {} : { activeSessionId: this.activeSessionId }),
       messages,
+      ...(activeQueue === undefined ? {} : { queueItems: activeQueue }),
+      ...(activeJobs === undefined ? {} : { jobs: activeJobs }),
       hasMoreHistory: this.activeSessionId === undefined ? false : (this.historyHasMore.get(this.activeSessionId) ?? false),
       historyExpanded: this.activeSessionId === undefined ? false : (this.historyExpanded.get(this.activeSessionId) ?? false),
       historyPageCount: this.activeSessionId === undefined ? 0 : (this.historyPageStarts.get(this.activeSessionId)?.length ?? 0),
@@ -330,7 +348,8 @@ function conversationUnitCount(messages: readonly WorkbenchMessage[]): number {
 
 export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMessage[] {
   const output: WorkbenchMessage[] = []
-  const streams = new Map<string, { id: string; role: 'assistant' | 'reasoning'; chunks: string[]; seq: number; time: number }>()
+  const interruptedTurns = new Set<string>()
+  const streams = new Map<string, { id: string; role: 'assistant' | 'reasoning'; chunks: string[]; seq: number; time: number; turn: string }>()
   const toolIndexes = new Map<string, number>()
 
   for (const { event } of entries) {
@@ -362,7 +381,8 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
       if ((chunk.type === 'text-delta' || chunk.type === 'reasoning-delta') && typeof chunk.text === 'string') {
         const role = chunk.type === 'text-delta' ? 'assistant' : 'reasoning'
         const key = `${String(data.turn)}:${String(data.step)}:${String(chunk.index)}:${role}`
-        const current = streams.get(key) ?? { id: `stream:${key}`, role, chunks: [], seq: event.seq, time: event.time }
+        const turn = String(data.turn)
+        const current = streams.get(key) ?? { id: `stream:${key}`, role, chunks: [], seq: event.seq, time: event.time, turn }
         current.chunks.push(chunk.text)
         current.seq = event.seq
         streams.set(key, current)
@@ -372,6 +392,8 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
     if (event.type === 'assistant/message') {
       const message = isRecord(data.message) ? data.message : undefined
       const turnPrefix = `${String(data.turn)}:${String(data.step)}:`
+      const interrupted = message?.interrupted === true || data.interrupted === true
+      if (interrupted) interruptedTurns.add(String(data.turn))
       for (const key of [...streams.keys()]) {
         if (key.startsWith(turnPrefix)) streams.delete(key)
       }
@@ -387,6 +409,7 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
               role: block.type === 'reasoning' ? 'reasoning' : 'assistant',
               text: projected.text,
               ...(projected.textLength === undefined ? {} : { textLength: projected.textLength }),
+              ...(interrupted ? { taskInterrupted: true } : {}),
               status: 'complete',
               seq: event.seq,
               time: event.time,
@@ -432,6 +455,7 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
       role: stream.role,
       text: projected.text,
       ...(projected.textLength === undefined ? {} : { textLength: projected.textLength }),
+      ...(interruptedTurns.has(stream.turn) ? { taskInterrupted: true } : {}),
       status: 'streaming' as const,
       seq: stream.seq,
       time: stream.time,
@@ -450,18 +474,25 @@ function projectVerboseText(value: string, maxChars: number): { readonly text: s
 }
 
 function annotateTaskGroups(messages: readonly WorkbenchMessage[], entries: readonly HistoryEntry[]): WorkbenchMessage[] {
-  const groups: { readonly id: string; readonly from: number; to: number; complete: boolean }[] = []
+  const groups: { readonly id: string; readonly from: number; to: number; complete: boolean; interrupted: boolean }[] = []
   let previousEnd = -1
-  let active: { readonly id: string; readonly from: number; to: number; complete: boolean } | undefined
+  let active: { readonly id: string; readonly from: number; to: number; complete: boolean; interrupted: boolean } | undefined
   for (const { event } of entries) {
     if (event.type === 'turn/start') {
-      active = { id: `turn:${String(event.seq)}`, from: previousEnd + 1, to: Number.MAX_SAFE_INTEGER, complete: false }
+      active = { id: `turn:${String(event.seq)}`, from: previousEnd + 1, to: Number.MAX_SAFE_INTEGER, complete: false, interrupted: false }
       groups.push(active)
     } else if (event.type === 'turn/end' && active !== undefined) {
       active.to = event.seq
       active.complete = true
+      if (eventIndicatesInterruption(event)) active.interrupted = true
       previousEnd = event.seq
       active = undefined
+    } else if (active !== undefined && eventIndicatesInterruption(event)) {
+      // Harness reports a user cancellation on assistant/message (and on some
+      // runtime versions only on turn/end). Treat that task as settled so it
+      // can be folded, while retaining the fact that it did not finish normally.
+      active.interrupted = true
+      active.complete = true
     }
   }
   if (groups.length === 0) return [...messages]
@@ -471,8 +502,25 @@ function annotateTaskGroups(messages: readonly WorkbenchMessage[], entries: read
     if (seq === undefined) return message
     const group = groups.find(candidate => seq >= candidate.from && seq <= candidate.to)
     if (group === undefined || (groupCounts.get(group.id) ?? 0) < 2) return message
-    return { ...message, taskId: group.id, taskComplete: group.complete }
+    return {
+      ...message,
+      taskId: group.id,
+      taskComplete: group.complete,
+      ...(group.interrupted ? { taskInterrupted: true } : {}),
+    }
   })
+}
+
+function eventIndicatesInterruption(event: SessionEvent): boolean {
+  const data = isRecord(event.data) ? event.data : {}
+  if (event.type === 'assistant/message') {
+    const message = isRecord(data.message) ? data.message : undefined
+    return message?.interrupted === true || data.interrupted === true
+  }
+  if (event.type !== 'turn/end') return false
+  const reason = isRecord(data.reason) ? data.reason : undefined
+  const kind = typeof reason?.kind === 'string' ? reason.kind.toLowerCase() : ''
+  return kind === 'cancel' || kind === 'cancelled' || kind === 'canceled' || kind === 'cancelled_by_user' || kind === 'canceled_by_user' || kind === 'interrupted' || kind === 'interrupt' || kind === 'stopped' || kind === 'aborted'
 }
 
 function toWorkbenchSession(summary: SessionSummary, operation?: SessionOperation): WorkbenchSession {
@@ -497,4 +545,59 @@ function contentText(value: unknown): string {
     if (block.type === 'tool-result' && Array.isArray(block.content)) parts.push(contentText(block.content))
   }
   return parts.join('\n')
+}
+
+function projectQueueItem(value: unknown, index: number): WorkbenchQueueItem {
+  if (!isRecord(value)) return { id: `queue:${String(index)}`, placement: 'context' }
+  const id = typeof value.id === 'string' && value.id !== '' ? value.id : `queue:${String(index)}`
+  const placement = value.placement === 'queued' || value.placement === 'steering' || value.placement === 'context'
+    ? value.placement
+    : 'context'
+  const message = isRecord(value.message) ? value.message : undefined
+  const source = message !== undefined && isRecord(message.source) ? message.source : undefined
+  const sourceKind = source !== undefined && typeof source.kind === 'string' ? source.kind : undefined
+  const content = message?.content
+  const projected = projectQueueContent(content)
+  return {
+    id,
+    placement,
+    ...(sourceKind === undefined ? {} : { sourceKind }),
+    ...(projected.text === undefined ? {} : { text: projected.text }),
+    ...(projected.preview === undefined ? {} : { preview: projected.preview }),
+    ...(projected.hasNonText ? { hasNonText: true } : {}),
+  }
+}
+
+function projectQueueContent(value: unknown): { readonly text?: string; readonly preview?: string; readonly hasNonText?: boolean } {
+  if (!Array.isArray(value)) return {}
+  const textParts: string[] = []
+  const previewParts: string[] = []
+  let hasNonText = false
+  for (const block of value) {
+    if (isRecord(block) && block.type === 'text' && typeof block.text === 'string') {
+      textParts.push(block.text)
+      previewParts.push(block.text)
+      continue
+    }
+    hasNonText = true
+    const type = isRecord(block) && typeof block.type === 'string' ? block.type : 'attachment'
+    previewParts.push(`[${type}]`)
+  }
+  const text = textParts.join('')
+  const preview = previewParts.join(' ').replace(/\s+/gu, ' ').trim()
+  return {
+    ...(text === '' ? {} : { text }),
+    ...(preview === '' ? {} : { preview: preview.length > 200 ? `${preview.slice(0, 197).trimEnd()}...` : preview }),
+    ...(hasNonText ? { hasNonText: true } : {}),
+  }
+}
+
+function projectJob(value: unknown, index: number): WorkbenchJob {
+  if (!isRecord(value)) return { id: `job:${String(index)}`, kind: 'agent', label: 'Background agent task', status: 'running' }
+  const id = typeof value.id === 'string' && value.id !== '' ? value.id : `job:${String(index)}`
+  const kind = typeof value.kind === 'string' && value.kind !== '' ? value.kind : 'agent'
+  const label = typeof value.label === 'string' && value.label !== '' ? value.label : 'Background agent task'
+  const knownStatuses = new Set(['running', 'stopping', 'completed', 'killed', 'failed'])
+  const status = typeof value.status === 'string' && knownStatuses.has(value.status) ? value.status : 'running'
+  return { id, kind, label, status }
 }

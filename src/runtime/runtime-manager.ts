@@ -96,7 +96,7 @@ export class RuntimeManager implements vscode.Disposable {
     if (this.stateValue.phase === 'ready' && this.stateValue.url !== undefined) return this.stateValue.url
     const configuration = this.configuration.get()
     const workspace = workspaceDirectory()
-    const apiKey = await this.credentials.getApiKey()
+    const apiKey = await this.credentials.getApiKey(configuration.baseUrl)
     this.setState({ phase: 'resolving' })
 
     const shared = await this.waitForSharedRuntimeOrLock(configuration.startTimeoutMs)
