@@ -99,8 +99,19 @@ try {
     ],
   })
   if (imagePrompt?.accepted !== true) throw new Error(`session.prompt did not accept native image content: ${JSON.stringify(imagePrompt)}`)
+  // session.prompt acknowledges the accepted request before the append-only
+  // history index necessarily contains the user event. Poll briefly so the
+  // smoke check verifies the durable attachment contract instead of a race.
+  const { history: imageHistory, entry: imageEntry } = await waitForImageHistory(url, visionSession.sessionId, 15_000)
+  const imageBlock = imageEntry?.event?.data?.content?.find(block => block?.type === 'image')
+  const attachmentId = imageBlock?.attachment?.attachmentId
+  if (typeof attachmentId !== 'string' || attachmentId === '') throw new Error(`session.history did not retain a durable image attachment reference: ${JSON.stringify(imageHistory)}`)
+  const imageAttachment = await rpc(url, 'session.attachment', { sessionId: visionSession.sessionId, attachmentId })
+  if (imageAttachment?.attachment?.attachmentId !== attachmentId || typeof imageAttachment.data !== 'string' || imageAttachment.data === '') {
+    throw new Error(`session.attachment returned a malformed image payload: ${JSON.stringify({ attachment: imageAttachment?.attachment, hasData: typeof imageAttachment?.data === 'string' && imageAttachment.data !== '' })}`)
+  }
   await rpc(url, 'session.cancel', { sessionId: visionSession.sessionId })
-  console.log(`Runtime smoke passed at ${url} with Gateway ${String(description?.version ?? 'unknown')}, /compact, and native image prompt support`)
+  console.log(`Runtime smoke passed at ${url} with Gateway ${String(description?.version ?? 'unknown')}, /compact, native image prompt, history image references, and session.attachment support`)
 } finally {
   if (child !== undefined) await terminate(child)
   await rm(smokeRoot, { recursive: true, force: true })
@@ -152,6 +163,20 @@ async function rpc(url, method, payload) {
     throw new Error(`${method} returned a malformed response: ${JSON.stringify(body)}`)
   }
   return body.result.value
+}
+
+async function waitForImageHistory(url, sessionId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  let history
+  while (Date.now() <= deadline) {
+    history = await rpc(url, 'session.history', { sessionId, maxMessages: 40 })
+    const entry = history?.events?.find(candidate => candidate?.event?.type === 'user/message'
+      && Array.isArray(candidate.event.data?.content)
+      && candidate.event.data.content.some(block => block?.type === 'image' && typeof block.attachment?.attachmentId === 'string'))
+    if (entry !== undefined) return { history, entry }
+    await delay(250)
+  }
+  return { history, entry: undefined }
 }
 
 async function terminate(processHandle) {

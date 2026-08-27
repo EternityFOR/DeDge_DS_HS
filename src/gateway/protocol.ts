@@ -56,6 +56,21 @@ export interface SessionHistory {
   readonly projections?: { readonly values?: Record<string, unknown> }
 }
 
+export interface ImageAttachmentRef {
+  readonly attachmentId: string
+  readonly mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+  readonly bytes: number
+  readonly width: number
+  readonly height: number
+  readonly name?: string
+}
+
+export interface SessionAttachment {
+  readonly attachment: ImageAttachmentRef
+  /** Canonical base64 image bytes returned by the authenticated Gateway. */
+  readonly data: string
+}
+
 export interface ModelSelection {
   readonly provider: string
   readonly model: string
@@ -334,6 +349,36 @@ export function parsePresetCatalog(value: unknown): PresetCatalog {
 export function parseRenameResult(value: unknown): { readonly title: string; readonly seq: number } {
   if (!isRecord(value) || typeof value.title !== 'string' || typeof value.seq !== 'number') throw new Error('Malformed Harness session rename result.')
   return { title: value.title, seq: value.seq }
+}
+
+export function parseSessionAttachment(value: unknown): SessionAttachment {
+  if (!isRecord(value) || !isRecord(value.attachment) || typeof value.data !== 'string') throw new Error('Malformed Harness session attachment.')
+  const attachment = value.attachment
+  const mediaType = attachment.mediaType
+  const bytes = positiveSafeInteger(attachment.bytes)
+  const width = positiveSafeInteger(attachment.width)
+  const height = positiveSafeInteger(attachment.height)
+  if (typeof attachment.attachmentId !== 'string' || attachment.attachmentId.trim() === ''
+    || (mediaType !== 'image/png' && mediaType !== 'image/jpeg' && mediaType !== 'image/webp' && mediaType !== 'image/gif')
+    || bytes === undefined || width === undefined || height === undefined) {
+    throw new Error('Malformed Harness session attachment metadata.')
+  }
+  const name = typeof attachment.name === 'string' && attachment.name.trim() !== '' ? attachment.name : undefined
+  return {
+    attachment: {
+      attachmentId: attachment.attachmentId,
+      mediaType,
+      bytes,
+      width,
+      height,
+      ...(name === undefined ? {} : { name }),
+    },
+    data: value.data,
+  }
+}
+
+function positiveSafeInteger(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : undefined
 }
 
 export function parsePresetSelectionResult(value: unknown): { readonly agentPreset: string } {

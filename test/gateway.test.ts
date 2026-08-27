@@ -6,11 +6,23 @@ import {
   parseHostFrame,
   parseMuxFrame,
   parsePresetCatalog,
+  parseSessionAttachment,
   parseServerRequest,
   parseServerResponse,
 } from '../src/gateway/protocol.js'
 
 describe('Gateway JSON frame parsing', () => {
+  it('parses an authenticated durable session image attachment', () => {
+    expect(parseSessionAttachment({
+      attachment: { attachmentId: 'att-1', mediaType: 'image/png', bytes: 3, width: 2, height: 2, name: 'reminder.png' },
+      data: 'YWJj',
+    })).toEqual({
+      attachment: { attachmentId: 'att-1', mediaType: 'image/png', bytes: 3, width: 2, height: 2, name: 'reminder.png' },
+      data: 'YWJj',
+    })
+    expect(() => parseSessionAttachment({ attachment: { attachmentId: 'att-1', mediaType: 'image/svg+xml', bytes: 3, width: 2, height: 2 }, data: 'YWJj' })).toThrow('Malformed Harness session attachment metadata')
+  })
+
   it('parses successful and failed RPC envelopes', () => {
     expect(parseServerResponse({
       type: 'server-response',

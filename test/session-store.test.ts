@@ -138,6 +138,48 @@ describe('session event projection', () => {
     }])
   })
 
+  it('keeps durable image references on historical user messages without exposing image bytes', () => {
+    const messages = projectMessages([
+      entry('user/message', 1, {
+        source: { kind: 'user' },
+        content: [
+          { type: 'image', attachment: { attachmentId: 'att-1', mediaType: 'image/png', bytes: 3, width: 2, height: 2, name: 'reminder.png' } },
+          { type: 'text', text: 'Continue from this reminder.' },
+        ],
+      }),
+    ])
+
+    expect(messages).toEqual([{
+      id: 'user:1',
+      role: 'user',
+      text: 'Continue from this reminder.',
+      attachments: [{
+        kind: 'image',
+        label: 'Image: reminder.png',
+        detail: '2 x 2 pixels, 3 bytes',
+        image: { attachmentId: 'att-1', mimeType: 'image/png', bytes: 3, width: 2, height: 2, name: 'reminder.png' },
+      }],
+      seq: 1,
+      time: 1,
+      status: 'complete',
+    }])
+    expect(JSON.stringify(messages)).not.toContain('base64')
+  })
+
+  it('hydrates a historical image into the active session snapshot by attachment id', () => {
+    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000, pasteFileThreshold: 8_192 })
+    store.addSession({ sessionId: 's-1', blank: false, running: false })
+    store.setActive('s-1')
+    store.replaceHistory('s-1', [entry('user/message', 1, {
+      source: { kind: 'user' },
+      content: [{ type: 'image', attachment: { attachmentId: 'att-1', mediaType: 'image/png', bytes: 3, width: 2, height: 2, name: 'reminder.png' } }],
+    })])
+    store.setHistoryImage('s-1', 'att-1', { mimeType: 'image/png', dataBase64: 'YWJj' })
+
+    expect(store.snapshot().messages[0]?.attachments?.[0]?.image?.dataBase64).toBe('YWJj')
+    expect(store.hasHistoryImage('s-1', 'att-1')).toBe(true)
+  })
+
   it('surfaces turn errors and updates session metadata from events', () => {
     const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000,
     pasteFileThreshold: 8_192, })

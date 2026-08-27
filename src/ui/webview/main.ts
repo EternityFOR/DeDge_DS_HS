@@ -1700,7 +1700,7 @@ function pendingAreaSignature(approvals: WorkbenchSnapshot['approvals'], questio
 }
 
 function messageSignature(message: WorkbenchMessage): string {
-  return `${message.id}\u0000${message.seq ?? ''}\u0000${message.status ?? ''}\u0000${message.text.length}\u0000${message.textLength ?? ''}\u0000${message.title ?? ''}\u0000${message.taskInterrupted === true ? 'interrupted' : ''}\u0000${message.attachments === undefined ? '' : message.attachments.map(attachment => attachment.kind + attachment.label).join(',')}`
+  return `${message.id}\u0000${message.seq ?? ''}\u0000${message.status ?? ''}\u0000${message.text.length}\u0000${message.textLength ?? ''}\u0000${message.title ?? ''}\u0000${message.taskInterrupted === true ? 'interrupted' : ''}\u0000${message.attachments === undefined ? '' : message.attachments.map(attachment => `${attachment.kind}:${attachment.label}:${attachment.image?.dataBase64?.length ?? ''}`).join(',')}`
 }
 
 function renderMessage(message: WorkbenchMessage): HTMLElement {
@@ -1889,6 +1889,32 @@ function buildAttachmentsRow(attachments: readonly NonNullable<WorkbenchMessage[
   const row = document.createElement('div')
   row.className = 'message-attachments'
   for (const attachment of attachments) {
+    if (attachment.kind === 'image' && attachment.image !== undefined) {
+      const item = document.createElement('div')
+      item.className = 'message-image-attachment'
+      const image = attachment.image
+      if (image.dataBase64 === undefined) {
+        const placeholder = document.createElement('div')
+        placeholder.className = 'message-image-placeholder'
+        placeholder.append(svgIcon('image'), document.createTextNode(`${attachment.label} - loading preview...`))
+        item.append(placeholder)
+      } else {
+        const preview = document.createElement('img')
+        preview.className = 'message-image-preview'
+        preview.src = `data:${image.mimeType};base64,${image.dataBase64}`
+        preview.alt = attachment.label
+        preview.title = `${attachment.label} (${String(image.width)} x ${String(image.height)})`
+        preview.loading = 'lazy'
+        preview.decoding = 'async'
+        item.append(preview)
+      }
+      const caption = document.createElement('span')
+      caption.className = 'message-image-caption'
+      caption.textContent = `${attachment.label} - ${String(image.width)} x ${String(image.height)}`
+      item.append(caption)
+      row.append(item)
+      continue
+    }
     if (attachment.kind === 'vision') {
       const details = document.createElement('details')
       details.className = 'vision-process'

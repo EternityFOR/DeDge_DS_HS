@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import * as vscode from 'vscode'
 import { errorMessage, type Logger } from '../platform/logger.js'
 import { EventStream } from './event-stream.js'
-import { isRecord, parseModelCatalog, parseModelSelectionResult, parsePresetCatalog, parsePresetSelectionResult, parseRenameResult, parseServerResponse, type HostDescription, type HostFrame, type ModelCatalog, type ModelSelection, type MuxFrame, type PresetCatalog, type SessionHistory, type SessionSummary, type WorkspaceRegistry } from './protocol.js'
+import { isRecord, parseModelCatalog, parseModelSelectionResult, parsePresetCatalog, parsePresetSelectionResult, parseRenameResult, parseServerResponse, parseSessionAttachment, type HostDescription, type HostFrame, type ModelCatalog, type ModelSelection, type MuxFrame, type PresetCatalog, type SessionAttachment, type SessionHistory, type SessionSummary, type WorkspaceRegistry } from './protocol.js'
 
 export interface GatewayHandlers {
   readonly onMux: (frame: MuxFrame, rpcId: string) => void
@@ -68,6 +68,10 @@ export class GatewayClient implements vscode.Disposable {
 
   renameSession(sessionId: string, title: string): Promise<{ readonly title: string; readonly seq: number }> {
     return this.call('session.rename', { sessionId, title }).then(parseRenameResult)
+  }
+
+  getSessionAttachment(sessionId: string, attachmentId: string): Promise<SessionAttachment> {
+    return this.call('session.attachment', { sessionId, attachmentId }).then(parseSessionAttachment)
   }
 
   history(sessionId: string, maxMessages = 40, beforeSeq?: number): Promise<SessionHistory> {

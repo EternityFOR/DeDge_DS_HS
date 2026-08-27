@@ -5,11 +5,24 @@ export type WorkbenchPhase = 'idle' | 'connecting' | 'connected' | 'error'
 export type SessionOperation = 'archiving' | 'deleting' | 'cancelling' | 'compacting'
 
 export interface WorkbenchMessageAttachment {
-  readonly kind: 'selection' | 'file' | 'diagnostics' | 'handoff' | 'vision'
+  readonly kind: 'selection' | 'file' | 'diagnostics' | 'handoff' | 'vision' | 'image'
   readonly label: string
   readonly uri?: string
   readonly detail?: string
   readonly model?: string
+  /** Durable Harness image metadata. Bytes are hydrated through session.attachment on demand. */
+  readonly image?: WorkbenchImageAttachment
+}
+
+export interface WorkbenchImageAttachment {
+  readonly attachmentId: string
+  readonly mimeType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+  readonly bytes: number
+  readonly width: number
+  readonly height: number
+  readonly name?: string
+  /** Base64 bytes returned by the authenticated Harness attachment endpoint. */
+  readonly dataBase64?: string
 }
 
 export type WorkbenchSendProgress =

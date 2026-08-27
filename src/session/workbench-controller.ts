@@ -14,7 +14,7 @@ import { auxiliaryVisionEnabledForModel, isVisionCapableModel } from '../vision/
 import { errorMessage, type Logger } from '../platform/logger.js'
 import type { CredentialStore } from '../security/credentials.js'
 import type { RuntimeManager } from '../runtime/runtime-manager.js'
-import type { PendingApproval, PendingQuestion, QuestionAnswer, WorkbenchQueueItem, WorkbenchSendProgress, WorkbenchSnapshot } from './types.js'
+import type { PendingApproval, PendingQuestion, QuestionAnswer, WorkbenchImageAttachment, WorkbenchQueueItem, WorkbenchSendProgress, WorkbenchSnapshot } from './types.js'
 import { SessionOperationCoordinator } from './session-operations.js'
 import { autonomousQueueItems, hasActiveTurn, hasAutonomousActivity, promptUnavailableReason } from './interaction-readiness.js'
 import { SessionStore } from './session-store.js'
@@ -29,6 +29,8 @@ export class WorkbenchController implements vscode.Disposable {
   private readonly sessionOperations: SessionOperationCoordinator
   private gateway: GatewayClient | undefined
   private readonly deletedSessions = new Set<string>()
+  private readonly historyImageFetches = new Map<string, Promise<void>>()
+  private readonly historyImageFailures = new Set<string>()
   private skillCatalogCache: { readonly key: string; readonly at: number; readonly items: Promise<SkillSummary[]> } | undefined
   private runtimeSubscription: vscode.Disposable
   private configurationSubscription: vscode.Disposable
@@ -93,6 +95,8 @@ export class WorkbenchController implements vscode.Disposable {
 
   private async startInternal(): Promise<void> {
     if (this.disposed) throw new Error('The Harness workbench has been disposed.')
+    this.historyImageFetches.clear()
+    this.historyImageFailures.clear()
     this.sessionOperations.clear('cancelling')
     this.store.resetConnectionState()
     this.store.setPhase('connecting')
@@ -191,6 +195,7 @@ export class WorkbenchController implements vscode.Disposable {
     this.store.setPermissions(sessionId, parsePermissionProjection(history.projections?.values?.permissions))
     await this.context.workspaceState.update('activeSessionId', sessionId)
     this.publish()
+    void this.hydrateHistoryImages(sessionId)
     await Promise.all([
       this.refreshModelCatalog(gateway, sessionId),
       this.refreshPresetCatalog(gateway),
@@ -224,6 +229,7 @@ export class WorkbenchController implements vscode.Disposable {
       this.store.markHistoryPage(sessionId, earliestSeq)
       this.store.setHistoryLoading(false)
       this.publish()
+      void this.hydrateHistoryImages(sessionId)
     }
   }
 
@@ -847,6 +853,8 @@ export class WorkbenchController implements vscode.Disposable {
 
   dispose(): void {
     this.disposed = true
+    this.historyImageFetches.clear()
+    this.historyImageFailures.clear()
     if (this.publishTimer !== undefined) clearTimeout(this.publishTimer)
     this.sessionOperations.clear()
     this.runtimeSubscription.dispose()
@@ -968,6 +976,7 @@ export class WorkbenchController implements vscode.Disposable {
   private handleMux(frame: MuxFrame, rpcId: string): void {
     if (frame.type === 'session/event') {
       this.store.appendEvent(frame.sessionId, frame.event, frame.view)
+      if (frame.event.type === 'user/message' || frame.event.type === 'assistant/message') void this.hydrateHistoryImages(frame.sessionId)
       if (frame.event.type === 'turn/end') {
         this.sessionOperations.finish(frame.sessionId, 'cancelling')
         void this.maybeGenerateSessionTitle(frame.sessionId)
@@ -1029,6 +1038,42 @@ export class WorkbenchController implements vscode.Disposable {
     if (frame.type === 'question/resolved') {
       this.store.resolveQuestions(frame.questionRpcId)
       return this.publish()
+    }
+  }
+
+  private async hydrateHistoryImages(sessionId: string): Promise<void> {
+    const snapshot = this.store.snapshot()
+    if (snapshot.activeSessionId !== sessionId || this.gateway === undefined) return
+    const tasks: Promise<void>[] = []
+    for (const message of snapshot.messages) {
+      for (const attachment of message.attachments ?? []) {
+        const image = attachment.image
+        if (attachment.kind !== 'image' || image === undefined || image.dataBase64 !== undefined) continue
+        const key = historyImageKey(sessionId, image.attachmentId)
+        if (this.historyImageFailures.has(key) || this.historyImageFetches.has(key) || this.store.hasHistoryImage(sessionId, image.attachmentId)) continue
+        const task = this.fetchHistoryImage(sessionId, image).finally(() => {
+          this.historyImageFetches.delete(key)
+        })
+        this.historyImageFetches.set(key, task)
+        tasks.push(task)
+      }
+    }
+    await Promise.all(tasks)
+  }
+
+  private async fetchHistoryImage(sessionId: string, image: WorkbenchImageAttachment): Promise<void> {
+    const key = historyImageKey(sessionId, image.attachmentId)
+    try {
+      if (image.bytes > MAX_HISTORY_IMAGE_BYTES) throw new Error(`image is ${String(image.bytes)} bytes; the ${String(MAX_HISTORY_IMAGE_BYTES)} byte preview limit was exceeded`)
+      const result = await this.requireGateway().getSessionAttachment(sessionId, image.attachmentId)
+      if (result.attachment.attachmentId !== image.attachmentId) throw new Error('the attachment identity did not match the requested image')
+      if (result.attachment.bytes > MAX_HISTORY_IMAGE_BYTES) throw new Error(`image is ${String(result.attachment.bytes)} bytes; the preview limit was exceeded`)
+      if (!isBase64ImageData(result.data)) throw new Error('the Gateway returned invalid image data')
+      this.store.setHistoryImage(sessionId, image.attachmentId, { mimeType: result.attachment.mediaType, dataBase64: result.data })
+      if (this.store.snapshot().activeSessionId === sessionId) this.publish()
+    } catch (error) {
+      this.historyImageFailures.add(key)
+      this.logger.warn(`Could not load historical image ${image.attachmentId}: ${errorMessage(error)}`)
     }
   }
 
@@ -1106,6 +1151,16 @@ function nativePromptContent(input: string, attachments: readonly ContextAttachm
     }),
     ...(text === '' ? [] : [{ type: 'text' as const, text }]),
   ]
+}
+
+const MAX_HISTORY_IMAGE_BYTES = 8 * 1024 * 1024
+
+function historyImageKey(sessionId: string, attachmentId: string): string {
+  return `${sessionId}\u0000${attachmentId}`
+}
+
+function isBase64ImageData(value: string): boolean {
+  return value !== '' && value.length % 4 !== 1 && /^[A-Za-z0-9+/]*={0,2}$/u.test(value)
 }
 
 function workspaceDirectory(): string {

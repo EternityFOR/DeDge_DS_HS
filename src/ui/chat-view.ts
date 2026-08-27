@@ -195,6 +195,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   private async manageSessionConfirmed(session: WorkbenchSession, canRemove: boolean): Promise<void> {
     type SessionAction = 'rename' | 'archive' | 'delete'
+    const removalBlockedDetail = session.running
+      ? 'Unavailable while the response is running. Stop or wait for the response before archiving or deleting.'
+      : 'Unavailable while Harness still has an active turn, queued agent work, or a background job. Stop or wait for it before archiving or deleting.'
     const actions: Array<vscode.QuickPickItem & { readonly action: SessionAction }> = [
       {
         label: '$(pencil) Rename session',
@@ -202,26 +205,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         detail: 'The title is stored by Harness; the transcript, files, and model context are unchanged.',
         action: 'rename',
       },
+      {
+        label: '$(archive) Archive session',
+        description: canRemove ? 'Hide from tabs and session lists' : 'Unavailable until the current task settles',
+        detail: canRemove ? 'Uses the native Harness archive operation. The compressed session log is retained.' : removalBlockedDetail,
+        action: 'archive',
+      },
+      {
+        label: '$(trash) Delete to recovery folder',
+        description: canRemove ? 'Remove local session data and restart Harness' : 'Unavailable until the current task settles',
+        detail: canRemove ? 'Moves the complete session directory into this extension\'s managed recovery folder instead of erasing it.' : removalBlockedDetail,
+        action: 'delete',
+      },
     ]
-    if (canRemove) {
-      actions.push(
-        {
-          label: '$(archive) Archive session',
-          description: 'Hide from tabs and session lists',
-          detail: 'Uses the native Harness archive operation. The compressed session log is retained.',
-          action: 'archive',
-        },
-        {
-          label: '$(trash) Delete to recovery folder',
-          description: 'Remove local session data and restart Harness',
-          detail: 'Moves the complete session directory into this extension\'s managed recovery folder instead of erasing it.',
-          action: 'delete',
-        },
-      )
-    }
     const action = await vscode.window.showQuickPick(actions, {
       title: `Manage session - ${session.title}`,
-      placeHolder: canRemove ? 'Rename, archive, or delete this session' : 'Rename this session while it is active',
+      placeHolder: canRemove ? 'Rename, archive, or delete this session' : 'Rename is available; archive and delete are waiting for the task to settle',
       matchOnDescription: true,
       matchOnDetail: true,
     })
@@ -244,6 +243,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       if (title === session.title) return
       await this.controller.renameSession(session.id, title)
       void vscode.window.setStatusBarMessage(`DeepSeek Harness: renamed session to "${title}"`, 4_000)
+      return
+    }
+    if (!canRemove && (action?.action === 'archive' || action?.action === 'delete')) {
+      void vscode.window.showInformationMessage(removalBlockedDetail ?? 'Finish or stop the current Harness task before removing this session.')
       return
     }
     if (action?.action === 'archive') {
@@ -737,8 +740,9 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .collapse-toggle.collapsed svg { transform: rotate(-90deg); }
     .message-preview { color: var(--vscode-descriptionForeground); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
     .message.user { box-sizing: border-box; width: 88%; max-width: 88%; margin: 6px 0 6px auto; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--vscode-charts-blue) 45%, var(--vscode-panel-border)); border-radius: 5px; background: color-mix(in srgb, var(--vscode-charts-blue) 8%, var(--vscode-sideBar-background)); }
-    .message.user .message-head { justify-content: flex-end; }
-    .message.user .message-role-label { color: var(--vscode-charts-blue); }
+     .message.user .message-head { justify-content: flex-end; }
+     .message.user .message-role-label { color: var(--vscode-charts-blue); }
+     .message.user .message-attachments { justify-content: flex-end; }
     .message.user.task-intermediate { width: 76%; max-width: 76%; margin-top: 5px; margin-bottom: 5px; padding: 6px 8px; border-color: color-mix(in srgb, var(--vscode-charts-blue) 28%, var(--vscode-panel-border)); background: color-mix(in srgb, var(--vscode-charts-blue) 4%, var(--vscode-sideBar-background)); font-size: 11px; }
     .message.user.task-intermediate .message-role-label { font-size: 9px; opacity: .82; }
     .message-actions { display: inline-flex; align-items: center; gap: 2px; margin-left: 4px; }
@@ -747,7 +751,12 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .message-action svg { width: 12px; height: 12px; }
     .message.assistant, .message.reasoning, .message.tool, .message.system { margin-right: 8%; }
     .message.assistant { padding-left: 10px; border-left-color: var(--vscode-charts-green); background: color-mix(in srgb, var(--vscode-charts-green) 3%, transparent); }
-    .message-attachments { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 7px; min-width: 0; }
+     .message-attachments { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 7px; min-width: 0; }
+     .message-image-attachment { display: grid; gap: 3px; flex: 0 1 100%; max-width: min(100%, 420px); margin: 2px 0; }
+     .message-image-preview { display: block; width: auto; max-width: 100%; max-height: 320px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; background: var(--vscode-editor-inactiveSelectionBackground); object-fit: contain; }
+     .message-image-placeholder { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; max-width: 100%; padding: 5px 7px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; color: var(--vscode-descriptionForeground); background: var(--vscode-editor-inactiveSelectionBackground); font-size: 11px; }
+     .message-image-placeholder svg { width: 14px; height: 14px; flex: 0 0 14px; }
+     .message-image-caption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); font-size: 10px; }
     .message-attachment { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-height: 24px; padding: 2px 6px; border: 1px solid var(--vscode-panel-border); border-radius: 3px; color: var(--vscode-descriptionForeground); background: var(--vscode-editor-inactiveSelectionBackground); font-size: 11px; }
     .message-attachment svg { flex: 0 0 12px; width: 12px; height: 12px; }
     .message-attachment-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

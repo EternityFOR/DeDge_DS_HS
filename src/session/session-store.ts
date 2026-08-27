@@ -1,6 +1,6 @@
 import { isRecord, type ContextPressureProjection, type HistoryEntry, type ModelCatalog, type PermissionProjection, type PresetCatalog, type SessionEvent, type SessionSummary } from '../gateway/protocol.js'
 import type { RuntimeState } from '../runtime/types.js'
-import type { PendingApproval, PendingQuestion, SessionOperation, WorkbenchJob, WorkbenchMessage, WorkbenchPhase, WorkbenchQueueItem, WorkbenchSession, WorkbenchSnapshot } from './types.js'
+import type { PendingApproval, PendingQuestion, SessionOperation, WorkbenchImageAttachment, WorkbenchJob, WorkbenchMessage, WorkbenchMessageAttachment, WorkbenchPhase, WorkbenchQueueItem, WorkbenchSession, WorkbenchSnapshot } from './types.js'
 import { projectUserPrompt } from './prompt-projection.js'
 
 export interface StoreConfiguration {
@@ -36,6 +36,8 @@ export class SessionStore {
   private readonly permissions = new Map<string, PermissionProjection>()
   private readonly queueItems = new Map<string, WorkbenchQueueItem[]>()
   private readonly jobs = new Map<string, WorkbenchJob[]>()
+  /** Hydrated image bytes keyed by session and the opaque Harness attachment id. */
+  private readonly imageData = new Map<string, { readonly mimeType: WorkbenchImageAttachment['mimeType']; readonly dataBase64: string }>()
   private permissionChanging = false
   private readonly sessionOperations = new Map<string, SessionOperation>()
   private configuration: StoreConfiguration
@@ -112,6 +114,7 @@ export class SessionStore {
     this.contextPressure.delete(sessionId)
     this.queueItems.delete(sessionId)
     this.jobs.delete(sessionId)
+    for (const key of this.imageData.keys()) if (key.startsWith(`${sessionId}\u0000`)) this.imageData.delete(key)
     this.sessionOperations.delete(sessionId)
     if (this.activeSessionId === sessionId) this.activeSessionId = undefined
   }
@@ -141,6 +144,15 @@ export class SessionStore {
   setSessionTitle(sessionId: string, title: string): void {
     const current = this.sessions.get(sessionId)
     if (current !== undefined) this.sessions.set(sessionId, { ...current, title })
+  }
+
+  setHistoryImage(sessionId: string, attachmentId: string, image: { readonly mimeType: WorkbenchImageAttachment['mimeType']; readonly dataBase64: string }): void {
+    if (image.dataBase64.trim() === '') return
+    this.imageData.set(historyImageKey(sessionId, attachmentId), image)
+  }
+
+  hasHistoryImage(sessionId: string, attachmentId: string): boolean {
+    return this.imageData.has(historyImageKey(sessionId, attachmentId))
   }
 
   setAgentPreset(sessionId: string, agentPreset: string): void {
@@ -270,7 +282,7 @@ export class SessionStore {
     const activeEvents = this.activeSessionId === undefined
       ? []
       : [...(this.events.get(this.activeSessionId)?.values() ?? [])].sort((left, right) => left.event.seq - right.event.seq)
-    const messages = projectMessages(activeEvents)
+    const messages = this.hydrateImages(this.activeSessionId, projectMessages(activeEvents))
     const modelCatalog = this.modelCatalog
     const activeModelCatalog = modelCatalog !== undefined && modelCatalog.sessionId === this.activeSessionId ? modelCatalog.value : undefined
     const currentModel = activeModelCatalog?.current
@@ -311,6 +323,23 @@ export class SessionStore {
     }
   }
 
+  private hydrateImages(sessionId: string | undefined, messages: readonly WorkbenchMessage[]): WorkbenchMessage[] {
+    if (sessionId === undefined) return [...messages]
+    return messages.map(message => {
+      if (message.attachments === undefined) return message
+      let changed = false
+      const attachments = message.attachments.map(attachment => {
+        const image = attachment.image
+        if (image === undefined) return attachment
+        const data = this.imageData.get(historyImageKey(sessionId, image.attachmentId))
+        if (data === undefined) return attachment
+        changed = true
+        return { ...attachment, image: { ...image, ...data } }
+      })
+      return changed ? { ...message, attachments } : message
+    })
+  }
+
   private applySessionMetadata(sessionId: string, events: readonly SessionEvent[]): void {
     let summary = this.sessions.get(sessionId) ?? { sessionId }
     for (const event of events) {
@@ -322,6 +351,10 @@ export class SessionStore {
     }
     this.sessions.set(sessionId, summary)
   }
+}
+
+function historyImageKey(sessionId: string, attachmentId: string): string {
+  return `${sessionId}\u0000${attachmentId}`
 }
 
 function questionKey(rpcId: string, questionId: string): string {
@@ -361,13 +394,14 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
       const source = isRecord(data.source) ? data.source : undefined
       if (source !== undefined && source.kind !== 'user') continue
       const rawText = contentText(data.content)
-      if (rawText !== '') {
-        const projected = projectUserPrompt(rawText)
+      const projected = projectUserPrompt(rawText)
+      const attachments = [...projected.attachments, ...projectImageAttachments(data.content)]
+      if (rawText !== '' || attachments.length > 0) {
         output.push({
           id: `user:${event.seq}`,
           role: 'user',
           text: projected.text,
-          ...(projected.attachments.length === 0 ? {} : { attachments: projected.attachments }),
+          ...(attachments.length === 0 ? {} : { attachments }),
           seq: event.seq,
           time: event.time,
           status: 'complete',
@@ -402,10 +436,11 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
         let index = 0
         for (const block of content) {
           if (!isRecord(block) || typeof block.type !== 'string') continue
+          const id = `assistant:${event.seq}:${index++}`
           if ((block.type === 'text' || block.type === 'reasoning') && typeof block.text === 'string' && block.text !== '') {
             const projected = projectVerboseText(block.text, block.type === 'reasoning' ? 65_536 : Number.MAX_SAFE_INTEGER)
             output.push({
-              id: `assistant:${event.seq}:${index++}`,
+              id,
               role: block.type === 'reasoning' ? 'reasoning' : 'assistant',
               text: projected.text,
               ...(projected.textLength === undefined ? {} : { textLength: projected.textLength }),
@@ -414,6 +449,20 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
               seq: event.seq,
               time: event.time,
             })
+          } else if (block.type === 'image') {
+            const attachment = projectImageAttachment(block)
+            if (attachment !== undefined) {
+              output.push({
+                id,
+                role: 'assistant',
+                text: '',
+                attachments: [attachment],
+                ...(interrupted ? { taskInterrupted: true } : {}),
+                status: 'complete',
+                seq: event.seq,
+                time: event.time,
+              })
+            }
           }
         }
       }
@@ -641,6 +690,47 @@ function contentText(value: unknown): string {
     if (block.type === 'tool-result' && Array.isArray(block.content)) parts.push(contentText(block.content))
   }
   return parts.join('\n')
+}
+
+function projectImageAttachments(value: unknown): WorkbenchMessageAttachment[] {
+  if (!Array.isArray(value)) return []
+  return value.map(projectImageAttachment).filter((attachment): attachment is WorkbenchMessageAttachment => attachment !== undefined)
+}
+
+function projectImageAttachment(value: unknown): WorkbenchMessageAttachment | undefined {
+  if (!isRecord(value) || value.type !== 'image' || !isRecord(value.attachment)) return undefined
+  const reference = value.attachment
+  const mediaType = imageMediaType(reference.mediaType)
+  const bytes = positiveSafeInteger(reference.bytes)
+  const width = positiveSafeInteger(reference.width)
+  const height = positiveSafeInteger(reference.height)
+  if (typeof reference.attachmentId !== 'string' || reference.attachmentId.trim() === ''
+    || mediaType === undefined
+    || bytes === undefined || width === undefined || height === undefined) return undefined
+  const rawName = typeof reference.name === 'string' ? reference.name.trim() : ''
+  const name = (rawName.split(/[\\/]/u).at(-1) ?? '').trim().slice(0, 160) || 'image'
+  return {
+    kind: 'image',
+    label: `Image: ${name}`,
+    detail: `${String(width)} x ${String(height)} pixels, ${String(bytes)} bytes`,
+    image: {
+      attachmentId: reference.attachmentId,
+      mimeType: mediaType,
+      bytes,
+      width,
+      height,
+      ...(name === 'image' ? {} : { name }),
+    },
+  }
+}
+
+function imageMediaType(value: unknown): WorkbenchImageAttachment['mimeType'] | undefined {
+  if (value === 'image/png' || value === 'image/jpeg' || value === 'image/webp' || value === 'image/gif') return value
+  return undefined
+}
+
+function positiveSafeInteger(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : undefined
 }
 
 function projectQueueItem(value: unknown, index: number): WorkbenchQueueItem {

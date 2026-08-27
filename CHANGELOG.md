@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.1.52] - 2026-08-27
+
+### Added
+
+- Historical Harness image attachments are restored from durable session references and rendered inside the original user message without writing image bytes to logs or source-session data.
+- Queued user messages retain inline Remove controls backed by the native Harness queue mutation, with per-item busy locking to prevent duplicate cancellation requests.
+
+### Fixed
+
+- Session management now always lists Rename, Archive, and Delete. Archive and Delete explain why they are unavailable while an active turn, agent queue, or background job is still settling instead of disappearing from the menu.
+- Runtime smoke now waits for the append-only history index before checking `session.attachment`, avoiding a false failure immediately after an accepted image prompt.
+
 ## [0.1.51] - 2026-08-27
 
 ### Added
@@ -560,7 +572,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.51...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.52...HEAD
+[0.1.52]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.52
 [0.1.51]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.51
 [0.1.50]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.50
 [0.1.49]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.49
