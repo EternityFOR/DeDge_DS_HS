@@ -474,13 +474,45 @@ function projectVerboseText(value: string, maxChars: number): { readonly text: s
 }
 
 function annotateTaskGroups(messages: readonly WorkbenchMessage[], entries: readonly HistoryEntry[]): WorkbenchMessage[] {
-  const groups: { readonly id: string; readonly from: number; to: number; complete: boolean; interrupted: boolean }[] = []
+  type TaskGroup = { readonly id: string; readonly turn?: string; readonly from: number; to: number; complete: boolean; interrupted: boolean }
+  type TurnRange = { readonly turn: string; from: number; to: number; complete: boolean; interrupted: boolean; eventCount: number; hasWorkEvent: boolean; hasNonAssistantWork: boolean; stepKeys: string[] }
+  const groups: TaskGroup[] = []
+  const explicitByTurn = new Map<string, TaskGroup>()
+  const turnRanges = new Map<string, TurnRange>()
   let previousEnd = -1
-  let active: { readonly id: string; readonly from: number; to: number; complete: boolean; interrupted: boolean } | undefined
+  let active: TaskGroup | undefined
   for (const { event } of entries) {
+    const turn = eventTurnKey(event)
+    if (turn !== undefined) {
+      const range = turnRanges.get(turn)
+      if (range === undefined) turnRanges.set(turn, {
+        turn,
+        from: event.seq,
+        to: event.seq,
+        complete: event.type === 'turn/end',
+        interrupted: eventIndicatesInterruption(event),
+        eventCount: 1,
+        hasWorkEvent: isTurnWorkEvent(event),
+        hasNonAssistantWork: isTurnNonAssistantWorkEvent(event),
+        stepKeys: eventStepKey(event) === undefined ? [] : [eventStepKey(event) as string],
+      })
+      else {
+        range.from = Math.min(range.from, event.seq)
+        range.to = Math.max(range.to, event.seq)
+        range.complete = range.complete || event.type === 'turn/end'
+        range.interrupted = range.interrupted || eventIndicatesInterruption(event)
+        range.eventCount += 1
+        range.hasWorkEvent = range.hasWorkEvent || isTurnWorkEvent(event)
+        range.hasNonAssistantWork = range.hasNonAssistantWork || isTurnNonAssistantWorkEvent(event)
+        const step = eventStepKey(event)
+        if (step !== undefined && !range.stepKeys.includes(step)) range.stepKeys.push(step)
+      }
+    }
     if (event.type === 'turn/start') {
-      active = { id: `turn:${String(event.seq)}`, from: previousEnd + 1, to: Number.MAX_SAFE_INTEGER, complete: false, interrupted: false }
+      const id = turn === undefined ? `turn:${String(event.seq)}` : `turn:${turn}`
+      active = { id, ...(turn === undefined ? {} : { turn }), from: previousEnd + 1, to: Number.MAX_SAFE_INTEGER, complete: false, interrupted: false }
       groups.push(active)
+      if (turn !== undefined) explicitByTurn.set(turn, active)
     } else if (event.type === 'turn/end' && active !== undefined) {
       active.to = event.seq
       active.complete = true
@@ -495,6 +527,32 @@ function annotateTaskGroups(messages: readonly WorkbenchMessage[], entries: read
       active.complete = true
     }
   }
+  // The Harness history endpoint can start in the middle of a turn and omit
+  // its turn/start event. Recover a foldable group from the turn metadata on
+  // assistant, tool, and step events. The ID is turn-based so it converges to
+  // the same group when an earlier page later supplies the official boundary.
+  const syntheticRanges = [...turnRanges.values()].sort((left, right) => left.from - right.from)
+  for (let index = 0; index < syntheticRanges.length; index += 1) {
+    const range = syntheticRanges[index]
+    if (range === undefined) continue
+    const nextRange = syntheticRanges[index + 1]
+    if (explicitByTurn.has(range.turn)) continue
+    // A short, otherwise complete event slice can carry turn metadata without
+    // being a truncated task. Only synthesize a group when the page visibly
+    // starts in non-user work and contains enough work events to fold.
+    if (!range.hasWorkEvent || range.eventCount < 2 || (!range.hasNonAssistantWork && range.stepKeys.length < 2) || hasLeadingUserMessage(entries, range, syntheticRanges)) continue
+    const overlapsExplicit = groups.some(group => group.from <= range.to && group.to >= range.from)
+    if (overlapsExplicit) continue
+    groups.push({
+      id: `turn:${range.turn}`,
+      turn: range.turn,
+      from: range.from,
+      to: range.complete ? range.to : Math.min(range.to, nextRange === undefined ? Number.MAX_SAFE_INTEGER : nextRange.from - 1),
+      complete: range.complete,
+      interrupted: range.interrupted,
+    })
+  }
+  groups.sort((left, right) => left.from - right.from)
   if (groups.length === 0) return [...messages]
   const groupCounts = new Map(groups.map(group => [group.id, messages.filter(message => message.seq !== undefined && message.seq >= group.from && message.seq <= group.to).length]))
   return messages.map(message => {
@@ -509,6 +567,44 @@ function annotateTaskGroups(messages: readonly WorkbenchMessage[], entries: read
       ...(group.interrupted ? { taskInterrupted: true } : {}),
     }
   })
+}
+
+function eventTurnKey(event: SessionEvent): string | undefined {
+  const data = isRecord(event.data) ? event.data : {}
+  const turn = data.turn
+  if (typeof turn === 'string' && turn.trim() !== '') return turn
+  if (typeof turn === 'number' && Number.isSafeInteger(turn)) return String(turn)
+  return undefined
+}
+
+function isTurnWorkEvent(event: SessionEvent): boolean {
+  return event.type === 'assistant/chunk' || event.type === 'assistant/message' || event.type === 'tool/call' || event.type === 'tool/result' || event.type === 'step/start' || event.type === 'step/end'
+}
+
+function isTurnNonAssistantWorkEvent(event: SessionEvent): boolean {
+  return event.type === 'tool/call' || event.type === 'tool/result' || event.type === 'step/start' || event.type === 'step/end'
+}
+
+function eventStepKey(event: SessionEvent): string | undefined {
+  const data = isRecord(event.data) ? event.data : {}
+  const step = data.step
+  if (typeof step === 'string' && step.trim() !== '') return step
+  if (typeof step === 'number' && Number.isSafeInteger(step)) return String(step)
+  return undefined
+}
+
+function isVisibleUserMessage(event: SessionEvent): boolean {
+  if (event.type !== 'user/message') return false
+  const data = isRecord(event.data) ? event.data : {}
+  const source = isRecord(data.source) ? data.source : undefined
+  return source === undefined || source.kind === 'user'
+}
+
+function hasLeadingUserMessage(entries: readonly HistoryEntry[], range: { readonly from: number }, ranges: readonly { readonly from: number; readonly to: number }[]): boolean {
+  const previousTurnEnd = ranges
+    .filter(candidate => candidate.to < range.from)
+    .reduce((latest, candidate) => Math.max(latest, candidate.to), -1)
+  return entries.some(entry => entry.event.seq > previousTurnEnd && entry.event.seq < range.from && isVisibleUserMessage(entry.event))
 }
 
 function eventIndicatesInterruption(event: SessionEvent): boolean {

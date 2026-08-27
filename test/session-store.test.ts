@@ -61,6 +61,24 @@ describe('session event projection', () => {
     ])
   })
 
+  it('recovers a foldable task when a history page starts inside a turn', () => {
+    const messages = projectMessages([
+      entry('assistant/chunk', 100, { turn: 9, step: 4, chunk: { type: 'reasoning-delta', index: 0, text: 'Continue' } }),
+      entry('step/start', 101, { turn: 9, step: 4 }),
+      entry('tool/call', 102, { turn: 9, step: 4, callId: 'call-9', name: 'pwsh', arguments: { command: 'sleep' } }),
+      entry('tool/result', 103, { turn: 9, step: 4, message: { source: { callId: 'call-9' }, content: [{ type: 'text', text: 'done' }] } }),
+      entry('step/end', 104, { turn: 9, step: 4 }),
+      entry('assistant/message', 105, { turn: 9, step: 5, message: { content: [{ type: 'text', text: 'Finished' }] } }),
+    ])
+
+    expect(messages).toHaveLength(3)
+    expect(messages.map(message => [message.taskId, message.taskComplete])).toEqual([
+      ['turn:9', false],
+      ['turn:9', false],
+      ['turn:9', false],
+    ])
+  })
+
   it('keeps a user-stopped task settled and marks the whole fold as interrupted', () => {
     const messages = projectMessages([
       entry('user/message', 1, { source: { kind: 'user' }, content: [{ type: 'text', text: 'Start a long task' }] }),

@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.1.50] - 2026-08-27
+
+### Fixed
+
+- History pages that begin in the middle of a Harness turn now recover a foldable task group from the event `turn` metadata even when the page does not contain `turn/start`.
+- Recovered groups use a stable turn-based ID and converge with the official boundary after earlier history is loaded, so folding state is preserved across pagination and after reopening older sessions.
+- Single assistant-message slices are left ungrouped; synthetic groups require enough distinct work to avoid changing the normal display of short responses.
+
 ## [0.1.49] - 2026-08-27
 
 ### Added
@@ -541,7 +549,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.49...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.50...HEAD
+[0.1.50]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.50
 [0.1.49]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.49
 [0.1.48]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.48
 [0.1.47]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.47
