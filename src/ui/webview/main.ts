@@ -1056,7 +1056,9 @@ function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
     const manage = document.createElement('button')
     manage.type = 'button'
     manage.className = 'session-tab-manage'
-    manage.disabled = session.running || autonomous || session.operation !== undefined
+    // Renaming is safe while a response or autonomous task is active. The host
+    // still omits archive/delete from the menu until the task has settled.
+    manage.disabled = session.operation !== undefined
     manage.title = session.operation === 'deleting'
       ? 'Deletion in progress'
       : session.operation === 'archiving'
@@ -1065,7 +1067,7 @@ function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
           ? 'Stop in progress'
           : session.operation === 'compacting'
             ? 'Context compaction in progress'
-          : autonomous ? 'Stop the autonomous agent task before managing this session' : session.running ? 'Finish or cancel the response before managing this session' : `Archive or delete ${session.title}`
+          : autonomous ? `Rename ${session.title} while the autonomous task continues` : session.running ? `Rename ${session.title} while the response continues` : `Rename, archive, or delete ${session.title}`
     manage.setAttribute('aria-label', manage.title)
     const icon = svgIcon(session.operation === undefined ? 'ellipsis' : 'loader-circle')
     if (session.operation !== undefined) icon.classList.add('session-operation-icon')
@@ -1517,19 +1519,24 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
     }
     taskCompletion.set(taskId, complete)
     taskInterruption.set(taskId, interrupted)
-    const first = items.find(item => item.role === 'user') ?? items[0]
-    if (first === undefined) continue
-    const firstIndex = items.findIndex(item => item.id === first.id)
-    const latestInsertedIndex = complete
+    const firstUser = items.find(item => item.role === 'user')
+    const anchor = firstUser ?? items[0]
+    if (anchor === undefined) continue
+    const firstIndex = firstUser === undefined ? -1 : items.findIndex(item => item.id === firstUser.id)
+    const latestInsertedIndex = firstUser === undefined || complete
       ? -1
-      : [...items].findLastIndex(item => item.role === 'user' && item.id !== first.id)
+      : [...items].findLastIndex(item => item.role === 'user' && item.id !== firstUser.id)
     const final = [...items].reverse().find(item => item.role === 'assistant' || item.role === 'system')
     const fallbackTail = final ?? (interrupted || !complete ? items.at(-1) : undefined)
-    const visibleTailItems = latestInsertedIndex > firstIndex
+    const visibleTailItems = firstUser !== undefined && latestInsertedIndex > firstIndex
       ? items.slice(latestInsertedIndex)
       : fallbackTail === undefined ? [] : [fallbackTail]
     const visibleTailIds = new Set(visibleTailItems.map(item => item.id))
-    const middle = items.filter(item => item.id !== first.id && !visibleTailIds.has(item.id))
+    // If the history page starts mid-turn, there is no visible user prompt to
+    // anchor the task. Keep every visible tool/reasoning item in the fold and
+    // show only the final answer at the first level; revealing the first tool
+    // result as a fake task start makes long pages look like malformed output.
+    const middle = items.filter(item => (firstUser === undefined || item.id !== firstUser.id) && !visibleTailIds.has(item.id))
     if (visibleTailItems.length === 0) continue
     const collapsed = compactThinking && !expandedTasks.has(taskId) && middle.length > 0
     for (const item of items) {
@@ -1539,7 +1546,7 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
       node?.classList.toggle('task-intermediate', intermediate)
       if (item.role === 'user') {
         const role = node?.querySelector('.message-role-label')
-        if (role !== null && role !== undefined) role.textContent = item.id === first.id ? 'You' : 'You · Steer'
+        if (role !== null && role !== undefined) role.textContent = item.id === firstUser?.id ? 'You' : 'You · Steer'
       }
     }
 
@@ -1581,9 +1588,9 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
     fold.setAttribute('aria-expanded', String(!collapsed))
     fold.querySelector('svg')?.classList.toggle('collapsed', collapsed)
     const nodes = items.map(item => messageElements.get(item.id)).filter((node): node is HTMLElement => node !== undefined)
-    const firstNode = messageElements.get(first.id)
-    if (firstNode !== undefined && nodes.length > 1) {
-      if (group.parentElement !== elements.conversation) elements.conversation.insertBefore(group, firstNode)
+    const anchorNode = messageElements.get(anchor.id)
+    if (anchorNode !== undefined && nodes.length > 1) {
+      if (group.parentElement !== elements.conversation) elements.conversation.insertBefore(group, anchorNode)
       let taskToggle = group.querySelector<HTMLButtonElement>('.task-collapse-all')
       if (taskToggle === null) {
         taskToggle = document.createElement('button')
@@ -1596,16 +1603,17 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
         })
       }
       const wholeCollapsed = collapsedTasks.has(taskId)
-      const firstPreview = first.text.replace(/\s+/gu, ' ').slice(0, 72)
+      const firstPreview = firstUser === undefined ? 'Earlier task context' : firstUser.text.replace(/\s+/gu, ' ').slice(0, 72)
       taskToggle.replaceChildren(svgIcon('chevron-down'), document.createTextNode(wholeCollapsed ? `Show task · ${firstPreview}` : 'Collapse entire task'))
       taskToggle.setAttribute('aria-expanded', String(!wholeCollapsed))
       taskToggle.querySelector('svg')?.classList.toggle('collapsed', wholeCollapsed)
       for (const node of nodes) node.classList.toggle('task-all-hidden', wholeCollapsed)
       fold.classList.toggle('task-all-hidden', wholeCollapsed)
-      const nodeById = new Map(items.map((item, index) => [item.id, nodes[index]] as const))
+      const nodeById = new Map(items.map(item => [item.id, messageElements.get(item.id)] as const))
       const foldedNodes = middle.map(item => nodeById.get(item.id)).filter((node): node is HTMLElement => node !== undefined)
       const tailNodes = visibleTailItems.map(item => nodeById.get(item.id)).filter((node): node is HTMLElement => node !== undefined)
-      group.replaceChildren(taskToggle, firstNode, fold, ...foldedNodes, ...tailNodes)
+      const firstNode = firstUser === undefined ? undefined : nodeById.get(firstUser.id)
+      group.replaceChildren(taskToggle, ...(firstNode === undefined ? [] : [firstNode]), fold, ...foldedNodes, ...tailNodes)
     }
   }
 }

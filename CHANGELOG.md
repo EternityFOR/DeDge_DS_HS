@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [0.1.51] - 2026-08-27
+
+### Added
+
+- Added session tab renaming from the tab management menu. Renaming writes only a Harness title event, keeps the transcript unchanged, and remains available while a response is active; archive and delete stay unavailable until the task settles.
+
+### Fixed
+
+- History pages that begin in the middle of a Harness turn no longer treat the first visible tool output as a fake task start. The UI now keeps intermediate tool and reasoning output inside the fold and shows the final answer at the first level.
+- Recovered task groups continue to use stable turn-based IDs, preserving folding state when earlier history is loaded or an older session is reopened.
+
 ## [0.1.50] - 2026-08-27
 
 ### Fixed
@@ -549,7 +560,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.50...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.51...HEAD
+[0.1.51]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.51
 [0.1.50]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.50
 [0.1.49]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.49
 [0.1.48]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.48

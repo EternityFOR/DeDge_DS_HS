@@ -5,6 +5,7 @@ import type { ChangeReviewService } from '../diff/change-review.js'
 import { errorMessage, type Logger } from '../platform/logger.js'
 import type { WorkbenchController } from '../session/workbench-controller.js'
 import type { WorkbenchSession } from '../session/types.js'
+import { hasAutonomousActivity } from '../session/interaction-readiness.js'
 import { isRecord } from '../gateway/protocol.js'
 import type { HostToWebviewMessage, WebviewToHostMessage, WorkbenchSettings } from './webview-protocol.js'
 import type { StagedHandoff } from '../handoff/types.js'
@@ -178,14 +179,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       void vscode.window.showInformationMessage(`This session is already ${operationLabel(session.operation)}.`)
       return
     }
-    if (session.running) {
-      void vscode.window.showInformationMessage('Finish or cancel the response before archiving or deleting this session.')
-      return
-    }
     if (this.managingSessions.has(session.id)) return
     this.managingSessions.add(session.id)
     try {
-      await this.manageSessionConfirmed(session)
+      const canRemove = !session.running && !hasAutonomousActivity(snapshot)
+      await this.manageSessionConfirmed(session, canRemove)
     } finally {
       this.managingSessions.delete(session.id)
     }
@@ -195,26 +193,59 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     await this.stageHandoff(await this.actions.handoff())
   }
 
-  private async manageSessionConfirmed(session: WorkbenchSession): Promise<void> {
-    const action = await vscode.window.showQuickPick([
+  private async manageSessionConfirmed(session: WorkbenchSession, canRemove: boolean): Promise<void> {
+    type SessionAction = 'rename' | 'archive' | 'delete'
+    const actions: Array<vscode.QuickPickItem & { readonly action: SessionAction }> = [
       {
-        label: '$(archive) Archive session',
-        description: 'Hide from tabs and session lists',
-        detail: 'Uses the native Harness archive operation. The compressed session log is retained.',
-        action: 'archive',
+        label: '$(pencil) Rename session',
+        description: 'Change the title shown on this tab',
+        detail: 'The title is stored by Harness; the transcript, files, and model context are unchanged.',
+        action: 'rename',
       },
-      {
-        label: '$(trash) Delete to recovery folder',
-        description: 'Remove local session data and restart Harness',
-        detail: 'Moves the complete session directory into this extension\'s managed recovery folder instead of erasing it.',
-        action: 'delete',
-      },
-    ] as const, {
+    ]
+    if (canRemove) {
+      actions.push(
+        {
+          label: '$(archive) Archive session',
+          description: 'Hide from tabs and session lists',
+          detail: 'Uses the native Harness archive operation. The compressed session log is retained.',
+          action: 'archive',
+        },
+        {
+          label: '$(trash) Delete to recovery folder',
+          description: 'Remove local session data and restart Harness',
+          detail: 'Moves the complete session directory into this extension\'s managed recovery folder instead of erasing it.',
+          action: 'delete',
+        },
+      )
+    }
+    const action = await vscode.window.showQuickPick(actions, {
       title: `Manage session - ${session.title}`,
-      placeHolder: 'Choose how to remove this session from the workbench',
+      placeHolder: canRemove ? 'Rename, archive, or delete this session' : 'Rename this session while it is active',
       matchOnDescription: true,
       matchOnDetail: true,
     })
+    if (action?.action === 'rename') {
+      const entered = await vscode.window.showInputBox({
+        title: `Rename session - ${session.title}`,
+        prompt: 'Choose a short title for the session tab. This does not change the conversation.',
+        value: session.title,
+        ignoreFocusOut: true,
+        validateInput: input => {
+          const title = input.trim()
+          if (title === '') return 'Session title cannot be empty.'
+          if (/\r|\n/u.test(title)) return 'Session title must be a single line.'
+          if (title.length > 120) return 'Session title must be 120 characters or fewer.'
+          return undefined
+        },
+      })
+      if (entered === undefined) return
+      const title = entered.trim()
+      if (title === session.title) return
+      await this.controller.renameSession(session.id, title)
+      void vscode.window.setStatusBarMessage(`DeepSeek Harness: renamed session to "${title}"`, 4_000)
+      return
+    }
     if (action?.action === 'archive') {
       const confirmed = await vscode.window.showWarningMessage(
         `Archive "${session.title}"? It will disappear from tabs, but its Harness session log will be retained.`,
