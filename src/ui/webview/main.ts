@@ -149,6 +149,7 @@ let historyLoadOne: HTMLButtonElement | undefined
 let historyLoadAll: HTMLButtonElement | undefined
 let historyHideOne: HTMLButtonElement | undefined
 let historyHideAll: HTMLButtonElement | undefined
+let responseWaiting: HTMLElement | undefined
 let historyLoadPending = false
 let historyLoadScrollHeight = 0
 let currentSettings: WorkbenchSettings | undefined
@@ -531,7 +532,10 @@ window.addEventListener('message', event => {
       }
     } else {
       const status = pendingSendPreview?.querySelector('.message-send-status')
-      if (status !== null && status !== undefined) status.textContent = 'Sent'
+      if (status !== null && status !== undefined) {
+        status.textContent = 'Sent'
+        status.setAttribute('data-state', 'sent')
+      }
     }
     if (message.accepted && elements.prompt.value === message.text) {
       elements.prompt.value = ''
@@ -1256,6 +1260,12 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     pendingAnchor = document.createElement('div')
     pendingAnchor.className = 'pending-area'
     elements.conversation.append(pendingAnchor)
+    responseWaiting = document.createElement('div')
+    responseWaiting.className = 'response-waiting hidden'
+    responseWaiting.setAttribute('role', 'status')
+    responseWaiting.setAttribute('aria-live', 'polite')
+    responseWaiting.append(svgIcon('loader-circle'), document.createElement('span'))
+    elements.conversation.append(responseWaiting)
     scrollBottomButton = document.createElement('button')
     scrollBottomButton.type = 'button'
     scrollBottomButton.className = 'scroll-bottom hidden'
@@ -1325,6 +1335,7 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     elements.conversation.insertBefore(pendingSendPreview, pendingAnchor)
   }
   renderMessageSegments(messages)
+  renderResponseWaiting(snapshot, messages, streaming)
   if (historyControls !== undefined) {
     renderHistoryControls(snapshot)
   }
@@ -1355,6 +1366,26 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
   }
   applyAutoFoldButton()
   updateScrollBottomButton()
+}
+
+function renderResponseWaiting(snapshot: WorkbenchSnapshot, messages: readonly WorkbenchMessage[], streaming: boolean): void {
+  const waiting = responseWaiting
+  if (waiting === undefined) return
+  const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
+  const autonomous = hasAutonomousActivity(snapshot)
+  const activeWork = active?.running === true || autonomous
+  const latest = [...messages].reverse().find(message => message.taskInterrupted !== true)
+  const visible = activeWork && !streaming && latest?.status !== 'streaming'
+  waiting.classList.toggle('hidden', !visible)
+  if (!visible) return
+  const label = waiting.querySelector('span')
+  if (label !== null) label.textContent = active?.running === true
+    ? 'Waiting for Harness response...'
+    : 'Agent is preparing the next step...'
+  if (stickToBottom) {
+    const conversation = elements.conversation
+    conversation.scrollTop = Math.max(0, conversation.scrollHeight - conversation.clientHeight)
+  }
 }
 
 function reorderConversationUnits(messages: readonly WorkbenchMessage[]): void {
@@ -1407,6 +1438,7 @@ function showPendingSendPreview(text: string, attachmentLabels: readonly string[
   const status = document.createElement('span')
   status.className = 'message-send-status'
   status.textContent = 'Sending...'
+  status.setAttribute('data-state', 'sending')
   head.append(label, status)
   pendingSendPreview.append(head)
   if (attachmentLabels.length > 0) pendingSendPreview.append(buildAttachmentsRow(attachmentLabels.map(label => ({ kind: 'file' as const, label }))))
@@ -2211,7 +2243,8 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
   elements.configureContext.title = contextConfigurationTitle(snapshot.agentPreset, trigger)
   elements.configureContext.setAttribute('aria-label', elements.configureContext.title)
   const phase = snapshot.runtime.phase
-  elements.statusDot.className = `status-dot ${phase === 'ready' ? 'ready' : phase === 'error' ? 'error' : phase === 'starting' || phase === 'resolving' ? 'busy' : ''}`
+  const dotState = phase === 'error' ? 'error' : phase === 'starting' || phase === 'resolving' ? 'busy' : phase === 'ready' && agentWork ? 'running' : phase === 'ready' ? 'ready' : ''
+  elements.statusDot.className = `status-dot ${dotState}`
   elements.statusText.textContent = phase === 'ready'
     ? compacting
       ? 'Compacting context...'

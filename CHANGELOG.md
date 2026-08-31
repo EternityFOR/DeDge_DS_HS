@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.1.56] - 2026-08-31
+
+### Added
+
+- Added a compact animated wait indicator for response gaps, with separate wording for an active Harness response and an autonomous next-step continuation.
+
+### Changed
+
+- The status dot now pulses while agent work is active, and the sending preview shows animated progress dots until Harness acknowledges it.
+
 ## [0.1.55] - 2026-08-31
 
 ### Added
@@ -608,7 +618,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.55...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.56...HEAD
+[0.1.56]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.56
 [0.1.55]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.55
 [0.1.54]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.54
 [0.1.53]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.53

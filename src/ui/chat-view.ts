@@ -785,6 +785,13 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .vision-process summary svg { width: 12px; height: 12px; }
     .vision-process > div { margin-top: 5px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
     .message-send-status { margin-left: auto; color: var(--vscode-descriptionForeground); font-size: 10px; }
+    .message-send-status[data-state="sending"]::after { content: ' ···'; display: inline-block; width: 18px; text-align: left; animation: sending-dots 1s steps(4,end) infinite; }
+    @keyframes sending-dots { 0%, 20% { content: ' ·'; } 40% { content: ' ··'; } 60%, 100% { content: ' ···'; } }
+    .response-waiting { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 3px 8% 7px; padding: 4px 6px; color: var(--vscode-descriptionForeground); font-size: 10px; line-height: 1.3; }
+    .response-waiting.hidden { display: none !important; }
+    .response-waiting svg { flex: 0 0 12px; width: 12px; height: 12px; color: var(--vscode-progressBar-background); animation: response-waiting-spin 900ms linear infinite; }
+    .response-waiting span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    @keyframes response-waiting-spin { to { transform: rotate(360deg); } }
     .attachment-openable { cursor: pointer; }
     .attachment-openable:hover { border-color: var(--vscode-focusBorder); color: var(--vscode-foreground); }
     .pending { margin: 8px 0; padding: 10px; border: 1px solid var(--vscode-inputValidation-warningBorder); border-radius: 4px; background: var(--vscode-inputValidation-warningBackground); }
@@ -933,8 +940,10 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .status { display: flex; align-items: center; gap: 6px; color: var(--vscode-descriptionForeground); font-size: 11px; padding-top: 6px; }
     .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-disabledForeground); }
     .status-dot.ready { background: var(--vscode-testing-iconPassed); }
+    .status-dot.running { background: var(--vscode-progressBar-background); animation: status-pulse 1.2s ease-in-out infinite alternate; }
     .status-dot.busy { background: var(--vscode-progressBar-background); }
     .status-dot.error { background: var(--vscode-testing-iconFailed); }
+    @keyframes status-pulse { from { opacity: .45; } to { opacity: 1; } }
     .notice { position: fixed; top: 8px; right: 8px; z-index: 50; width: min(320px,calc(100% - 16px)); max-height: 72px; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; padding: 7px 9px; border: 1px solid var(--vscode-widget-border); background: var(--vscode-notifications-background); color: var(--vscode-notifications-foreground); border-radius: 4px; box-shadow: 0 4px 18px rgba(0,0,0,.28); font-size: 11px; line-height: 1.35; }
     .notice.warning { border-color: var(--vscode-inputValidation-warningBorder); }
     .notice.error { border-color: var(--vscode-inputValidation-errorBorder); background: var(--vscode-inputValidation-errorBackground); color: var(--vscode-inputValidation-errorForeground); }
