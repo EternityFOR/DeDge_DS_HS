@@ -1519,10 +1519,13 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
     }
     taskCompletion.set(taskId, complete)
     taskInterruption.set(taskId, interrupted)
-    const firstUser = items.find(item => item.role === 'user')
-    const anchor = firstUser ?? items[0]
+    const firstUser = items.find(item => item.role === 'user' && item.inputKind === undefined)
+    const firstAutomation = items.find(item => item.role === 'user' && item.inputKind === 'automation')
+    const firstSteering = items.find(item => item.role === 'user' && item.inputKind === 'steering')
+    const firstPrompt = firstUser ?? firstAutomation ?? firstSteering
+    const anchor = firstPrompt ?? items[0]
     if (anchor === undefined) continue
-    const firstIndex = firstUser === undefined ? -1 : items.findIndex(item => item.id === firstUser.id)
+    const firstIndex = firstPrompt === undefined ? -1 : items.findIndex(item => item.id === firstPrompt.id)
     const latestInsertedIndex = firstUser === undefined || complete
       ? -1
       : [...items].findLastIndex(item => item.role === 'user' && item.id !== firstUser.id)
@@ -1536,7 +1539,7 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
     // anchor the task. Keep every visible tool/reasoning item in the fold and
     // show only the final answer at the first level; revealing the first tool
     // result as a fake task start makes long pages look like malformed output.
-    const middle = items.filter(item => (firstUser === undefined || item.id !== firstUser.id) && !visibleTailIds.has(item.id))
+    const middle = items.filter(item => (firstPrompt === undefined || item.id !== firstPrompt.id) && !visibleTailIds.has(item.id))
     if (visibleTailItems.length === 0) continue
     const collapsed = compactThinking && !expandedTasks.has(taskId) && middle.length > 0
     for (const item of items) {
@@ -1544,9 +1547,11 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
       const intermediate = middle.some(candidate => candidate.id === item.id)
       node?.classList.toggle('task-middle-hidden', collapsed && intermediate)
       node?.classList.toggle('task-intermediate', intermediate)
+      node?.classList.toggle('steering', item.inputKind === 'steering')
+      node?.classList.toggle('automation', item.inputKind === 'automation')
       if (item.role === 'user') {
         const role = node?.querySelector('.message-role-label')
-        if (role !== null && role !== undefined) role.textContent = item.id === firstUser?.id ? 'You' : 'You · Steer'
+        if (role !== null && role !== undefined) role.textContent = inputRoleLabel(item)
       }
     }
 
@@ -1571,13 +1576,15 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
     }
     const reasoning = middle.filter(item => item.role === 'reasoning').length
     const tools = middle.filter(item => item.role === 'tool').length
-    const inserted = middle.filter(item => item.role === 'user').length
+    const inserted = middle.filter(item => item.inputKind === 'steering').length
+    const automated = middle.filter(item => item.inputKind === 'automation').length
     const details = [
       interrupted ? 'stopped task' : items.some(item => item.taskComplete !== true) ? 'current task' : '',
       `${String(middle.length)} intermediate ${middle.length === 1 ? 'item' : 'items'}`,
       reasoning === 0 ? '' : `${String(reasoning)} reasoning`,
       tools === 0 ? '' : `${String(tools)} tools`,
       inserted === 0 ? '' : `${String(inserted)} inserted ${inserted === 1 ? 'message' : 'messages'}`,
+      automated === 0 ? '' : `${String(automated)} automated ${automated === 1 ? 'message' : 'messages'}`,
     ].filter(Boolean).join(' · ')
     const label = fold.querySelector('span')
     if (label !== null) label.textContent = `${collapsed ? 'Show' : 'Hide'} ${details}`
@@ -1603,7 +1610,7 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
         })
       }
       const wholeCollapsed = collapsedTasks.has(taskId)
-      const firstPreview = firstUser === undefined ? 'Earlier task context' : firstUser.text.replace(/\s+/gu, ' ').slice(0, 72)
+      const firstPreview = firstPrompt === undefined ? 'Earlier task context' : firstPrompt.text.replace(/\s+/gu, ' ').slice(0, 72)
       taskToggle.replaceChildren(svgIcon('chevron-down'), document.createTextNode(wholeCollapsed ? `Show task · ${firstPreview}` : 'Collapse entire task'))
       taskToggle.setAttribute('aria-expanded', String(!wholeCollapsed))
       taskToggle.querySelector('svg')?.classList.toggle('collapsed', wholeCollapsed)
@@ -1612,7 +1619,7 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
       const nodeById = new Map(items.map(item => [item.id, messageElements.get(item.id)] as const))
       const foldedNodes = middle.map(item => nodeById.get(item.id)).filter((node): node is HTMLElement => node !== undefined)
       const tailNodes = visibleTailItems.map(item => nodeById.get(item.id)).filter((node): node is HTMLElement => node !== undefined)
-      const firstNode = firstUser === undefined ? undefined : nodeById.get(firstUser.id)
+      const firstNode = firstPrompt === undefined ? undefined : nodeById.get(firstPrompt.id)
       group.replaceChildren(taskToggle, ...(firstNode === undefined ? [] : [firstNode]), fold, ...foldedNodes, ...tailNodes)
     }
   }
@@ -1700,7 +1707,7 @@ function pendingAreaSignature(approvals: WorkbenchSnapshot['approvals'], questio
 }
 
 function messageSignature(message: WorkbenchMessage): string {
-  return `${message.id}\u0000${message.seq ?? ''}\u0000${message.status ?? ''}\u0000${message.text.length}\u0000${message.textLength ?? ''}\u0000${message.title ?? ''}\u0000${message.taskInterrupted === true ? 'interrupted' : ''}\u0000${message.attachments === undefined ? '' : message.attachments.map(attachment => `${attachment.kind}:${attachment.label}:${attachment.image?.dataBase64?.length ?? ''}`).join(',')}`
+  return `${message.id}\u0000${message.seq ?? ''}\u0000${message.status ?? ''}\u0000${message.text.length}\u0000${message.textLength ?? ''}\u0000${message.title ?? ''}\u0000${message.inputKind ?? ''}\u0000${message.taskInterrupted === true ? 'interrupted' : ''}\u0000${message.attachments === undefined ? '' : message.attachments.map(attachment => `${attachment.kind}:${attachment.label}:${attachment.image?.dataBase64?.length ?? ''}`).join(',')}`
 }
 
 function renderMessage(message: WorkbenchMessage): HTMLElement {
@@ -1743,7 +1750,7 @@ function renderMessage(message: WorkbenchMessage): HTMLElement {
     return details
   }
   const article = document.createElement('article')
-  article.className = `message ${message.role}`
+  article.className = `message ${message.role}${message.inputKind === 'steering' ? ' steering' : message.inputKind === 'automation' ? ' automation' : ''}`
   article.dataset.messageId = message.id
   const head = buildMessageHead(message)
   article.append(head.head)
@@ -1757,6 +1764,10 @@ function renderMessage(message: WorkbenchMessage): HTMLElement {
 }
 
 function updateMessage(node: HTMLElement, message: WorkbenchMessage): void {
+  node.classList.toggle('steering', message.inputKind === 'steering')
+  node.classList.toggle('automation', message.inputKind === 'automation')
+  const role = node.querySelector('.message-role-label')
+  if (role !== null) role.textContent = inputRoleLabel(message)
   if (message.role === 'reasoning' || message.role === 'tool') {
     const details = node as HTMLDetailsElement
     const summary = details.querySelector('summary')
@@ -1805,9 +1816,9 @@ function buildMessageHead(message: WorkbenchMessage): { head: HTMLDivElement; to
   toggle.append(svgIcon('chevron-down'))
   const label = document.createElement('span')
   label.className = 'message-role-label'
-  label.textContent = roleLabel(message.role)
+  label.textContent = inputRoleLabel(message)
   head.append(toggle, label)
-  if (message.role === 'user' && message.text !== '') {
+  if (message.role === 'user' && message.inputKind !== 'automation' && message.text !== '') {
     const snapshot = state
     const active = snapshot?.sessions.find(session => session.id === snapshot.activeSessionId)
     const latestUserId = snapshot?.messages.filter(item => item.role === 'user').at(-1)?.id
@@ -1883,6 +1894,12 @@ function roleLabel(role: WorkbenchMessage['role']): string {
   if (role === 'system') return 'System'
   if (role === 'reasoning') return 'Reasoning'
   return 'Tool'
+}
+
+function inputRoleLabel(message: WorkbenchMessage): string {
+  if (message.role === 'user' && message.inputKind === 'steering') return 'You · Steer'
+  if (message.role === 'user' && message.inputKind === 'automation') return 'Agent · Goal'
+  return roleLabel(message.role)
 }
 
 function buildAttachmentsRow(attachments: readonly NonNullable<WorkbenchMessage['attachments']>[number][]): HTMLDivElement {

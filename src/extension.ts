@@ -414,7 +414,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export async function deactivate(): Promise<void> {
-  await activeController?.stop().catch(() => undefined)
+  // The RuntimeManager owns a process shared by all VS Code windows. Its
+  // dispose path releases this host and only stops the child when it is the
+  // final registered consumer; stopping the controller unconditionally here
+  // would kill a session still being used by another window.
   await activeController?.dispose()
   await activeRuntime?.dispose()
   activeController = undefined

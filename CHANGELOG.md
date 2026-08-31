@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [0.1.53] - 2026-08-31
+
+### Added
+
+- Preserved official Harness goal-round prompts as neutral `Agent · Goal` entries so long-running tasks remain understandable across days and restarts.
+- Added local extension-host registrations for shared Harness runtime leases, allowing multiple VS Code windows to keep one session controllable.
+
+### Fixed
+
+- Task folding no longer swallows later turns when a paginated or recovered history window is missing an earlier `turn/end` boundary.
+- Only messages durably claimed from Harness's `next-step` inbox are labeled `You · Steer`; ordinary follow-ups keep their normal user identity.
+- A disconnected shared runtime no longer leaves a stale Pause control or blocks sending in another VS Code window.
+- Surface replacement events used by compaction are excluded from the human transcript to prevent duplicate history rows.
+
 ## [0.1.52] - 2026-08-27
 
 ### Added
@@ -572,7 +586,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.52...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.53...HEAD
+[0.1.53]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.53
 [0.1.52]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.52
 [0.1.51]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.51
 [0.1.50]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.50

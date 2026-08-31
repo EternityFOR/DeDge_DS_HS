@@ -16,10 +16,13 @@ import type { RuntimeLaunch, RuntimeState } from './types.js'
 import {
   clearGatewayLease,
   defaultGatewayLeasePath,
+  hasLiveGatewayClients,
   isProcessRunning,
+  registerGatewayClient,
   readGatewayLease,
   tryAcquireGatewayStartupLock,
   writeGatewayLease,
+  type GatewayClientRegistration,
   type GatewayLease,
   type GatewayStartupLock,
   gatewayLeaseMatchesVersion,
@@ -37,6 +40,7 @@ export class RuntimeManager implements vscode.Disposable {
   private launchIdentity: string | undefined
   private readonly gatewayLease = defaultGatewayLeasePath()
   private ownedLeasePid: number | undefined
+  private clientRegistration: GatewayClientRegistration | undefined
   private attachedLeaseMonitor: ReturnType<typeof setInterval> | undefined
   private disposed = false
 
@@ -83,11 +87,12 @@ export class RuntimeManager implements vscode.Disposable {
 
   async dispose(): Promise<void> {
     this.disposed = true
-    // Stop first so an in-flight resolver cannot leave a child behind after
-    // the extension host has begun shutting down. startInternal checks the
-    // flag again immediately before spawning.
-    await this.stop()
     const pendingStart = this.startTask
+    // A Gateway can be shared by multiple VS Code windows. Release this
+    // extension host first; only terminate the process when no other host is
+    // still registered. This keeps an active session controllable after the
+    // window that started it is closed.
+    await this.stopForDispose()
     if (pendingStart !== undefined) await pendingStart.catch(() => undefined)
     this.changed.dispose()
   }
@@ -186,7 +191,7 @@ export class RuntimeManager implements vscode.Disposable {
           const windowsDetail = describeWindowsExitCode(code)
           const message = `Harness exited (code=${String(code)}, signal=${String(signal)}).${windowsDetail === undefined ? '' : ` ${windowsDetail}`}`
           if (!settled) settle(new Error(message))
-          else if (this.stateValue.phase !== 'stopping' && this.stateValue.phase !== 'idle') {
+          else if (!this.disposed && this.stateValue.phase !== 'stopping' && this.stateValue.phase !== 'idle') {
             this.logger.error(message)
             this.setState({ phase: 'error', version: launch.version, error: message })
           }
@@ -200,6 +205,7 @@ export class RuntimeManager implements vscode.Disposable {
             .catch(error => this.logger.error('Failed to publish the Harness gateway lease', error))
         }
         this.setState({ phase: 'ready', version: launch.version, url, ...(child.pid === undefined ? {} : { pid: child.pid }) })
+        await this.registerClient()
         return url
       } catch (error) {
         await terminateProcessTree(child).catch(cause => this.logger.error('Failed to clean up a failed runtime start', cause))
@@ -232,6 +238,32 @@ export class RuntimeManager implements vscode.Disposable {
     }
     this.ownedLeasePid = undefined
     this.setState({ phase: 'idle' })
+  }
+
+  private async stopForDispose(): Promise<void> {
+    await this.releaseClient()
+    if (await hasLiveGatewayClients(this.gatewayLease)) {
+      // Detach from a still-shared child. Its exit handler will clear the
+      // lease, but this disposed manager must not publish state afterwards.
+      this.stopAttachedLeaseMonitor()
+      this.child = undefined
+      this.ownedLeasePid = undefined
+      this.launchIdentity = undefined
+      return
+    }
+    // An attached manager has no ChildProcess handle. As the final consumer it
+    // still needs to terminate the recorded loopback process during shutdown.
+    if (this.child === undefined && this.stateValue.phase === 'ready' && this.stateValue.pid !== undefined) {
+      const pid = this.stateValue.pid
+      await terminateProcessId(pid).catch(error => this.logger.warn(`Could not stop shared Harness ${pid}: ${errorMessage(error)}`))
+      await clearGatewayLease(this.gatewayLease, pid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
+      this.setState({ phase: 'idle' })
+      return
+    }
+    // No other extension host is using this runtime. Reuse the normal process
+    // tree cleanup path so an orphaned bundled Harness cannot survive the last
+    // VS Code window.
+    await this.stopInternal()
   }
 
   private async waitForSharedRuntimeOrLock(timeoutMs: number): Promise<{ readonly lease: GatewayLease } | { readonly lock: GatewayStartupLock }> {
@@ -268,14 +300,38 @@ export class RuntimeManager implements vscode.Disposable {
     }
   }
 
-  private attachSharedRuntime(lease: GatewayLease): string {
+  private async attachSharedRuntime(lease: GatewayLease): Promise<string> {
     this.child = undefined
     this.ownedLeasePid = undefined
     this.launchIdentity = undefined
     this.setState({ phase: 'ready', version: lease.version, url: lease.url, pid: lease.pid })
     this.startAttachedLeaseMonitor(lease)
+    await this.registerClient()
     this.logger.info(`Attached to shared Harness ${lease.version} at ${lease.url}`)
     return lease.url
+  }
+
+  private async registerClient(): Promise<void> {
+    if (this.disposed || this.clientRegistration !== undefined) return
+    try {
+      const registration = await registerGatewayClient(this.gatewayLease)
+      if (this.disposed) {
+        await registration.release()
+        return
+      }
+      this.clientRegistration = registration
+    } catch (error) {
+      // Sharing is an optimization; failure to write the local marker should
+      // not prevent the runtime itself from starting.
+      this.logger.warn(`Could not register this VS Code host with the shared Harness runtime: ${errorMessage(error)}`)
+    }
+  }
+
+  private async releaseClient(): Promise<void> {
+    const registration = this.clientRegistration
+    this.clientRegistration = undefined
+    if (registration === undefined) return
+    await registration.release().catch(error => this.logger.warn(`Could not release the shared Harness client marker: ${errorMessage(error)}`))
   }
 
   private startAttachedLeaseMonitor(expected: GatewayLease): void {

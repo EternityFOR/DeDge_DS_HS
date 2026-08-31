@@ -37,6 +37,10 @@ export function autonomousQueueItems(snapshot: WorkbenchSnapshot): readonly Work
 
 /** True when Harness has work that can continue after the visible turn is idle. */
 export function hasAutonomousActivity(snapshot: WorkbenchSnapshot): boolean {
+  // An incomplete historical turn is not live control state while its Gateway
+  // is disconnected. Treating it as autonomous work leaves a stale Pause
+  // button in a second VS Code window after the shared runtime was replaced.
+  if (snapshot.phase !== 'connected' || snapshot.runtime.phase !== 'ready') return false
   if (hasActiveTurn(snapshot)) {
     const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
     if (active?.running !== true) return true
@@ -47,6 +51,7 @@ export function hasAutonomousActivity(snapshot: WorkbenchSnapshot): boolean {
 
 /** True for either an ordinary response or an autonomous/background task. */
 export function hasAgentActivity(snapshot: WorkbenchSnapshot): boolean {
+  if (snapshot.phase !== 'connected' || snapshot.runtime.phase !== 'ready') return false
   const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
   return active?.running === true || hasActiveTurn(snapshot) || hasAutonomousActivity(snapshot)
 }

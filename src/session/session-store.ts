@@ -61,6 +61,14 @@ export class SessionStore {
     this.jobs.clear()
   }
 
+  /** Clear transient projections when the shared runtime disappears. */
+  markRuntimeUnavailable(): void {
+    this.resetConnectionState()
+    for (const [sessionId, session] of this.sessions) {
+      if (session.running === true) this.sessions.set(sessionId, { ...session, running: false })
+    }
+  }
+
   clearPendingInteractions(): void {
     this.approvals.clear()
     this.questions.clear()
@@ -382,17 +390,26 @@ function conversationUnitCount(messages: readonly WorkbenchMessage[]): number {
 export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMessage[] {
   const output: WorkbenchMessage[] = []
   const interruptedTurns = new Set<string>()
+  const steeringMessageIds = collectSteeringMessageIds(entries)
   const streams = new Map<string, { id: string; role: 'assistant' | 'reasoning'; chunks: string[]; seq: number; time: number; turn: string }>()
   const toolIndexes = new Map<string, number>()
 
   for (const { event } of entries) {
     const data = isRecord(event.data) ? event.data : {}
     if (event.type === 'user/message') {
-      // Messages injected by plugins (system snapshots, tool notifications,
-      // command echoes) are not user turns: they would otherwise show as
-      // "You" and break turn folding boundaries.
+      // Compaction and other surface replacements are model-facing history
+      // operations, not a new human message. The official client only renders
+      // append-surface input nodes; older Harness versions omitted surfaceOp,
+      // so an absent marker remains backwards compatible here.
+      if (!isAppendSurfaceEvent(event)) continue
+      // Most plugin-generated context (system snapshots, tool notifications,
+      // command echoes) is not a conversation turn and stays out of this
+      // compact transcript. The official goal round is different: it is a
+      // durable follow-up turn whose prompt explains why an autonomous task
+      // resumed after a gap, so retain it with a neutral automation label.
       const source = isRecord(data.source) ? data.source : undefined
-      if (source !== undefined && source.kind !== 'user') continue
+      const automated = source?.kind === 'goal'
+      if (source !== undefined && source.kind !== 'user' && !automated) continue
       const rawText = contentText(data.content)
       const projected = projectUserPrompt(rawText)
       const attachments = [...projected.attachments, ...projectImageAttachments(data.content)]
@@ -401,6 +418,11 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
           id: `user:${event.seq}`,
           role: 'user',
           text: projected.text,
+          ...(automated
+            ? { inputKind: 'automation' as const }
+            : messageIdFromData(data) !== undefined && steeringMessageIds.has(messageIdFromData(data) as string)
+              ? { inputKind: 'steering' as const }
+              : {}),
           ...(attachments.length === 0 ? {} : { attachments }),
           seq: event.seq,
           time: event.time,
@@ -424,6 +446,7 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
       continue
     }
     if (event.type === 'assistant/message') {
+      if (!isAppendSurfaceEvent(event)) continue
       const message = isRecord(data.message) ? data.message : undefined
       const turnPrefix = `${String(data.turn)}:${String(data.step)}:`
       const interrupted = message?.interrupted === true || data.interrupted === true
@@ -476,6 +499,7 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
       continue
     }
     if (event.type === 'tool/result') {
+      if (!isAppendSurfaceEvent(event)) continue
       const message = isRecord(data.message) ? data.message : undefined
       const source = isRecord(message?.source) ? message.source : undefined
       const callId = typeof source?.callId === 'string' ? source.callId : undefined
@@ -522,6 +546,55 @@ function projectVerboseText(value: string, maxChars: number): { readonly text: s
   }
 }
 
+/**
+ * Replays the durable next-step inbox mutations used by Harness to distinguish
+ * a true steering prompt from an ordinary follow-up. This mirrors the official
+ * client projection and fails soft when an older/history-page payload is only a
+ * partial splice.
+ */
+function collectSteeringMessageIds(entries: readonly HistoryEntry[]): ReadonlySet<string> {
+  const pending: Record<'next-turn' | 'next-step', string[]> = { 'next-turn': [], 'next-step': [] }
+  const claimedNextStep = new Set<string>()
+  const sorted = [...entries].sort((left, right) => left.event.seq - right.event.seq)
+  for (const { event } of sorted) {
+    if (event.type !== 'agent/inbox/spliced' || !isRecord(event.data)) continue
+    const target = event.data.target === 'next-turn' || event.data.target === 'next-step' ? event.data.target : undefined
+    if (target === undefined) continue
+    const inbox = pending[target]
+    const start = safeSpliceStart(event.data.start, inbox.length)
+    const removedCount = safeSpliceCount(event.data.removedCount, inbox.length - start)
+    const inserted = Array.isArray(event.data.inserted)
+      ? event.data.inserted.map(message => isRecord(message) ? messageIdFromData(message) : undefined).filter((id): id is string => id !== undefined)
+      : []
+    const removed = inbox.splice(start, removedCount, ...inserted)
+    for (const id of inserted) claimedNextStep.delete(id)
+    if (target === 'next-step' && event.data.outcome !== 'canceled') {
+      for (const id of removed) claimedNextStep.add(id)
+    }
+  }
+  return claimedNextStep
+}
+
+function messageIdFromData(data: Record<string, unknown>): string | undefined {
+  const id = data.id
+  return typeof id === 'string' && id.trim() !== '' ? id : undefined
+}
+
+function safeSpliceStart(value: unknown, length: number): number {
+  if (!Number.isSafeInteger(value)) return 0
+  return Math.max(0, Math.min(Number(value), length))
+}
+
+function safeSpliceCount(value: unknown, maximum: number): number {
+  if (!Number.isSafeInteger(value)) return 0
+  return Math.max(0, Math.min(Number(value), maximum))
+}
+
+function isAppendSurfaceEvent(event: SessionEvent): boolean {
+  const marker = (event as SessionEvent & { readonly surfaceOp?: unknown }).surfaceOp
+  return marker === undefined || marker === 'append'
+}
+
 function annotateTaskGroups(messages: readonly WorkbenchMessage[], entries: readonly HistoryEntry[]): WorkbenchMessage[] {
   type TaskGroup = { readonly id: string; readonly turn?: string; readonly from: number; to: number; complete: boolean; interrupted: boolean }
   type TurnRange = { readonly turn: string; from: number; to: number; complete: boolean; interrupted: boolean; eventCount: number; hasWorkEvent: boolean; hasNonAssistantWork: boolean; stepKeys: string[] }
@@ -557,12 +630,32 @@ function annotateTaskGroups(messages: readonly WorkbenchMessage[], entries: read
         if (step !== undefined && !range.stepKeys.includes(step)) range.stepKeys.push(step)
       }
     }
+    // A paged/recovered history can omit a boundary marker. A change in the
+    // explicit turn coordinate is still enough to end the previous fold; keep
+    // the new turn from being treated as an inserted message in the old one.
+    if (active !== undefined && active.turn !== undefined && turn !== undefined && active.turn !== turn && event.type !== 'turn/start') {
+      active.to = Math.max(active.from, event.seq - 1)
+      active.complete = true
+      previousEnd = Math.max(previousEnd, active.to)
+      active = undefined
+    }
     if (event.type === 'turn/start') {
+      // A history window can omit the previous turn/end (for example after a
+      // restart or a page boundary). A later turn/start is an authoritative
+      // boundary; close the dangling group so its range cannot swallow all
+      // subsequent turns and make them appear as inserted/steered work.
+      if (active !== undefined && turn !== undefined && active.turn === turn) continue
+      if (active !== undefined) {
+        active.to = Math.max(active.from, event.seq - 1)
+        active.complete = true
+        previousEnd = Math.max(previousEnd, active.to)
+        active = undefined
+      }
       const id = turn === undefined ? `turn:${String(event.seq)}` : `turn:${turn}`
       active = { id, ...(turn === undefined ? {} : { turn }), from: previousEnd + 1, to: Number.MAX_SAFE_INTEGER, complete: false, interrupted: false }
       groups.push(active)
       if (turn !== undefined) explicitByTurn.set(turn, active)
-    } else if (event.type === 'turn/end' && active !== undefined) {
+    } else if (event.type === 'turn/end' && active !== undefined && (active.turn === undefined || turn === undefined || active.turn === turn)) {
       active.to = event.seq
       active.complete = true
       if (eventIndicatesInterruption(event)) active.interrupted = true
@@ -589,7 +682,7 @@ function annotateTaskGroups(messages: readonly WorkbenchMessage[], entries: read
     // A short, otherwise complete event slice can carry turn metadata without
     // being a truncated task. Only synthesize a group when the page visibly
     // starts in non-user work and contains enough work events to fold.
-    if (!range.hasWorkEvent || range.eventCount < 2 || (!range.hasNonAssistantWork && range.stepKeys.length < 2) || hasLeadingUserMessage(entries, range, syntheticRanges)) continue
+    if (!range.hasWorkEvent || range.eventCount < 2 || (!range.hasNonAssistantWork && range.stepKeys.length < 2 && !range.complete) || (!range.complete && hasLeadingUserMessage(entries, range, syntheticRanges))) continue
     const overlapsExplicit = groups.some(group => group.from <= range.to && group.to >= range.from)
     if (overlapsExplicit) continue
     groups.push({

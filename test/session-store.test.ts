@@ -61,6 +61,63 @@ describe('session event projection', () => {
     ])
   })
 
+  it('closes a dangling task when a later turn starts in a truncated history window', () => {
+    const messages = projectMessages([
+      entry('user/message', 1, { source: { kind: 'user' }, content: [{ type: 'text', text: 'Older prompt' }] }),
+      entry('turn/start', 2, { turn: 1 }),
+      entry('assistant/message', 3, { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'Older result' }] } }),
+      // The first turn/end is outside this loaded window. A new turn/start is
+      // still an authoritative boundary and must not be swallowed by turn 1.
+      entry('turn/start', 4, { turn: 2 }),
+      entry('user/message', 5, { source: { kind: 'user' }, content: [{ type: 'text', text: 'New prompt' }] }),
+      entry('assistant/message', 6, { turn: 2, step: 1, message: { content: [{ type: 'text', text: 'New result' }] } }),
+      entry('turn/end', 7, { turn: 2, reason: { kind: 'completed' } }),
+    ])
+
+    expect(messages.map(message => [message.text, message.taskId, message.taskComplete])).toEqual([
+      ['Older prompt', 'turn:1', true],
+      ['Older result', 'turn:1', true],
+      ['New prompt', 'turn:2', true],
+      ['New result', 'turn:2', true],
+    ])
+  })
+
+  it('marks only messages claimed from the next-step inbox as steering', () => {
+    const messages = projectMessages([
+      entry('agent/inbox/spliced', 1, { target: 'next-step', start: 0, inserted: [{ id: 'steer-1' }] }),
+      entry('turn/start', 2, { turn: 1 }),
+      entry('agent/inbox/spliced', 3, { target: 'next-step', start: 0, removedCount: 1, inserted: [] }),
+      entry('user/message', 4, { id: 'steer-1', source: { kind: 'user' }, content: [{ type: 'text', text: 'Steer now' }] }),
+      entry('user/message', 5, { id: 'ordinary-1', source: { kind: 'user' }, content: [{ type: 'text', text: 'Ordinary prompt' }] }),
+      entry('assistant/message', 6, { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'Result' }] } }),
+      entry('turn/end', 7, { turn: 1, reason: { kind: 'completed' } }),
+    ])
+
+    expect(messages.find(message => message.text === 'Steer now')).toMatchObject({ inputKind: 'steering' })
+    expect(messages.find(message => message.text === 'Ordinary prompt')).not.toHaveProperty('inputKind')
+  })
+
+  it('keeps autonomous goal-round prompts visible without presenting them as user steering', () => {
+    const messages = projectMessages([
+      entry('turn/start', 1, { turn: 1 }),
+      entry('user/message', 2, { source: { kind: 'user' }, content: [{ type: 'text', text: 'Start the long-running task.' }] }),
+      entry('assistant/message', 3, { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'Started.' }] } }),
+      entry('turn/end', 4, { turn: 1, reason: { kind: 'completed' } }),
+      entry('turn/start', 5, { turn: 2 }),
+      entry('user/message', 6, {
+        id: 'goal-round-1',
+        source: { kind: 'goal', goalId: 'goal-1', revision: 1, round: 3 },
+        content: [{ type: 'text', text: '<goal_round>Resume the long-running task.</goal_round>' }],
+      }),
+      entry('assistant/message', 7, { turn: 2, step: 1, message: { content: [{ type: 'text', text: 'Resumed.' }] } }),
+      entry('turn/end', 8, { turn: 2, reason: { kind: 'completed' } }),
+    ])
+
+    expect(messages.find(message => message.text.includes('Resume the long-running task.'))).toMatchObject({ inputKind: 'automation' })
+    expect(messages.filter(message => message.taskId === 'turn:1').map(message => message.text)).toEqual(['Start the long-running task.', 'Started.'])
+    expect(messages.filter(message => message.taskId === 'turn:2').map(message => message.text)).toEqual(['<goal_round>Resume the long-running task.</goal_round>', 'Resumed.'])
+  })
+
   it('recovers a foldable task when a history page starts inside a turn', () => {
     const messages = projectMessages([
       entry('assistant/chunk', 100, { turn: 9, step: 4, chunk: { type: 'reasoning-delta', index: 0, text: 'Continue' } }),

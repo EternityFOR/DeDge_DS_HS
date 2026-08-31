@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   clearGatewayLease,
   defaultGatewayLeasePath,
+  hasLiveGatewayClients,
+  registerGatewayClient,
   readGatewayLease,
   tryAcquireGatewayStartupLock,
   writeGatewayLease,
@@ -99,5 +101,29 @@ describe('Harness gateway lease', () => {
     await expect(tryAcquireGatewayStartupLock(target, 303, pid => pid === 202)).resolves.toBeUndefined()
     await replacement?.release()
     await expect(tryAcquireGatewayStartupLock(target, 303, () => false)).resolves.toBeDefined()
+  })
+
+  it('keeps a shared runtime alive while another extension host is registered', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'dedge-dsh-lease-'))
+    temporaryDirectories.push(directory)
+    const target = path.join(directory, 'gateway-lease.json')
+    const first = await registerGatewayClient(target, 101)
+    const second = await registerGatewayClient(target, 202)
+
+    await expect(hasLiveGatewayClients(target, 101, pid => pid === 101 || pid === 202)).resolves.toBe(true)
+    await first.release()
+    await expect(hasLiveGatewayClients(target, 999, pid => pid === 202)).resolves.toBe(true)
+    await second.release()
+    await expect(hasLiveGatewayClients(target, 999, pid => pid === 202)).resolves.toBe(false)
+  })
+
+  it('removes registrations for extension hosts that no longer exist', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'dedge-dsh-lease-'))
+    temporaryDirectories.push(directory)
+    const target = path.join(directory, 'gateway-lease.json')
+    const stale = await registerGatewayClient(target, 303)
+
+    await expect(hasLiveGatewayClients(target, 999, () => false)).resolves.toBe(false)
+    await stale.release()
   })
 })

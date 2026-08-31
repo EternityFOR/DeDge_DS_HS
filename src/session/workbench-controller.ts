@@ -69,6 +69,15 @@ export class WorkbenchController implements vscode.Disposable {
     if (Array.isArray(deleted)) for (const id of deleted) this.deletedSessions.add(id)
     this.runtimeSubscription = runtime.onDidChangeState(state => {
       this.store.setRuntime(state)
+      if (state.phase === 'idle' || state.phase === 'error') {
+        // A shared runtime may have been stopped by another VS Code window.
+        // Drop the dead Gateway and transient activity projections so this
+        // window cannot expose a pause button or keep the composer blocked by
+        // stale state from the old process.
+        this.gateway?.dispose()
+        this.gateway = undefined
+        this.store.markRuntimeUnavailable()
+      }
       this.publish()
     })
     this.configurationSubscription = configuration.onDidChange(next => {
@@ -167,7 +176,7 @@ export class WorkbenchController implements vscode.Disposable {
     if (active.operation !== undefined) throw new Error('Wait for the current session operation to finish.')
 
     const transcript = snapshot.messages
-      .filter(message => message.role === 'user' || message.role === 'assistant')
+      .filter(message => message.role === 'assistant' || (message.role === 'user' && message.inputKind !== 'automation'))
       .map(message => `${message.role === 'user' ? 'User' : 'Assistant'}:\n${message.text}`)
       .join('\n\n')
     const maxBytes = this.configuration.get().handoffMaxBytes
@@ -361,6 +370,7 @@ export class WorkbenchController implements vscode.Disposable {
   }
 
   cancel(): Promise<void> {
+    if (this.runtime.state.phase !== 'ready' || this.gateway === undefined) return Promise.resolve()
     const snapshot = this.store.snapshot()
     const sessionId = snapshot.activeSessionId
     if (sessionId === undefined) return Promise.resolve()
@@ -908,7 +918,7 @@ export class WorkbenchController implements vscode.Disposable {
     const session = snapshot.sessions.find(item => item.id === sessionId)
     if (session === undefined || snapshot.activeSessionId !== sessionId || !isPlaceholderSessionTitle(session.title)) return
     const transcript = snapshot.messages
-      .filter(message => message.role === 'user' || message.role === 'assistant')
+      .filter(message => message.role === 'assistant' || (message.role === 'user' && message.inputKind !== 'automation'))
       .map(message => `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.text}`)
       .join('\n')
       .slice(0, 6_000)

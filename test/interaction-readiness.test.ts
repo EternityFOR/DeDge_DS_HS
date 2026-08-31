@@ -94,6 +94,16 @@ describe('workbench interaction readiness', () => {
     expect(hasAutonomousActivity(userQueue)).toBe(false)
   })
 
+  it('does not expose stale autonomous controls while the shared runtime is offline', () => {
+    const disconnected = snapshot({
+      runtime: { phase: 'idle' },
+      messages: [{ id: 'task-1', role: 'assistant', text: 'Last visible output', taskId: 'turn:1', taskComplete: false }],
+      jobs: [{ id: 'job-1', kind: 'goal', label: 'Goal', status: 'running' }],
+    })
+    expect(hasAutonomousActivity(disconnected)).toBe(false)
+    expect(hasAgentActivity(disconnected)).toBe(false)
+  })
+
   it('keeps model controls available when the current model is not routable', () => {
     const unavailable = snapshot({ modelCatalog: { current: { provider: 'deepseek-official', model: 'missing' }, groups: [], failures: [], routable: false } })
     expect(promptUnavailableReason(unavailable)).toContain('available model')

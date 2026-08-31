@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import * as path from 'node:path'
 
@@ -11,6 +11,13 @@ export interface GatewayLease {
 }
 
 export interface GatewayStartupLock {
+  readonly release: () => Promise<void>
+}
+
+/** A short-lived VS Code extension-host registration for a shared runtime. */
+export interface GatewayClientRegistration {
+  readonly pid: number
+  readonly nonce: string
   readonly release: () => Promise<void>
 }
 
@@ -50,6 +57,69 @@ export async function clearGatewayLease(target: string, ownerPid: number): Promi
   }
   if (!isRecord(current) || current.pid !== ownerPid) return
   await rm(target, { force: true })
+}
+
+/**
+ * Register one extension host as a consumer of the shared Gateway. The marker
+ * contains only a process id and random nonce; it never carries workspace data
+ * or credentials. Process liveness lets another window clean up a crashed host
+ * without requiring a shutdown callback.
+ */
+export async function registerGatewayClient(leasePath: string, ownerPid = process.pid): Promise<GatewayClientRegistration> {
+  const directory = gatewayClientDirectory(leasePath)
+  const nonce = randomUUID()
+  const target = path.join(directory, `${String(ownerPid)}-${nonce}.json`)
+  await mkdir(directory, { recursive: true })
+  const temporary = `${target}.tmp-${process.pid}`
+  await writeFile(temporary, `${JSON.stringify({ pid: ownerPid, nonce, at: Date.now() })}\n`, 'utf8')
+  await rename(temporary, target)
+  return {
+    pid: ownerPid,
+    nonce,
+    release: async () => {
+      await rm(target, { force: true })
+    },
+  }
+}
+
+/**
+ * Return whether another live extension host still consumes the shared
+ * runtime. Stale markers are removed opportunistically.
+ */
+export async function hasLiveGatewayClients(
+  leasePath: string,
+  excludePid = process.pid,
+  processProbe: (pid: number) => boolean = isProcessRunning,
+): Promise<boolean> {
+  const directory = gatewayClientDirectory(leasePath)
+  let entries: string[]
+  try {
+    entries = await readdir(directory)
+  } catch {
+    return false
+  }
+  let live = false
+  await Promise.all(entries.map(async name => {
+    if (!name.endsWith('.json')) return
+    const target = path.join(directory, name)
+    let pid: number | undefined
+    try {
+      const value: unknown = JSON.parse(await readFile(target, 'utf8'))
+      if (isRecord(value) && Number.isSafeInteger(value.pid) && Number(value.pid) > 0) pid = Number(value.pid)
+    } catch {
+      // A partially-written or removed marker is stale by definition.
+    }
+    if (pid === undefined || !processProbe(pid)) {
+      await rm(target, { force: true }).catch(() => undefined)
+      return
+    }
+    if (pid !== excludePid) live = true
+  }))
+  return live
+}
+
+export function gatewayClientDirectory(leasePath: string): string {
+  return `${leasePath}.clients`
 }
 
 export async function tryAcquireGatewayStartupLock(

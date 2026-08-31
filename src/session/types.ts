@@ -33,6 +33,8 @@ export interface WorkbenchMessage {
   readonly id: string
   readonly role: 'user' | 'assistant' | 'reasoning' | 'tool' | 'system'
   readonly text: string
+  /** Durable input classification. Absent means an ordinary user prompt. */
+  readonly inputKind?: 'steering' | 'automation'
   readonly textLength?: number
   readonly attachments?: readonly WorkbenchMessageAttachment[]
   readonly title?: string

@@ -745,6 +745,9 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
      .message.user .message-attachments { justify-content: flex-end; }
     .message.user.task-intermediate { width: 76%; max-width: 76%; margin-top: 5px; margin-bottom: 5px; padding: 6px 8px; border-color: color-mix(in srgb, var(--vscode-charts-blue) 28%, var(--vscode-panel-border)); background: color-mix(in srgb, var(--vscode-charts-blue) 4%, var(--vscode-sideBar-background)); font-size: 11px; }
     .message.user.task-intermediate .message-role-label { font-size: 9px; opacity: .82; }
+    .message.user.automation { width: 88%; max-width: 88%; margin-left: 8%; margin-right: 0; border-color: color-mix(in srgb, var(--vscode-charts-yellow) 42%, var(--vscode-panel-border)); background: color-mix(in srgb, var(--vscode-charts-yellow) 5%, var(--vscode-sideBar-background)); }
+    .message.user.automation .message-head { justify-content: flex-start; }
+    .message.user.automation .message-role-label { color: var(--vscode-charts-yellow); }
     .message-actions { display: inline-flex; align-items: center; gap: 2px; margin-left: 4px; }
     .message-action { display: inline-flex; align-items: center; gap: 3px; min-height: 20px; padding: 1px 4px; border: 0; border-radius: 3px; background: transparent; color: var(--vscode-descriptionForeground); font: 10px/1 var(--vscode-font-family); cursor: pointer; }
     .message-action:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
