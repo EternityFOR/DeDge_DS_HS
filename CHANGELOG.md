@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [0.1.55] - 2026-08-31
+
+### Added
+
+- Added a persistent `Auto-fold running task` switch, disabled by default so live Harness output grows one message at a time like Codex.
+
+### Changed
+
+- Top-level fold and expand controls now target only the active running task; completed and stopped history is left open unless folded manually.
+- Streaming reasoning and tool details open incrementally by default, while the opt-in running-task policy keeps them compact during long work.
+
 ## [0.1.54] - 2026-08-31
 
 ### Added
@@ -597,7 +608,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.54...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.55...HEAD
+[0.1.55]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.55
 [0.1.54]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.54
 [0.1.53]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.53
 [0.1.52]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.52

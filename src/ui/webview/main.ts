@@ -120,10 +120,11 @@ let stickToBottom = true
 const collapsedMessages = new Set<string>()
 const expandedTasks = new Set<string>()
 const collapsedTasks = new Set<string>()
+const collapsedDetailTasks = new Set<string>()
 const knownTaskIds = new Set<string>()
 const taskCompletion = new Map<string, boolean>()
 const taskInterruption = new Map<string, boolean>()
-let compactThinking = true
+let autoFoldRunningTasks = false
 let skillCatalog: readonly SkillSummary[] = []
 let skillPopoverVisible = false
 let skillHighlight = 0
@@ -214,7 +215,7 @@ const elements = {
   statusDot: required('status-dot'),
   statusText: required('status-text'),
   skillPopover: required('skill-popover'),
-  compactThinkingButton: requiredButton('compact-thinking'),
+  autoFoldRunning: requiredButton('auto-fold-running'),
   steerNotice: required('steer-notice'),
   steerNoticeText: required('steer-notice-text'),
   steerNoticeClose: requiredButton('steer-notice-close'),
@@ -247,10 +248,10 @@ if (typeof persistedWebviewState === 'object' && persistedWebviewState !== null 
   elements.prompt.value = persistedWebviewState.draft
   resizePrompt()
 }
-if (typeof persistedWebviewState === 'object' && persistedWebviewState !== null && 'compactThinking' in persistedWebviewState && persistedWebviewState.compactThinking === false) {
-  compactThinking = false
+if (typeof persistedWebviewState === 'object' && persistedWebviewState !== null && 'autoFoldRunningTasks' in persistedWebviewState && persistedWebviewState.autoFoldRunningTasks === true) {
+  autoFoldRunningTasks = true
 }
-applyCompactThinkingButton()
+applyAutoFoldButton()
 
 const popovers = [
   popover('attach-menu', 'attach-popover'),
@@ -319,40 +320,33 @@ window.addEventListener('keydown', event => {
   if (event.key === 'Escape' && !elements.settingsDialog.classList.contains('hidden')) closeSettings()
 })
 
-elements.compactThinkingButton.addEventListener('click', () => {
-  const taskIds = new Set(state?.messages.flatMap(message => message.taskId === undefined ? [] : [message.taskId]) ?? [])
-  const collapseAll = [...taskIds].some(taskId => !collapsedTasks.has(taskId))
-  compactThinking = true
-  expandedTasks.clear()
-  collapsedMessages.clear()
-  if (collapseAll) {
-    for (const taskId of taskIds) collapsedTasks.add(taskId)
-    for (const [id, node] of messageElements) {
-      if (node instanceof HTMLDetailsElement) node.open = false
-      autoOpenedDetails.delete(id)
-    }
-  } else {
-    for (const taskId of taskIds) collapsedTasks.delete(taskId)
-  }
-  applyCompactThinkingButton()
+elements.autoFoldRunning.addEventListener('click', () => {
+  autoFoldRunningTasks = !autoFoldRunningTasks
+  // A manual expansion should not be lost when the user changes the policy.
+  collapsedDetailTasks.clear()
   const persisted = vscode.getState()
-  vscode.setState({ ...(typeof persisted === 'object' && persisted !== null ? persisted : {}), compactThinking })
+  vscode.setState({ ...(typeof persisted === 'object' && persisted !== null ? persisted : {}), autoFoldRunningTasks })
+  applyAutoFoldButton()
   if (state !== undefined) renderConversation(state)
 })
 
 function setTaskFolding(mode: 'collapse' | 'expand'): void {
-  const taskIds = new Set(state?.messages.flatMap(message => message.taskId === undefined ? [] : [message.taskId]) ?? [])
-  compactThinking = true
-  expandedTasks.clear()
-  collapsedMessages.clear()
+  const taskIds = new Set(state?.messages
+    .filter(message => message.taskId !== undefined && message.taskInterrupted !== true && message.taskComplete !== true)
+    .map(message => message.taskId as string) ?? [])
   if (mode === 'collapse') {
-    for (const taskId of taskIds) collapsedTasks.add(taskId)
+    for (const taskId of taskIds) {
+      collapsedDetailTasks.add(taskId)
+      expandedTasks.delete(taskId)
+    }
   } else {
-    collapsedTasks.clear()
+    for (const taskId of taskIds) {
+      collapsedDetailTasks.delete(taskId)
+      collapsedTasks.delete(taskId)
+      expandedTasks.add(taskId)
+    }
   }
-  applyCompactThinkingButton()
-  const persisted = vscode.getState()
-  vscode.setState({ ...(typeof persisted === 'object' && persisted !== null ? persisted : {}), compactThinking })
+  applyAutoFoldButton()
   if (state !== undefined) renderConversation(state)
 }
 
@@ -728,6 +722,7 @@ function stepConversationSearch(direction: number): void {
 function expandSearchTask(taskId: string): void {
   const group = taskGroupElements.get(taskId)
   if (group === undefined) return
+  collapsedDetailTasks.delete(taskId)
   group.querySelectorAll<HTMLElement>('.task-middle-hidden, .task-all-hidden').forEach(node => {
     node.classList.remove('task-middle-hidden', 'task-all-hidden')
   })
@@ -1235,6 +1230,7 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     collapsedMessages.clear()
     expandedTasks.clear()
     collapsedTasks.clear()
+    collapsedDetailTasks.clear()
     knownTaskIds.clear()
     taskCompletion.clear()
     taskInterruption.clear()
@@ -1289,6 +1285,7 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     taskCompletion.delete(taskId)
     taskInterruption.delete(taskId)
     collapsedTasks.delete(taskId)
+    collapsedDetailTasks.delete(taskId)
     expandedTasks.delete(taskId)
   }
   const seen = new Set<string>()
@@ -1356,7 +1353,7 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     const conversation = elements.conversation
     conversation.scrollTop = Math.max(0, conversation.scrollHeight - conversation.clientHeight)
   }
-  applyCompactThinkingButton()
+  applyAutoFoldButton()
   updateScrollBottomButton()
 }
 
@@ -1504,18 +1501,16 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
     const wasInterrupted = taskInterruption.get(taskId) === true
     if (!knownTaskIds.has(taskId)) {
       knownTaskIds.add(taskId)
-      collapsedTasks.add(taskId)
     } else if (interrupted && !wasInterrupted) {
-      // A user stop is a settled task, but it must remain compact. This is
-      // deliberately a transition: a later render must not undo a manual
-      // expansion of the interrupted task.
-      collapsedTasks.add(taskId)
-      expandedTasks.delete(taskId)
+      // A user stop settles the task. Do not apply the running-task folding
+      // policy to it or hide its completed output on the next render.
+      collapsedDetailTasks.delete(taskId)
     } else if (!interrupted && taskCompletion.get(taskId) === false && complete) {
       // A live turn just finished: reveal its first-level task shell and final
-      // answer while keeping nested reasoning, tool, and Vision details folded.
+      // answer. Automatic folding applies to running tasks only.
       collapsedTasks.delete(taskId)
       expandedTasks.delete(taskId)
+      collapsedDetailTasks.delete(taskId)
     }
     taskCompletion.set(taskId, complete)
     taskInterruption.set(taskId, interrupted)
@@ -1541,7 +1536,8 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
     // result as a fake task start makes long pages look like malformed output.
     const middle = items.filter(item => (firstPrompt === undefined || item.id !== firstPrompt.id) && !visibleTailIds.has(item.id))
     if (visibleTailItems.length === 0) continue
-    const collapsed = compactThinking && !expandedTasks.has(taskId) && middle.length > 0
+    const running = !complete && !interrupted
+    const collapsed = middle.length > 0 && !expandedTasks.has(taskId) && (collapsedDetailTasks.has(taskId) || (autoFoldRunningTasks && running))
     for (const item of items) {
       const node = messageElements.get(item.id)
       const intermediate = middle.some(candidate => candidate.id === item.id)
@@ -1562,8 +1558,18 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
       fold.className = 'task-fold-summary'
       fold.append(svgIcon('chevron-down'), document.createElement('span'))
       fold.addEventListener('click', () => {
-        if (expandedTasks.has(taskId)) expandedTasks.delete(taskId)
-        else expandedTasks.add(taskId)
+        const taskMessages = state?.messages.filter(message => message.taskId === taskId) ?? []
+        const taskComplete = taskMessages.every(message => message.taskComplete === true)
+        const taskInterrupted = taskMessages.some(message => message.taskInterrupted === true)
+        const middleExists = taskMessages.length > 1
+        const isCollapsed = middleExists && !expandedTasks.has(taskId) && (collapsedDetailTasks.has(taskId) || (autoFoldRunningTasks && !taskComplete && !taskInterrupted))
+        if (isCollapsed) {
+          collapsedDetailTasks.delete(taskId)
+          expandedTasks.add(taskId)
+        } else {
+          collapsedDetailTasks.add(taskId)
+          expandedTasks.delete(taskId)
+        }
         if (state !== undefined) renderConversation(state)
       })
       taskFoldElements.set(taskId, fold)
@@ -1658,20 +1664,18 @@ function updateScrollBottomButton(): void {
   scrollBottomButton.classList.toggle('hidden', !away)
 }
 
-function applyCompactThinkingButton(): void {
-  const taskIds = new Set(state?.messages.flatMap(message => message.taskId === undefined ? [] : [message.taskId]) ?? [])
-  const allCollapsed = taskIds.size > 0 && [...taskIds].every(taskId => collapsedTasks.has(taskId))
-  elements.compactThinkingButton.classList.toggle('active', allCollapsed)
-  elements.compactThinkingButton.setAttribute('aria-pressed', String(allCollapsed))
-  elements.compactThinkingButton.title = allCollapsed
-    ? 'Expand tasks to the first level; nested process, Vision, reasoning, and tool details stay collapsed'
-    : 'Recursively collapse every task and nested detail'
-  elements.compactThinkingButton.setAttribute('aria-label', elements.compactThinkingButton.title)
+function applyAutoFoldButton(): void {
+  elements.autoFoldRunning.classList.toggle('active', autoFoldRunningTasks)
+  elements.autoFoldRunning.setAttribute('aria-pressed', String(autoFoldRunningTasks))
+  elements.autoFoldRunning.title = autoFoldRunningTasks
+    ? 'Auto-fold running task: reasoning and tool details stay compact while it runs; completed tasks remain open'
+    : 'Auto-fold running task is off: live messages appear one by one as they arrive'
+  elements.autoFoldRunning.setAttribute('aria-label', elements.autoFoldRunning.title)
 }
 
 function detailSummaryText(message: WorkbenchMessage): string {
   const base = message.role === 'reasoning' ? 'Reasoning' : message.title ?? 'Tool'
-  if (!compactThinking || message.text === '') return base
+  if (message.text === '') return base
   return `${base} · ${formatChars(message.textLength ?? message.text.length)}`
 }
 
@@ -1715,7 +1719,7 @@ function renderMessage(message: WorkbenchMessage): HTMLElement {
     const details = document.createElement('details')
     details.className = `message ${message.role}`
     details.dataset.messageId = message.id
-    if (message.status === 'streaming' && !userToggledDetails.has(message.id) && !compactThinking) {
+    if (message.status === 'streaming' && !userToggledDetails.has(message.id)) {
       details.open = true
       autoOpenedDetails.add(message.id)
     }
@@ -1779,12 +1783,12 @@ function updateMessage(node: HTMLElement, message: WorkbenchMessage): void {
       else body.replaceChildren()
     }
     if (message.status === 'streaming') {
-      if (!userToggledDetails.has(message.id) && !compactThinking) {
+      if (!userToggledDetails.has(message.id)) {
         details.open = true
         autoOpenedDetails.add(message.id)
       }
     } else {
-      if (autoOpenedDetails.has(message.id) && !userToggledDetails.has(message.id) && !compactThinking) details.open = false
+      if (autoOpenedDetails.has(message.id) && !userToggledDetails.has(message.id)) details.open = false
       autoOpenedDetails.delete(message.id)
     }
     return
