@@ -35,6 +35,8 @@ export interface WorkbenchMessage {
   readonly text: string
   /** Durable input classification. Absent means an ordinary user prompt. */
   readonly inputKind?: 'steering' | 'automation'
+  /** Automation source shown when inputKind is automation. */
+  readonly automationKind?: 'goal' | 'schedule'
   readonly textLength?: number
   readonly attachments?: readonly WorkbenchMessageAttachment[]
   readonly title?: string

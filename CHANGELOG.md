@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [0.1.54] - 2026-08-31
+
+### Added
+
+- Scheduled Harness follow-ups are shown as `Agent · Schedule`, alongside the existing `Agent · Goal` classification, so cross-day automation is distinguishable from user steering.
+
+### Fixed
+
+- Interrupted/stopped historical tasks no longer count as active turns after restart; stale Pause controls disappear and the composer is no longer blocked by settled output.
+- Runtime readiness checks and cancellation paths now agree about interrupted task state, preventing no-op pause clicks caused by historical `taskComplete` projections.
+
 ## [0.1.53] - 2026-08-31
 
 ### Added
@@ -586,7 +597,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.53...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.54...HEAD
+[0.1.54]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.54
 [0.1.53]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.53
 [0.1.52]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.52
 [0.1.51]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.51

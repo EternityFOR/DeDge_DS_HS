@@ -80,6 +80,15 @@ describe('workbench interaction readiness', () => {
     expect(modelControlsUnavailableReason(waiting)).toContain('agent task')
   })
 
+  it('treats interrupted historical output as settled after a restart', () => {
+    const stopped = snapshot({
+      messages: [{ id: 'task-1', role: 'assistant', text: 'Stopped output.', taskId: 'turn:1', taskComplete: false, taskInterrupted: true }],
+    })
+    expect(hasActiveTurn(stopped)).toBe(false)
+    expect(hasAutonomousActivity(stopped)).toBe(false)
+    expect(hasAgentActivity(stopped)).toBe(false)
+  })
+
   it('recognizes official queue and background-job frames while session status is idle', () => {
     const queue = snapshot({ queueItems: [{ id: 'agent-1', placement: 'queued', sourceKind: 'plugin' }] })
     expect(hasAutonomousActivity(queue)).toBe(true)

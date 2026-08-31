@@ -27,7 +27,7 @@ export function steerAvailable(snapshot: WorkbenchSnapshot): boolean {
 
 /** True while the projected conversation still contains an unfinished Harness turn. */
 export function hasActiveTurn(snapshot: WorkbenchSnapshot): boolean {
-  return snapshot.messages.some(message => message.status === 'streaming' || message.taskComplete === false)
+  return snapshot.messages.some(message => message.taskInterrupted !== true && (message.status === 'streaming' || message.taskComplete === false))
 }
 
 /** Queue items owned by Harness plugins/agents rather than the user composer. */

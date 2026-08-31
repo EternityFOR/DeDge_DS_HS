@@ -408,7 +408,12 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
       // durable follow-up turn whose prompt explains why an autonomous task
       // resumed after a gap, so retain it with a neutral automation label.
       const source = isRecord(data.source) ? data.source : undefined
-      const automated = source?.kind === 'goal'
+      const automationKind = source?.kind === 'goal'
+        ? 'goal' as const
+        : source?.kind === 'plugin' && source.plugin === 'schedule'
+          ? 'schedule' as const
+          : undefined
+      const automated = automationKind !== undefined
       if (source !== undefined && source.kind !== 'user' && !automated) continue
       const rawText = contentText(data.content)
       const projected = projectUserPrompt(rawText)
@@ -419,7 +424,7 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
           role: 'user',
           text: projected.text,
           ...(automated
-            ? { inputKind: 'automation' as const }
+            ? { inputKind: 'automation' as const, automationKind }
             : messageIdFromData(data) !== undefined && steeringMessageIds.has(messageIdFromData(data) as string)
               ? { inputKind: 'steering' as const }
               : {}),

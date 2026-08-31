@@ -118,6 +118,17 @@ describe('session event projection', () => {
     expect(messages.filter(message => message.taskId === 'turn:2').map(message => message.text)).toEqual(['<goal_round>Resume the long-running task.</goal_round>', 'Resumed.'])
   })
 
+  it('keeps scheduled follow-up prompts separate from human and steering messages', () => {
+    const messages = projectMessages([
+      entry('turn/start', 1, { turn: 1 }),
+      entry('user/message', 2, { id: 'scheduled-1', source: { kind: 'plugin', plugin: 'schedule' }, content: [{ type: 'text', text: 'Run the scheduled market check.' }] }),
+      entry('assistant/message', 3, { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'Scheduled result.' }] } }),
+      entry('turn/end', 4, { turn: 1, reason: { kind: 'completed' } }),
+    ])
+
+    expect(messages[0]).toMatchObject({ inputKind: 'automation', automationKind: 'schedule', taskId: 'turn:1' })
+  })
+
   it('recovers a foldable task when a history page starts inside a turn', () => {
     const messages = projectMessages([
       entry('assistant/chunk', 100, { turn: 9, step: 4, chunk: { type: 'reasoning-delta', index: 0, text: 'Continue' } }),

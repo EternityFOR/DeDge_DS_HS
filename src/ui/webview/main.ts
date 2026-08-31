@@ -1707,7 +1707,7 @@ function pendingAreaSignature(approvals: WorkbenchSnapshot['approvals'], questio
 }
 
 function messageSignature(message: WorkbenchMessage): string {
-  return `${message.id}\u0000${message.seq ?? ''}\u0000${message.status ?? ''}\u0000${message.text.length}\u0000${message.textLength ?? ''}\u0000${message.title ?? ''}\u0000${message.inputKind ?? ''}\u0000${message.taskInterrupted === true ? 'interrupted' : ''}\u0000${message.attachments === undefined ? '' : message.attachments.map(attachment => `${attachment.kind}:${attachment.label}:${attachment.image?.dataBase64?.length ?? ''}`).join(',')}`
+  return `${message.id}\u0000${message.seq ?? ''}\u0000${message.status ?? ''}\u0000${message.text.length}\u0000${message.textLength ?? ''}\u0000${message.title ?? ''}\u0000${message.inputKind ?? ''}\u0000${message.automationKind ?? ''}\u0000${message.taskInterrupted === true ? 'interrupted' : ''}\u0000${message.attachments === undefined ? '' : message.attachments.map(attachment => `${attachment.kind}:${attachment.label}:${attachment.image?.dataBase64?.length ?? ''}`).join(',')}`
 }
 
 function renderMessage(message: WorkbenchMessage): HTMLElement {
@@ -1898,7 +1898,7 @@ function roleLabel(role: WorkbenchMessage['role']): string {
 
 function inputRoleLabel(message: WorkbenchMessage): string {
   if (message.role === 'user' && message.inputKind === 'steering') return 'You · Steer'
-  if (message.role === 'user' && message.inputKind === 'automation') return 'Agent · Goal'
+  if (message.role === 'user' && message.inputKind === 'automation') return message.automationKind === 'schedule' ? 'Agent · Schedule' : 'Agent · Goal'
   return roleLabel(message.role)
 }
 
