@@ -1,5 +1,4 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
 import { cp, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import * as vscode from 'vscode'
@@ -29,7 +28,9 @@ import {
 } from './gateway-lease.js'
 import { checkWindowsCompatibility, describeWindowsExitCode } from './windows-compat.js'
 
-const URL_PATTERN = /dsh web:\s+(http:\/\/127\.0\.0\.1:\d+)/u
+// alpha.3 prints an authenticated root URL (`/?token=...`); keep the token
+// because the Gateway exchanges it for the API session cookie.
+const URL_PATTERN = /dsh web:\s+(http:\/\/127\.0\.0\.1:\d+(?:[/?][^\s()]*)?)/u
 
 export class RuntimeManager implements vscode.Disposable {
   private readonly changed = new vscode.EventEmitter<RuntimeState>()
@@ -307,7 +308,7 @@ export class RuntimeManager implements vscode.Disposable {
     this.setState({ phase: 'ready', version: lease.version, url: lease.url, pid: lease.pid })
     this.startAttachedLeaseMonitor(lease)
     await this.registerClient()
-    this.logger.info(`Attached to shared Harness ${lease.version} at ${lease.url}`)
+    this.logger.info(`Attached to shared Harness ${lease.version} on loopback port ${new URL(lease.url).port}`)
     return lease.url
   }
 
@@ -381,13 +382,17 @@ function workspaceDirectory(): string {
 
 async function probeGateway(baseUrl: string): Promise<boolean> {
   try {
-    const response = await fetch(new URL('/api/host.describe', baseUrl), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ type: 'client-request', rpcId: randomUUID(), method: 'host.describe', payload: {} }),
+    const endpoint = new URL(baseUrl)
+    endpoint.pathname = '/'
+    endpoint.hash = ''
+    const response = await fetch(endpoint, {
+      method: 'GET',
+      redirect: 'manual',
       signal: AbortSignal.timeout(2_000),
     })
-    return response.ok
+    // alpha.3 returns 303 after accepting the process token. Older compatible
+    // external runtimes may serve the index directly with a 2xx response.
+    return response.status === 303 || response.ok
   } catch {
     return false
   }

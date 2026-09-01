@@ -4,7 +4,7 @@
 
 本扩展选择原生 VS Code UI 加 DeepSeek Harness HTTP/WebSocket Gateway，而不是嵌入 Harness Web 页面或把 ACP 当成完整后端。Gateway 能提供会话历史、流式事件、工具状态、审批、问题、取消和模型控制；当前 ACP 接口不足以还原这些工作台能力。
 
-终端用户路径采用平台专用 VSIX。`@deepseek-ai/dsh@0.1.1-rc.1`、Node.js `22.22.3` 和 pnpm `11.21.0` 在发布时固定并打包，激活阶段禁止包管理器、克隆和全局安装。external runtime 只是明确配置后的兼容入口，不承担自动发现或修复。
+终端用户路径采用平台专用 VSIX。`@deepseek-ai/dsh@0.1.2-alpha.3`、Node.js `22.22.3` 和 pnpm `11.21.0` 在发布时固定并打包，激活阶段禁止包管理器、克隆和全局安装。external runtime 只是明确配置后的兼容入口，不承担自动发现或修复。
 
 ## 模块边界
 

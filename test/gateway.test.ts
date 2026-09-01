@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { GatewayClient } from '../src/gateway/gateway-client.js'
+import { bootstrapGatewayCookie, withGatewayCookie } from '../src/gateway/auth.js'
 import {
   parseContextPressureProjection,
+  expandHistoryRecords,
   parseModelCatalog,
   parseHostFrame,
   parseMuxFrame,
@@ -12,6 +14,23 @@ import {
 } from '../src/gateway/protocol.js'
 
 describe('Gateway JSON frame parsing', () => {
+  it('exchanges an alpha.3 launch token for a cookie without retaining query credentials in API headers', async () => {
+    const originalFetch = globalThis.fetch
+    try {
+      let requested = ''
+      globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+        requested = String(input)
+        return new Response('', { status: 303, headers: { 'set-cookie': 'dsh-auth-test=opaque; Path=/; HttpOnly' } })
+      })
+      const cookie = await bootstrapGatewayCookie('http://127.0.0.1:3210/?token=launch-token')
+      expect(requested).toBe('http://127.0.0.1:3210/?token=launch-token')
+      expect(cookie).toBe('dsh-auth-test=opaque')
+      expect(withGatewayCookie({ 'content-type': 'application/json' }, cookie)).toEqual({ 'content-type': 'application/json', cookie: 'dsh-auth-test=opaque' })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   it('parses an authenticated durable session image attachment', () => {
     expect(parseSessionAttachment({
       attachment: { attachmentId: 'att-1', mediaType: 'image/png', bytes: 3, width: 2, height: 2, name: 'reminder.png' },
@@ -81,9 +100,9 @@ describe('Gateway JSON frame parsing', () => {
       await client.updateQueueItem('session-1', 'message-1', { kind: 'steer' })
       await client.removeQueueItem('session-1', 'message-1')
       expect(payloads).toEqual([
-        { sessionId: 'session-1', itemId: 'message-1', action: { kind: 'edit', content: [{ type: 'text', text: 'Revised prompt' }] } },
-        { sessionId: 'session-1', itemId: 'message-1', action: { kind: 'steer' } },
-        { sessionId: 'session-1', itemId: 'message-1', action: { kind: 'remove' } },
+        { args: { request: { sessionId: 'session-1', itemId: 'message-1', action: { kind: 'edit', content: [{ type: 'text', text: 'Revised prompt' }] } } } },
+        { args: { request: { sessionId: 'session-1', itemId: 'message-1', action: { kind: 'steer' } } } },
+        { args: { request: { sessionId: 'session-1', itemId: 'message-1', action: { kind: 'remove' } } } },
       ])
     } finally {
       globalThis.fetch = originalFetch
@@ -226,6 +245,13 @@ describe('Gateway JSON frame parsing', () => {
       failures: [],
     })).toMatchObject({ current: { model: 'deepseek-v4', reasoningEffort: 'max' }, routable: true })
 
+    expect(parseModelCatalog({
+      default: { provider: 'deepseek-official', model: 'deepseek-v4' },
+      routableProviders: ['deepseek-official'],
+      groups: [{ id: 'deepseek-official', name: 'DeepSeek', models: [{ id: 'deepseek-v4', name: 'DeepSeek V4' }] }],
+      failures: [],
+    })).toMatchObject({ current: { model: 'deepseek-v4' }, routable: true })
+
     expect(parsePresetCatalog({
       presets: [
         { id: 'standard', trust: 'system', isDefault: true, name: 'Standard' },
@@ -234,6 +260,7 @@ describe('Gateway JSON frame parsing', () => {
       authorable: true,
       hasDocument: true,
     }).presets.map(preset => preset.id)).toEqual(['standard', 'cordis'])
+    expect(parsePresetCatalog({ presets: [{ id: 'standard', trust: 'system', isDefault: true }], authorable: false })).toMatchObject({ hasDocument: false })
   })
 
   it('parses host lifecycle frames and rejects malformed envelopes', () => {
@@ -245,5 +272,20 @@ describe('Gateway JSON frame parsing', () => {
       .toEqual({ type: 'host/archived-sessions-changed', archivedSessionIds: ['s-1', 's-2'] })
     expect(() => parseMuxFrame({ type: 'not-a-frame' })).toThrow('Unsupported Harness mux frame')
     expect(() => parseServerResponse({ type: 'server-response', rpcId: 'x', result: { ok: 'yes' } })).toThrow('Malformed Harness RPC result')
+  })
+
+  it('expands alpha.3 packed assistant chunk rows before projection', () => {
+    expect(expandHistoryRecords([{
+      type: 'chunks',
+      event: {
+        type: 'chunkrow/text-chunks',
+        seq: 4,
+        time: 100,
+        data: { turn: 2, step: 1, index: 0, dt: [3], texts: ['a', 'b'] },
+      },
+    }])).toEqual([
+      { event: { type: 'assistant/chunk', seq: 4, time: 100, data: { turn: 2, step: 1, chunk: { type: 'text-delta', index: 0, text: 'a' } } } },
+      { event: { type: 'assistant/chunk', seq: 5, time: 103, data: { turn: 2, step: 1, chunk: { type: 'text-delta', index: 0, text: 'b' } } } },
+    ])
   })
 })

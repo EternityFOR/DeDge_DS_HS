@@ -6,7 +6,7 @@
 
 | 项目 | 固定提交 | 采用的参考点 |
 | --- | --- | --- |
-| [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | `47f943859bef60e4160492346772ded9b24f765a` | DSH CLI、Web Gateway、session event、审批/问题和运行时约束 |
+| [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | `dd6322d604e00eec1ba5e0c8541159906a21094a` | DSH CLI、Web Gateway、session event、审批/问题、alpha.3 认证与图片请求管线和运行时约束 |
 | [openai/codex](https://github.com/openai/codex) | `73abda8bfef6bd42eb11351be53980a027fd1feb` | `codex app-server` 的 `thread/list` 过滤、富客户端边界和进程管理思路 |
 | [anthropics/claude-code](https://github.com/anthropics/claude-code) | `0fa8c19d50f70f9f383fb6ff5ce5209575267d21` | 原生二进制分发方向、Windows 修复记录和跨平台兼容性关注点 |
 

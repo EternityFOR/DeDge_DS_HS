@@ -2,7 +2,28 @@ import { randomUUID } from 'node:crypto'
 import * as vscode from 'vscode'
 import { errorMessage, type Logger } from '../platform/logger.js'
 import { EventStream } from './event-stream.js'
-import { isRecord, parseModelCatalog, parseModelSelectionResult, parsePresetCatalog, parsePresetSelectionResult, parseRenameResult, parseServerResponse, parseSessionAttachment, type HostDescription, type HostFrame, type ModelCatalog, type ModelSelection, type MuxFrame, type PresetCatalog, type SessionAttachment, type SessionHistory, type SessionSummary, type WorkspaceRegistry } from './protocol.js'
+import { bootstrapGatewayCookie, withGatewayCookie } from './auth.js'
+import {
+  expandHistoryRecords,
+  isRecord,
+  parseModelCatalog,
+  parseModelSelectionResult,
+  parsePresetCatalog,
+  parsePresetSelectionResult,
+  parseRenameResult,
+  parseServerResponse,
+  parseSessionAttachment,
+  type HostDescription,
+  type HostFrame,
+  type ModelCatalog,
+  type ModelSelection,
+  type MuxFrame,
+  type PresetCatalog,
+  type SessionAttachment,
+  type SessionHistory,
+  type SessionSummary,
+  type WorkspaceRegistry,
+} from './protocol.js'
 
 export interface GatewayHandlers {
   readonly onMux: (frame: MuxFrame, rpcId: string) => void
@@ -20,37 +41,64 @@ export type QueueAction =
   | { readonly kind: 'steer' }
   | { readonly kind: 'edit'; readonly content: readonly PromptContentPart[] }
 
+interface PendingRemoteEvent {
+  readonly clientId: string
+  readonly kind: 'approval' | 'question'
+}
+
 export class GatewayClient implements vscode.Disposable {
   private stream: EventStream | undefined
+  private cookie: string | undefined
+  private readonly sessionCursors = new Map<string, number>()
+  private readonly remoteEvents = new Map<string, PendingRemoteEvent>()
 
   constructor(private readonly baseUrl: string, private readonly logger: Logger) {}
 
   async connect(handlers: GatewayHandlers): Promise<HostDescription> {
-    const description = await this.call<HostDescription>('host.describe', {})
-    this.stream = new EventStream(this.baseUrl, handlers, this.logger)
+    this.cookie = await bootstrapGatewayCookie(this.baseUrl)
+    // alpha.3 removed the old host.describe endpoint. A session list is a
+    // lightweight authenticated RPC that proves the Gateway is ready.
+    const listed = await this.request<{ readonly items?: readonly SessionSummary[] }>('session/list', { _request: {} })
+    this.stream = new EventStream(this.baseUrl, {
+      onMux: (frame, rpcId) => {
+        if (frame.type === 'session/event') this.sessionCursors.set(frame.sessionId, Math.max(this.sessionCursors.get(frame.sessionId) ?? -1, frame.event.seq))
+        if (frame.type === 'session/subscribed') this.sessionCursors.set(frame.sessionId, Math.max(this.sessionCursors.get(frame.sessionId) ?? -1, frame.lastSeq))
+        handlers.onMux(frame, rpcId)
+      },
+      onHost: handlers.onHost,
+      onError: handlers.onError,
+      onEventClient: (eventId, clientId, event) => {
+        if (event === 'approval/request') this.remoteEvents.set(eventId, { clientId, kind: 'approval' })
+        else if (event === 'user-questions/request') this.remoteEvents.set(eventId, { clientId, kind: 'question' })
+      },
+    }, this.logger, this.cookie)
     this.stream.start()
-    return description
+    return { attachedSessions: listed.items?.length ?? 0 }
   }
 
   dispose(): void {
     this.stream?.dispose()
     this.stream = undefined
+    this.cookie = undefined
+    this.remoteEvents.clear()
+    this.sessionCursors.clear()
   }
 
-  call<T>(method: string, payload: unknown, signal?: AbortSignal): Promise<T> {
-    return this.request<T>(method, payload, signal)
+  call<T>(endpoint: string, args: unknown, signal?: AbortSignal): Promise<T> {
+    return this.request<T>(endpoint, args, signal)
   }
 
   hostDescription(signal?: AbortSignal): Promise<HostDescription> {
-    return this.call<HostDescription>('host.describe', {}, signal)
+    return this.request<{ readonly items?: readonly SessionSummary[] }>('session/list', { _request: {} }, signal)
+      .then(value => ({ attachedSessions: value.items?.length ?? 0 }))
   }
 
   createSession(cwd: string, agentPreset?: string): Promise<{ readonly sessionId: string; readonly agentPreset?: string }> {
-    return this.call('session.create', { cwd, ...(agentPreset === undefined ? {} : { agentPreset }) })
+    return this.request('session/create', { request: { cwd, ...(agentPreset === undefined ? {} : { agentPreset }) } })
   }
 
   listSessions(): Promise<{ readonly items: SessionSummary[] }> {
-    return this.call<{ readonly items: SessionSummary[] }>('session.list', {}).then(result => ({
+    return this.request<{ readonly items: SessionSummary[] }>('session/list', { _request: {} }).then(result => ({
       items: result.items.map(item => {
         const projectedTitle = item.projections?.values?.title
         return typeof projectedTitle === 'string' && projectedTitle.trim() !== '' ? { ...item, title: projectedTitle } : item
@@ -58,39 +106,63 @@ export class GatewayClient implements vscode.Disposable {
     }))
   }
 
-  listWorkspaces(): Promise<WorkspaceRegistry> {
-    return this.call('workspace.list', {})
+  async listWorkspaces(): Promise<WorkspaceRegistry> {
+    const snapshot = await this.requireStream().workspaceSnapshot()
+    return { archivedSessionIds: [...snapshot.archivedSessionIds] }
   }
 
   archiveSession(sessionId: string): Promise<WorkspaceRegistry> {
-    return this.call('workspace.archiveSession', { sessionId })
+    return this.request<{ readonly archivedSessionIds?: readonly string[] }>('workspace/archiveSession', { request: { sessionId } })
+      .then(result => ({ archivedSessionIds: [...(result.archivedSessionIds ?? [])] }))
   }
 
   renameSession(sessionId: string, title: string): Promise<{ readonly title: string; readonly seq: number }> {
-    return this.call('session.rename', { sessionId, title }).then(parseRenameResult)
+    return this.request('session/rename', { request: { sessionId, title } }).then(parseRenameResult)
   }
 
   getSessionAttachment(sessionId: string, attachmentId: string): Promise<SessionAttachment> {
-    return this.call('session.attachment', { sessionId, attachmentId }).then(parseSessionAttachment)
+    return this.request('session/attachment', { request: { sessionId, attachmentId } }).then(parseSessionAttachment)
   }
 
-  history(sessionId: string, maxMessages = 40, beforeSeq?: number): Promise<SessionHistory> {
-    return this.call('session.history', { sessionId, maxMessages, ...(beforeSeq === undefined ? {} : { beforeSeq }) })
+  async history(sessionId: string, maxMessages = 40, beforeSeq?: number): Promise<SessionHistory> {
+    const stream = this.requireStream()
+    if (beforeSeq === undefined) {
+      const snapshot = await stream.openSession(sessionId, maxMessages)
+      this.sessionCursors.set(sessionId, snapshot.cursor)
+      return {
+        events: expandHistoryRecords(snapshot.records),
+        hasMore: snapshot.hasMore,
+        ...(snapshot.projections === undefined ? {} : { projections: snapshot.projections }),
+      }
+    }
+    if (this.sessionCursors.get(sessionId) === undefined) {
+      const snapshot = await stream.openSession(sessionId, maxMessages)
+      this.sessionCursors.set(sessionId, snapshot.cursor)
+    }
+    const page = await this.request<{ readonly records?: readonly unknown[]; readonly hasMore?: boolean }>('session/page', {
+      request: {
+        address: { kind: 'session', sessionId },
+        throughSeq: this.sessionCursors.get(sessionId) ?? -1,
+        beforeSeq,
+        maxMessages,
+      },
+    })
+    return { events: expandHistoryRecords(page.records ?? []), hasMore: page.hasMore === true }
   }
 
   prompt(sessionId: string, content: string | readonly PromptContentPart[], mode: 'queue' | 'steer' = 'queue'): Promise<{ readonly accepted?: boolean }> {
     const parts = typeof content === 'string' ? [{ type: 'text' as const, text: content }] : content
-    return this.call('session.prompt', { sessionId, mode, content: parts })
+    return this.request('session/prompt', { request: { requestId: randomUUID(), sessionId, mode, content: parts } })
   }
 
   async cancel(sessionId: string): Promise<{ readonly accepted: true }> {
-    const value: unknown = await this.call('session.cancel', { sessionId })
+    const value: unknown = await this.request('session/cancel', { request: { sessionId } })
     if (!isRecord(value) || value.accepted !== true) throw new Error('Harness did not acknowledge the stop request.')
     return { accepted: true }
   }
 
   updateQueueItem(sessionId: string, itemId: string, action: QueueAction): Promise<{ readonly accepted: true }> {
-    return this.call('session.updateQueue', { sessionId, itemId, action }).then(value => {
+    return this.request('session/updateQueue', { request: { sessionId, itemId, action } }).then(value => {
       if (!isRecord(value) || value.accepted !== true) throw new Error(`Harness did not acknowledge the queue-item ${action.kind} request.`)
       return { accepted: true }
     })
@@ -100,27 +172,27 @@ export class GatewayClient implements vscode.Disposable {
     return this.updateQueueItem(sessionId, itemId, { kind: 'remove' })
   }
 
-  async models(sessionId: string): Promise<ModelCatalog> {
-    return parseModelCatalog(await this.call('session.models', { sessionId }))
+  async models(_sessionId: string): Promise<ModelCatalog> {
+    return parseModelCatalog(await this.request('session/modelCatalog', {}))
   }
 
   async selectModel(sessionId: string, provider: string, model: string, reasoningEffort?: string): Promise<{ readonly selected: ModelSelection }> {
-    return parseModelSelectionResult(await this.call('session.selectModel', { sessionId, provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) }))
+    return parseModelSelectionResult(await this.request('session/selectModel', { request: { sessionId, provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) } }))
   }
 
   async presets(): Promise<PresetCatalog> {
-    return parsePresetCatalog(await this.call('agentPreset.list', {}))
+    return parsePresetCatalog(await this.request('agentPresets/list', {}))
   }
 
   async selectPreset(sessionId: string, agentPreset: string): Promise<{ readonly agentPreset: string }> {
-    return parsePresetSelectionResult(await this.call('agentPreset.select', { sessionId, agentPreset }))
+    return parsePresetSelectionResult(await this.request('agentPresets/select', { agentId: sessionId, agentPreset }))
   }
 
   executeCommand(sessionId: string, line: string): Promise<{ readonly result?: { readonly kind?: string; readonly text?: string } }> {
-    return this.call<unknown>('commands/execute', { args: { agentId: sessionId, line, images: [] } }).then(value => {
+    return this.request<unknown>('commands/execute', { agentId: sessionId, line, images: [] }).then(value => {
       let execution = value
-      // rc.7 returns CommandExecution directly. Some generated clients retain an
-      // additional RemoteResult envelope, so accept both protocol shapes.
+      // Keep accepting the older RemoteResult envelope for an explicitly
+      // configured external runtime while alpha.3 returns the value directly.
       if (isRecord(value) && typeof value.ok === 'boolean') {
         if (!value.ok) {
           const failure = isRecord(value.error) ? value.error : {}
@@ -138,43 +210,51 @@ export class GatewayClient implements vscode.Disposable {
     })
   }
 
-  respond(rpcId: string, value: unknown): Promise<{ readonly accepted: boolean }> {
-    return this.postRespond({ type: 'client-response', rpcId, result: { ok: true, value } })
+  async respond(rpcId: string, value: unknown): Promise<{ readonly accepted: boolean }> {
+    const pending = this.remoteEvents.get(rpcId)
+    if (pending === undefined) throw new Error('Harness interaction is no longer pending.')
+    const result = pending.kind === 'approval'
+      ? isRecord(value) && typeof value.outcome === 'string' ? value.outcome : value
+      : isRecord(value) && isRecord(value.answer) ? value.answer : value
+    await this.request('$events/result', { clientId: pending.clientId, eventId: rpcId, outcome: { kind: 'result', value: result } })
+    this.remoteEvents.delete(rpcId)
+    return { accepted: true }
   }
 
-  rejectRequest(rpcId: string, code: string, message: string): Promise<{ readonly accepted: boolean }> {
-    return this.postRespond({ type: 'client-response', rpcId, result: { ok: false, error: { code, message } } })
-  }
-
-  private async postRespond(body: unknown): Promise<{ readonly accepted: boolean }> {
-    const response = await fetch(new URL('/api/respond', this.baseUrl), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+  async rejectRequest(rpcId: string, code: string, message: string): Promise<{ readonly accepted: boolean }> {
+    const pending = this.remoteEvents.get(rpcId)
+    if (pending === undefined) throw new Error('Harness interaction is no longer pending.')
+    await this.request('$events/result', {
+      clientId: pending.clientId,
+      eventId: rpcId,
+      outcome: { kind: 'rejected', error: { name: 'Error', message, code, details: {} } },
     })
-    if (!response.ok) throw new Error(`Harness response endpoint returned HTTP ${response.status}.`)
-    const value: unknown = await response.json()
-    if (!isRecord(value) || typeof value.accepted !== 'boolean') throw new Error('Malformed Harness response receipt.')
-    return { accepted: value.accepted }
+    this.remoteEvents.delete(rpcId)
+    return { accepted: true }
   }
 
-  private async request<T>(method: string, payload: unknown, signal?: AbortSignal): Promise<T> {
+  private requireStream(): EventStream {
+    if (this.stream === undefined) throw new Error('Harness Gateway event stream is not connected.')
+    return this.stream
+  }
+
+  private async request<T>(endpoint: string, args: unknown, signal?: AbortSignal): Promise<T> {
     const rpcId = randomUUID()
     let response: Response
     try {
-      response = await fetch(new URL(`/api/${method}`, this.baseUrl), {
+      response = await fetch(new URL(`/api/${endpoint}`, this.baseUrl), {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ type: 'client-request', rpcId, method, payload }),
+        headers: withGatewayCookie({ 'content-type': 'application/json' }, this.cookie),
+        body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload: { args } }),
         ...(signal === undefined ? {} : { signal }),
       })
     } catch (error) {
-      throw new Error(`Harness RPC ${method} transport failed: ${errorMessage(error)}`)
+      throw new Error(`Harness RPC ${endpoint} transport failed: ${errorMessage(error)}`)
     }
-    if (!response.ok) throw new Error(`Harness RPC ${method} returned HTTP ${response.status}.`)
+    if (!response.ok) throw new Error(`Harness RPC ${endpoint} returned HTTP ${response.status}.`)
     const parsed = parseServerResponse(await response.json())
-    if (parsed.rpcId !== rpcId) throw new Error(`Harness RPC ${method} response id mismatch.`)
-    if (!parsed.result.ok) throw new Error(`Harness RPC ${method} failed: ${parsed.result.error.code}: ${parsed.result.error.message}`)
+    if (parsed.rpcId !== rpcId) throw new Error(`Harness RPC ${endpoint} response id mismatch.`)
+    if (!parsed.result.ok) throw new Error(`Harness RPC ${endpoint} failed: ${parsed.result.error.code}: ${parsed.result.error.message}`)
     return parsed.result.value as T
   }
 }

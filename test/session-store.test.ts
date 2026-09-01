@@ -26,6 +26,13 @@ describe('session event projection', () => {
     ])
   })
 
+  it('keeps alpha.3 user-rpc prompts visible as human messages', () => {
+    const messages = projectMessages([
+      entry('user/message', 1, { source: { kind: 'user-rpc', rpcId: 'request-1' }, content: [{ type: 'text', text: 'Alpha prompt' }] }),
+    ])
+    expect(messages).toMatchObject([{ role: 'user', text: 'Alpha prompt' }])
+  })
+
   it('replaces a streamed assistant message with the canonical completed blocks', () => {
     const messages = projectMessages([
       entry('assistant/chunk', 1, { turn: 2, step: 1, chunk: { type: 'text-delta', index: 0, text: 'partial' } }),

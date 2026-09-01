@@ -165,6 +165,8 @@ const taskGroupElements = new Map<string, HTMLElement>()
 marked.setOptions({ gfm: true, breaks: false })
 
 const elements = {
+  app: required('app'),
+  loadingScreen: required('loading-screen'),
   sessionTabs: required('session-tabs'),
   foldAll: requiredButton('fold-all'),
   expandAll: requiredButton('expand-all'),
@@ -630,6 +632,10 @@ function render(): void {
   if (pendingState === undefined) return
   state = pendingState
   attachments = pendingAttachments
+  const loading = isHarnessLoading(state)
+  elements.app.classList.toggle('is-loading', loading)
+  elements.loadingScreen.classList.toggle('hidden', !loading)
+  if (loading) return
   renderSessionTabs(state)
   renderControls(state)
   renderContextMeter(state)
@@ -647,6 +653,11 @@ function render(): void {
     })
   }
   vscode.setState({ activeSessionId: state.activeSessionId })
+}
+
+function isHarnessLoading(snapshot: WorkbenchSnapshot): boolean {
+  if (snapshot.phase === 'connecting') return true
+  return snapshot.runtime.phase === 'resolving' || snapshot.runtime.phase === 'starting' || snapshot.runtime.phase === 'stopping'
 }
 
 function runConversationSearch(): void {

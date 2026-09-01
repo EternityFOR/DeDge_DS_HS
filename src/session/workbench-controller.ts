@@ -1060,14 +1060,13 @@ export class WorkbenchController implements vscode.Disposable {
       // A mux reconnect replays transient queue/job frames but not the host
       // status projection for every session.  Defer one coalesced authoritative
       // refresh until all subscription frames in this connection have arrived.
-      if (this.store.snapshot().phase !== 'connected') return
       this.subscribedSessionIds.add(frame.sessionId)
       // The protocol omits queue/jobs baseline frames for an empty set. Clear
       // the previous connection's projections first so absence converges to
       // idle instead of preserving a stale Pause/queued state.
       this.store.setSessionQueue(frame.sessionId, [])
       this.store.setSessionJobs(frame.sessionId, [])
-      this.scheduleGatewayResync()
+      if (this.store.snapshot().phase === 'connected') this.scheduleGatewayResync()
       return this.publish()
     }
     if (frame.type === 'session/event') {

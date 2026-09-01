@@ -674,7 +674,13 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); font: var(--vscode-font-size)/1.45 var(--vscode-font-family); }
     button, textarea, input { font: inherit; color: inherit; letter-spacing: 0; }
     button { border: 0; }
-    .app { display: grid; grid-template-rows: auto minmax(0,1fr) auto; width: 100%; height: 100vh; min-width: 0; overflow: hidden; }
+    .app { position: relative; display: grid; grid-template-rows: auto minmax(0,1fr) auto; width: 100%; height: 100vh; min-width: 0; overflow: hidden; }
+    .app.is-loading { display: block; }
+    .app.is-loading > :not(.loading-screen) { display: none !important; }
+    .loading-screen { position: absolute; inset: 0; z-index: 100; display: grid; place-items: center; background: var(--vscode-sideBar-background); }
+    .loading-screen.hidden { display: none !important; }
+    .loading-screen svg { width: 24px; height: 24px; color: var(--vscode-progressBar-background); stroke-width: 1.8; animation: loading-screen-spin 900ms linear infinite; }
+    @keyframes loading-screen-spin { to { transform: rotate(360deg); } }
     .actions, .attachments, .control-group { display: flex; align-items: center; gap: 4px; min-width: 0; }
     .icon-button { display: inline-grid; place-items: center; flex: 0 0 24px; width: 24px; height: 24px; padding: 0; color: var(--vscode-icon-foreground); background: transparent; border-radius: 3px; cursor: pointer; }
     .icon-button svg, .menu-button svg, .menu-option svg { width: 14px; height: 14px; stroke-width: 1.9; }
@@ -981,7 +987,8 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   </style>
 </head>
 <body>
-  <div class="app">
+  <div id="app" class="app is-loading">
+    <div id="loading-screen" class="loading-screen" role="status" aria-label="Loading DeepSeek Harness"><i data-lucide="loader-circle"></i></div>
     <div id="notice" class="notice hidden"></div>
     <section id="settings-dialog" class="settings-dialog hidden" aria-label="DeepSeek Harness settings">
       <div class="settings-title"><h2>DeepSeek Harness settings</h2><button id="settings-close" class="icon-button settings-close" title="Close settings" aria-label="Close settings"><i data-lucide="x"></i></button></div>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseNodeVersion, supportsHarnessNode, supportsHarnessVersion } from '../src/runtime/bundled-runtime.js'
+import { EXPECTED_DSH_VERSION, parseNodeVersion, supportsHarnessNode, supportsHarnessVersion } from '../src/runtime/bundled-runtime.js'
 import { describeWindowsExitCode } from '../src/runtime/windows-compat.js'
 import { renderRuntimeOverlay } from '../src/runtime/overlay.js'
 import type { HarnessConfiguration } from '../src/config/configuration.js'
@@ -29,6 +29,10 @@ describe('bundled Node compatibility', () => {
 })
 
 describe('Harness runtime compatibility', () => {
+  it('pins the bundled runtime to the current upstream release', () => {
+    expect(EXPECTED_DSH_VERSION).toBe('0.1.2-alpha.3')
+  })
+
   it('accepts RC revisions on the same protocol base', () => {
     expect(supportsHarnessVersion('0.1.0-rc.6', '0.1.0-rc.7')).toBe(true)
     expect(supportsHarnessVersion('0.1.0-rc.7', '0.1.0-rc.6')).toBe(true)

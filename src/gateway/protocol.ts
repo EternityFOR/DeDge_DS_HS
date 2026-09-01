@@ -56,6 +56,32 @@ export interface SessionHistory {
   readonly projections?: { readonly values?: Record<string, unknown> }
 }
 
+/**
+ * Expand alpha.3's bounded history records into the event shape consumed by
+ * the workbench store. The upstream transport packs consecutive assistant
+ * deltas into chunk rows; expanding at this boundary keeps the rest of the
+ * extension compatible with the durable event projection it already uses.
+ */
+export function expandHistoryRecords(records: readonly unknown[]): HistoryEntry[] {
+  const output: HistoryEntry[] = []
+  for (const record of records) {
+    if (!isRecord(record)) continue
+    if (record.type === 'event' && isRecord(record.event)) {
+      const event = normalizeSessionEvent(record.event)
+      if (event !== undefined) output.push({ event, ...(record.view === undefined ? {} : { view: record.view }) })
+      continue
+    }
+    if (record.type === 'chunks' && isRecord(record.event)) {
+      output.push(...expandChunkRow(record.event).map(event => ({ event })))
+      continue
+    }
+    // Retain the pre-alpha3 shape for explicitly configured legacy runtimes.
+    const event = normalizeSessionEvent(record)
+    if (event !== undefined) output.push({ event })
+  }
+  return output
+}
+
 export interface ImageAttachmentRef {
   readonly attachmentId: string
   readonly mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
@@ -282,16 +308,63 @@ function stringOrUndefined(value: unknown): string | undefined {
 }
 
 function parseSessionEvent(value: unknown): SessionEvent {
+  const seq = isRecord(value) ? value.seq : undefined
   if (!isRecord(value)
     || typeof value.type !== 'string'
-    || !Number.isSafeInteger(value.seq)
-    || (value.seq as number) < 0
+    || !Number.isSafeInteger(seq)
+    || (seq as number) < 0
     || typeof value.time !== 'number'
     || !Number.isFinite(value.time)
     || !Object.hasOwn(value, 'data')) {
     throw new Error('Malformed Harness session event.')
   }
   return value as unknown as SessionEvent
+}
+
+function normalizeSessionEvent(value: Record<string, unknown>): SessionEvent | undefined {
+  const seq = value.seq
+  if (typeof value.type !== 'string' || !Number.isSafeInteger(seq) || (seq as number) < 0
+    || typeof value.time !== 'number' || !Number.isFinite(value.time) || !Object.hasOwn(value, 'data')) return undefined
+  return value as unknown as SessionEvent
+}
+
+function expandChunkRow(value: Record<string, unknown>): SessionEvent[] {
+  const row = value
+  const rowType = row.type
+  const data = isRecord(row.data) ? row.data : undefined
+  const sequence = row.seq
+  if ((rowType !== 'chunkrow/text-chunks' && rowType !== 'chunkrow/reasoning-chunks' && rowType !== 'chunkrow/tool-call-chunks')
+    || data === undefined || !Number.isSafeInteger(sequence) || (sequence as number) < 0 || typeof row.time !== 'number' || !Number.isFinite(row.time)
+    || typeof data.turn !== 'number' || typeof data.step !== 'number' || typeof data.index !== 'number'
+    || !Array.isArray(data.dt)) return []
+  const values = rowType === 'chunkrow/tool-call-chunks' ? data.args : data.texts
+  if (!Array.isArray(values) || values.length === 0 || values.some(item => typeof item !== 'string')
+    || data.dt.some(item => !Number.isSafeInteger(item)) || data.dt.length !== values.length - 1) return []
+  const events: SessionEvent[] = []
+  let time = row.time as number
+  for (let index = 0; index < values.length; index += 1) {
+    if (index > 0) time += data.dt[index - 1] as number
+    if (!Number.isSafeInteger(time)) return []
+    const chunk: Record<string, unknown> = rowType === 'chunkrow/text-chunks'
+      ? { type: 'text-delta', index: data.index, text: values[index] }
+      : rowType === 'chunkrow/reasoning-chunks'
+        ? { type: 'reasoning-delta', index: data.index, text: values[index] }
+        : {
+            type: 'tool-call-delta',
+            index: data.index,
+            id: typeof data.id === 'string' ? data.id : '',
+            ...(typeof data.name === 'string' ? { name: data.name } : {}),
+            argumentsDelta: values[index],
+          }
+    if (chunk.type === 'tool-call-delta' && chunk.id === '') return []
+    events.push({
+      type: 'assistant/chunk',
+      seq: (sequence as number) + index,
+      time,
+      data: { turn: data.turn, step: data.step, chunk },
+    })
+  }
+  return events
 }
 
 function parseQuestion(value: unknown): QuestionItem | undefined {
@@ -319,12 +392,16 @@ function parseQuestionOption(value: unknown): { readonly label: string; readonly
 }
 
 export function parseModelCatalog(value: unknown): ModelCatalog {
-  if (!isRecord(value) || typeof value.routable !== 'boolean' || !Array.isArray(value.groups) || !Array.isArray(value.failures)) {
+  if (!isRecord(value) || !Array.isArray(value.groups) || !Array.isArray(value.failures)) {
     throw new Error('Malformed Harness model catalog.')
   }
+  const currentValue = value.current ?? value.default
+  const routable = typeof value.routable === 'boolean'
+    ? value.routable
+    : Array.isArray(value.routableProviders) && value.routableProviders.length > 0
   return {
-    current: parseModelSelection(value.current),
-    routable: value.routable,
+    current: parseModelSelection(currentValue),
+    routable,
     groups: value.groups.map(parseModelProviderGroup),
     failures: value.failures.map(parseModelCatalogFailure),
   }
@@ -336,13 +413,15 @@ export function parseModelSelectionResult(value: unknown): { readonly selected: 
 }
 
 export function parsePresetCatalog(value: unknown): PresetCatalog {
-  if (!isRecord(value) || !Array.isArray(value.presets) || typeof value.authorable !== 'boolean' || typeof value.hasDocument !== 'boolean') {
+  if (!isRecord(value) || !Array.isArray(value.presets) || typeof value.authorable !== 'boolean') {
     throw new Error('Malformed Harness agent preset catalog.')
   }
   return {
     presets: value.presets.map(parsePresetCatalogEntry),
     authorable: value.authorable,
-    hasDocument: value.hasDocument,
+    // alpha.3 moved document authoring to a separate API and omits this
+    // legacy capability bit from the roster response.
+    hasDocument: value.hasDocument === true,
   }
 }
 

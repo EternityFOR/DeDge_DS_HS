@@ -450,7 +450,7 @@ export function projectMessages(entries: readonly HistoryEntry[], options: { rea
           ? 'schedule' as const
           : undefined
       const automated = automationKind !== undefined
-      if (source !== undefined && source.kind !== 'user' && !automated) continue
+      if (source !== undefined && source.kind !== 'user' && source.kind !== 'user-rpc' && !automated) continue
       const rawText = contentText(data.content)
       const projected = projectUserPrompt(rawText)
       const attachments = [...projected.attachments, ...projectImageAttachments(data.content)]
@@ -796,7 +796,7 @@ function isVisibleUserMessage(event: SessionEvent): boolean {
   if (event.type !== 'user/message') return false
   const data = isRecord(event.data) ? event.data : {}
   const source = isRecord(data.source) ? data.source : undefined
-  return source === undefined || source.kind === 'user'
+  return source === undefined || source.kind === 'user' || source.kind === 'user-rpc'
 }
 
 function hasLeadingUserMessage(entries: readonly HistoryEntry[], range: { readonly from: number }, ranges: readonly { readonly from: number; readonly to: number }[]): boolean {

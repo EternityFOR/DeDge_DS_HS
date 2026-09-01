@@ -4,7 +4,7 @@ DeDge DeepSeek Harness for VS Code is distributed under the MIT License. The pla
 
 | Component | Version | License | Project |
 | --- | --- | --- | --- |
-| `@deepseek-ai/dsh` | `0.1.0-rc.6` | MIT | <https://github.com/deepseek-ai/deepseek-harness> |
+| `@deepseek-ai/dsh` | `0.1.2-alpha.3` | MIT | <https://github.com/deepseek-ai/deepseek-harness> |
 | `dompurify` | `3.2.6` | MPL-2.0 OR Apache-2.0 | <https://github.com/cure53/DOMPurify> |
 | `lucide` | `0.468.0` | ISC | <https://github.com/lucide-icons/lucide> |
 | `marked` | `15.0.7` | MIT | <https://github.com/markedjs/marked> |

@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.1.59] - 2026-09-01
+
+### Changed
+
+- Bundled upstream DeepSeek Harness is upgraded to the official `0.1.2-alpha.3` release as one locked dependency closure.
+- DeepSeek image requests now use the alpha.3 normalization, pixel/byte/count limits, and Files API reuse path when supported by the endpoint; no image bytes or API keys are stored in the extension repository.
+- Startup now uses a loading-only surface while the runtime is resolving, starting, or stopping; the workbench appears after the Gateway is connected, while error and stopped states remain actionable.
+
+### Fixed
+
+- Runtime version checks and shared Gateway leases now identify the alpha.3 runtime precisely, preventing an older runtime process from being reused by the updated extension.
+- Existing session history, queue, schedule, and model Gateway calls remain covered by the alpha.3 runtime smoke path.
+
 ## [0.1.57] - 2026-09-01
 
 ### Fixed
@@ -630,7 +643,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.57...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.59...HEAD
+[0.1.59]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.59
 [0.1.57]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.57
 [0.1.56]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.56
 [0.1.55]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.55

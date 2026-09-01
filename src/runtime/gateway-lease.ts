@@ -181,8 +181,11 @@ function normalizeGatewayLease(value: unknown): GatewayLease {
   if (endpoint.protocol !== 'http:' || endpoint.hostname !== '127.0.0.1' || endpoint.port === '') {
     throw new Error('Harness gateway lease must use a numeric 127.0.0.1 HTTP endpoint.')
   }
+  const tokens = endpoint.searchParams.getAll('token')
+  const token = tokens.length === 1 && tokens[0] !== '' ? tokens[0] : undefined
   endpoint.pathname = '/'
   endpoint.search = ''
+  if (token !== undefined) endpoint.searchParams.set('token', token)
   endpoint.hash = ''
   return {
     url: endpoint.toString(),
