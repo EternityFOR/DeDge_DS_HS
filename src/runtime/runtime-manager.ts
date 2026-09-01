@@ -141,7 +141,10 @@ export class RuntimeManager implements vscode.Disposable {
         DSH_PERMISSION_MODE: configuration.permissionMode,
         DSH_TELEMETRY_DISABLED: '1',
         ...apiKey === undefined || apiKey === '' ? {} : { DEEPSEEK_API_KEY: apiKey },
-        DEEPSEEK_BASE_URL: configuration.baseUrl,
+        // alpha.3 appends `/chat/completions` directly. Keep the configured
+        // URL stable in VS Code, but give the provider a slash-free namespace
+        // so official and OpenAI-compatible endpoints never receive `//...`.
+        DEEPSEEK_BASE_URL: normalizeProviderBaseUrl(configuration.baseUrl),
       }
       this.logger.info(`Starting ${launch.source} Harness ${launch.version} in ${workspace}`)
       this.setState({ phase: 'starting', version: launch.version })
@@ -369,6 +372,11 @@ export class RuntimeManager implements vscode.Disposable {
     this.stateValue = state
     this.changed.fire(state)
   }
+}
+
+/** alpha.3 joins its provider namespace with `/chat/completions` itself. */
+export function normalizeProviderBaseUrl(value: string): string {
+  return value.replace(/\/+$/u, '')
 }
 
 function workspaceDirectory(): string {

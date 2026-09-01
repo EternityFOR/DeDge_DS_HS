@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-## [0.1.59] - 2026-09-01
+## [0.1.60] - 2026-09-01
 
 ### Changed
 
@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Bundled alpha.3 now receives a slash-free provider endpoint, preventing the DeepSeek adapter from constructing a double-slash `/chat/completions` URL that can surface as a generic API stream failure.
 - Runtime version checks and shared Gateway leases now identify the alpha.3 runtime precisely, preventing an older runtime process from being reused by the updated extension.
 - Existing session history, queue, schedule, and model Gateway calls remain covered by the alpha.3 runtime smoke path.
 
@@ -643,8 +644,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.59...HEAD
-[0.1.59]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.59
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.60...HEAD
+[0.1.60]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.60
 [0.1.57]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.57
 [0.1.56]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.56
 [0.1.55]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.55

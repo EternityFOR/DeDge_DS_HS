@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { EXPECTED_DSH_VERSION, parseNodeVersion, supportsHarnessNode, supportsHarnessVersion } from '../src/runtime/bundled-runtime.js'
+import { normalizeProviderBaseUrl } from '../src/runtime/runtime-manager.js'
 import { describeWindowsExitCode } from '../src/runtime/windows-compat.js'
 import { renderRuntimeOverlay } from '../src/runtime/overlay.js'
 import type { HarnessConfiguration } from '../src/config/configuration.js'
@@ -41,6 +42,12 @@ describe('Harness runtime compatibility', () => {
   it('rejects different protocol bases and malformed versions', () => {
     expect(supportsHarnessVersion('0.1.0-rc.7', '0.2.0-rc.1')).toBe(false)
     expect(supportsHarnessVersion('0.1.0-rc.7', 'unknown')).toBe(false)
+  })
+
+  it('removes only trailing provider slashes for alpha.3 URL composition', () => {
+    expect(normalizeProviderBaseUrl('https://api.deepseek.com/')).toBe('https://api.deepseek.com')
+    expect(normalizeProviderBaseUrl('https://gateway.example/v1///')).toBe('https://gateway.example/v1')
+    expect(normalizeProviderBaseUrl('https://gateway.example/v1')).toBe('https://gateway.example/v1')
   })
 })
 
