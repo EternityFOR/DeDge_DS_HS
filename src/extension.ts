@@ -193,8 +193,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await configuration.updateSetting('schedule.enabled', enabled)
     if (runtime.state.phase === 'ready') await controller.restart()
     void vscode.window.showInformationMessage(enabled
-      ? 'Scheduled follow-ups enabled. The official dsh-schedule plugin is now mounted for new Harness agents.'
-      : 'Scheduled follow-ups disabled. The official dsh-schedule plugin will be removed after the runtime restart.')
+      ? 'Scheduled follow-ups enabled. The official dsh-schedule plugin and schedule_* tools are now available to new Harness agents.'
+      : 'Scheduled follow-ups disabled. The official dsh-schedule plugin and schedule_* tools will be removed after the runtime restart.')
   }
   const saveSettings = async (settings: import('./ui/webview-protocol.js').WorkbenchSettings & { readonly apiKey?: string; readonly visionApiKey?: string }): Promise<void> => {
     const normalizedBaseUrl = normalizeBaseUrl(settings.baseUrl)

@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.1.57] - 2026-09-01
+
+### Fixed
+
+- Explicit Steer delivery now bypasses the ordinary autonomous-task guard while a Harness response is running, so user guidance can interrupt a running scheduled or background job.
+- Gateway reconnects now refresh authoritative session status, queue/job baselines, recent history, permissions, and context pressure without discarding loaded earlier pages. Stale Pause controls are settled after an agent restart.
+- Idle sends no longer flash as a queued row while the Harness inbox receipt is settling.
+
+### Changed
+
+- The official `dsh-schedule` mount defaults to enabled for new installations. The first prompt in a session receives concise guidance to use `schedule_create`, `schedule_list`, and `schedule_delete` instead of shell sleep loops.
+
 ## [0.1.56] - 2026-08-31
 
 ### Added
@@ -618,7 +630,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.56...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.57...HEAD
+[0.1.57]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.57
 [0.1.56]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.56
 [0.1.55]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.55
 [0.1.54]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.54

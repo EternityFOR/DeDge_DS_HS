@@ -447,4 +447,46 @@ describe('session event projection', () => {
     expect(store.snapshot().messages.map(message => message.seq)).toEqual([100])
     expect(store.historyBeforeSeq('session-one')).toBe(90)
   })
+
+  it('merges reconnect history without discarding loaded earlier pages', () => {
+    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000, pasteFileThreshold: 8_192 })
+    store.addSession({ sessionId: 'session-one', blank: false, running: false })
+    store.setActive('session-one')
+    store.replaceHistory('session-one', [
+      entry('user/message', 1, { source: { kind: 'user' }, content: [{ type: 'text', text: 'Earlier task' }] }),
+      entry('turn/start', 2, { turn: 1 }),
+      entry('assistant/message', 3, { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'Earlier result' }] } }),
+    ], true)
+    store.prependHistory('session-one', [
+      entry('user/message', 0, { source: { kind: 'user' }, content: [{ type: 'text', text: 'Oldest task' }] }),
+    ], true)
+
+    store.mergeRecentHistory('session-one', [
+      entry('turn/start', 2, { turn: 1 }),
+      entry('assistant/message', 3, { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'Earlier result, completed' }] } }),
+      entry('turn/end', 4, { turn: 1, reason: { kind: 'completed' } }),
+      entry('user/message', 5, { source: { kind: 'user' }, content: [{ type: 'text', text: 'Newest task' }] }),
+    ], false)
+
+    expect(store.snapshot().messages.map(message => message.text)).toEqual(['Oldest task', 'Earlier task', 'Earlier result, completed', 'Newest task'])
+    expect(store.snapshot().hasMoreHistory).toBe(false)
+    expect(store.snapshot().historyPageCount).toBe(1)
+  })
+
+  it('settles an incomplete persisted turn after an authoritative restart stop', () => {
+    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000, pasteFileThreshold: 8_192 })
+    store.addSession({ sessionId: 'session-one', blank: false, running: false })
+    store.setActive('session-one')
+    store.replaceHistory('session-one', [
+      entry('user/message', 1, { source: { kind: 'user' }, content: [{ type: 'text', text: 'Interrupted task' }] }),
+      entry('turn/start', 2, { turn: 1 }),
+      entry('assistant/chunk', 3, { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'partial' } }),
+    ])
+
+    expect(store.snapshot().messages.some(message => message.taskComplete === false)).toBe(true)
+    store.markSessionStopped('session-one')
+
+    expect(store.snapshot().messages.filter(message => message.taskComplete === false)).toHaveLength(0)
+    expect(store.snapshot().messages.filter(message => message.taskInterrupted === true)).not.toHaveLength(0)
+  })
 })

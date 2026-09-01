@@ -1,6 +1,6 @@
 import type { WorkbenchQueueItem, WorkbenchSnapshot } from './types.js'
 
-export function promptUnavailableReason(snapshot: WorkbenchSnapshot): string | undefined {
+export function promptUnavailableReason(snapshot: WorkbenchSnapshot, options: { readonly allowSteer?: boolean } = {}): string | undefined {
   if (snapshot.phase !== 'connected' || snapshot.runtime.phase !== 'ready') {
     return 'Wait for the Harness runtime to finish connecting before sending.'
   }
@@ -8,7 +8,7 @@ export function promptUnavailableReason(snapshot: WorkbenchSnapshot): string | u
   // Sending without an active session creates one with the configured defaults.
   if (active === undefined) return undefined
   if (active.operation !== undefined) return 'Wait for the current session operation to finish before sending.'
-  if (hasAutonomousActivity(snapshot)) return 'The agent is continuing an autonomous task. Stop it or wait for the task to finish before sending.'
+  if (hasAutonomousActivity(snapshot) && options.allowSteer !== true) return 'The agent is continuing an autonomous task. Stop it or wait for the task to finish before sending.'
   if (snapshot.permissionChanging) return 'Wait for the file permission change to finish before sending.'
   if (snapshot.modelCatalog === undefined) return 'Wait for the model catalog to finish loading before sending.'
   if (snapshot.modelCatalog.routable === false) return 'Select an available model before sending.'

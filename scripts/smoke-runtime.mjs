@@ -41,6 +41,7 @@ try {
     agentPreset: 'standard',
     permissionMode: 'read-only',
     baseUrl: 'https://api.deepseek.com/',
+    scheduleEnabled: true,
     autoStart: false,
     contextMaxBytes: 32_768,
     contextWindowTokens: 1_000_000,
@@ -111,7 +112,7 @@ try {
     throw new Error(`session.attachment returned a malformed image payload: ${JSON.stringify({ attachment: imageAttachment?.attachment, hasData: typeof imageAttachment?.data === 'string' && imageAttachment.data !== '' })}`)
   }
   await rpc(url, 'session.cancel', { sessionId: visionSession.sessionId })
-  console.log(`Runtime smoke passed at ${url} with Gateway ${String(description?.version ?? 'unknown')}, /compact, native image prompt, history image references, and session.attachment support`)
+  console.log(`Runtime smoke passed at ${url} with Gateway ${String(description?.version ?? 'unknown')}, schedule tools, /compact, native image prompt, history image references, and session.attachment support`)
 } finally {
   if (child !== undefined) await terminate(child)
   await rm(smokeRoot, { recursive: true, force: true })

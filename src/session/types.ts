@@ -5,7 +5,7 @@ export type WorkbenchPhase = 'idle' | 'connecting' | 'connected' | 'error'
 export type SessionOperation = 'archiving' | 'deleting' | 'cancelling' | 'compacting'
 
 export interface WorkbenchMessageAttachment {
-  readonly kind: 'selection' | 'file' | 'diagnostics' | 'handoff' | 'vision' | 'image'
+  readonly kind: 'selection' | 'file' | 'diagnostics' | 'handoff' | 'vision' | 'image' | 'skill'
   readonly label: string
   readonly uri?: string
   readonly detail?: string

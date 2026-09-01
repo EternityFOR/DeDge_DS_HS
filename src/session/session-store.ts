@@ -27,6 +27,13 @@ export class SessionStore {
   private readonly initialHistoryStart = new Map<string, number>()
   private readonly historyExpanded = new Map<string, boolean>()
   private readonly historyPageStarts = new Map<string, number[]>()
+  /**
+   * Sessions whose latest authoritative status is idle while their persisted
+   * history still contains an unfinished turn.  This is common after a
+   * Harness restart: no cancellation event is emitted, so the history alone
+   * would otherwise keep a stale Pause button visible forever.
+   */
+  private readonly forcedSettledSessions = new Set<string>()
   private historyLoading = false
   private readonly approvals = new Map<string, PendingApproval>()
   private readonly questions = new Map<string, PendingQuestion>()
@@ -59,6 +66,7 @@ export class SessionStore {
     this.permissions.clear()
     this.queueItems.clear()
     this.jobs.clear()
+    this.forcedSettledSessions.clear()
   }
 
   /** Clear transient projections when the shared runtime disappears. */
@@ -122,6 +130,7 @@ export class SessionStore {
     this.contextPressure.delete(sessionId)
     this.queueItems.delete(sessionId)
     this.jobs.delete(sessionId)
+    this.forcedSettledSessions.delete(sessionId)
     for (const key of this.imageData.keys()) if (key.startsWith(`${sessionId}\u0000`)) this.imageData.delete(key)
     this.sessionOperations.delete(sessionId)
     if (this.activeSessionId === sessionId) this.activeSessionId = undefined
@@ -129,7 +138,14 @@ export class SessionStore {
 
   setRunning(sessionId: string, running: boolean): void {
     const current = this.sessions.get(sessionId)
+    if (running) this.forcedSettledSessions.delete(sessionId)
     if (current !== undefined) this.sessions.set(sessionId, { ...current, running })
+  }
+
+  /** Apply an authoritative idle projection after a Gateway reconnect. */
+  markSessionStopped(sessionId: string): void {
+    this.forcedSettledSessions.add(sessionId)
+    this.setRunning(sessionId, false)
   }
 
   setSessionOperation(sessionId: string, operation: SessionOperation | undefined): void {
@@ -201,6 +217,21 @@ export class SessionStore {
     this.historyExpanded.set(sessionId, false)
     this.historyPageStarts.set(sessionId, [])
     this.applySessionMetadata(sessionId, entries.map(entry => entry.event))
+  }
+
+  /**
+   * Merge the Gateway's newest history window without discarding earlier
+   * pages the user has already loaded.  Replayed sequence numbers replace the
+   * local copy, while older entries and pagination markers remain intact.
+   */
+  mergeRecentHistory(sessionId: string, entries: readonly HistoryEntry[], hasMore?: boolean): void {
+    const bySeq = this.events.get(sessionId) ?? new Map<number, HistoryEntry>()
+    for (const entry of entries) bySeq.set(entry.event.seq, entry)
+    this.events.set(sessionId, bySeq)
+    if (hasMore !== undefined) this.historyHasMore.set(sessionId, hasMore)
+    const firstSeq = minimumSeq(entries.map(entry => entry.event.seq))
+    if (this.initialHistoryStart.get(sessionId) === undefined && firstSeq !== undefined) this.initialHistoryStart.set(sessionId, firstSeq)
+    this.applySessionMetadata(sessionId, [...entries].sort((left, right) => left.event.seq - right.event.seq).map(entry => entry.event))
   }
 
   prependHistory(sessionId: string, entries: readonly HistoryEntry[], hasMore: boolean, trackPage = true): void {
@@ -290,7 +321,9 @@ export class SessionStore {
     const activeEvents = this.activeSessionId === undefined
       ? []
       : [...(this.events.get(this.activeSessionId)?.values() ?? [])].sort((left, right) => left.event.seq - right.event.seq)
-    const messages = this.hydrateImages(this.activeSessionId, projectMessages(activeEvents))
+    const messages = this.hydrateImages(this.activeSessionId, projectMessages(activeEvents, {
+      forceInterruptIncomplete: this.activeSessionId !== undefined && this.forcedSettledSessions.has(this.activeSessionId),
+    }))
     const modelCatalog = this.modelCatalog
     const activeModelCatalog = modelCatalog !== undefined && modelCatalog.sessionId === this.activeSessionId ? modelCatalog.value : undefined
     const currentModel = activeModelCatalog?.current
@@ -354,7 +387,10 @@ export class SessionStore {
       if (event.type === 'session/title' && isRecord(event.data) && typeof event.data.title === 'string') {
         summary = { ...summary, title: event.data.title, updatedAt: event.time }
       }
-      if (event.type === 'turn/start') summary = { ...summary, running: true, blank: false, updatedAt: event.time }
+      if (event.type === 'turn/start') {
+        this.forcedSettledSessions.delete(sessionId)
+        summary = { ...summary, running: true, blank: false, updatedAt: event.time }
+      }
       if (event.type === 'turn/end') summary = { ...summary, running: false, updatedAt: event.time }
     }
     this.sessions.set(sessionId, summary)
@@ -387,7 +423,7 @@ function conversationUnitCount(messages: readonly WorkbenchMessage[]): number {
   return units.size
 }
 
-export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMessage[] {
+export function projectMessages(entries: readonly HistoryEntry[], options: { readonly forceInterruptIncomplete?: boolean } = {}): WorkbenchMessage[] {
   const output: WorkbenchMessage[] = []
   const interruptedTurns = new Set<string>()
   const steeringMessageIds = collectSteeringMessageIds(entries)
@@ -540,7 +576,7 @@ export function projectMessages(entries: readonly HistoryEntry[]): WorkbenchMess
     }
   }))
   const sorted = output.sort((left, right) => (left.seq ?? Number.MAX_SAFE_INTEGER) - (right.seq ?? Number.MAX_SAFE_INTEGER))
-  return annotateTaskGroups(sorted, entries)
+  return annotateTaskGroups(sorted, entries, options.forceInterruptIncomplete === true)
 }
 
 function projectVerboseText(value: string, maxChars: number): { readonly text: string; readonly textLength?: number } {
@@ -600,7 +636,7 @@ function isAppendSurfaceEvent(event: SessionEvent): boolean {
   return marker === undefined || marker === 'append'
 }
 
-function annotateTaskGroups(messages: readonly WorkbenchMessage[], entries: readonly HistoryEntry[]): WorkbenchMessage[] {
+function annotateTaskGroups(messages: readonly WorkbenchMessage[], entries: readonly HistoryEntry[], forceInterruptIncomplete = false): WorkbenchMessage[] {
   type TaskGroup = { readonly id: string; readonly turn?: string; readonly from: number; to: number; complete: boolean; interrupted: boolean }
   type TurnRange = { readonly turn: string; from: number; to: number; complete: boolean; interrupted: boolean; eventCount: number; hasWorkEvent: boolean; hasNonAssistantWork: boolean; stepKeys: string[] }
   const groups: TaskGroup[] = []
@@ -700,13 +736,29 @@ function annotateTaskGroups(messages: readonly WorkbenchMessage[], entries: read
     })
   }
   groups.sort((left, right) => left.from - right.from)
-  if (groups.length === 0) return [...messages]
+  if (forceInterruptIncomplete) {
+    for (const group of groups) {
+      if (!group.complete) {
+        group.complete = true
+        group.interrupted = true
+      }
+    }
+  }
+  if (groups.length === 0) {
+    return messages.map(message => forceInterruptIncomplete && message.taskInterrupted !== true && (message.status === 'streaming' || message.taskComplete === false)
+      ? { ...message, taskComplete: true, taskInterrupted: true }
+      : message)
+  }
   const groupCounts = new Map(groups.map(group => [group.id, messages.filter(message => message.seq !== undefined && message.seq >= group.from && message.seq <= group.to).length]))
   return messages.map(message => {
     const seq = message.seq
-    if (seq === undefined) return message
+    if (seq === undefined) return forceInterruptIncomplete && message.taskInterrupted !== true && (message.status === 'streaming' || message.taskComplete === false)
+      ? { ...message, taskComplete: true, taskInterrupted: true }
+      : message
     const group = groups.find(candidate => seq >= candidate.from && seq <= candidate.to)
-    if (group === undefined || (groupCounts.get(group.id) ?? 0) < 2) return message
+    if (group === undefined || (groupCounts.get(group.id) ?? 0) < 2) return forceInterruptIncomplete && message.taskInterrupted !== true && (message.status === 'streaming' || message.taskComplete === false)
+      ? { ...message, taskComplete: true, taskInterrupted: true }
+      : message
     return {
       ...message,
       taskId: group.id,

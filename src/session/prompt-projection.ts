@@ -62,7 +62,7 @@ function parseContextHeader(value: string, body: string): WorkbenchMessageAttach
     const handoff = handoffAttachment(label)
     if (handoff !== undefined) return handoff
     return {
-      kind: kind === 'selection' || kind === 'diagnostics' || kind === 'vision' ? kind : 'file',
+      kind: kind === 'selection' || kind === 'diagnostics' || kind === 'vision' || kind === 'skill' ? kind : 'file',
       label: boundedLabel(label.trim() || 'Attached context'),
       ...(typeof uri === 'string' ? { uri } : {}),
       ...(kind === 'vision' ? { detail: body, ...(typeof model === 'string' ? { model } : {}) } : {}),

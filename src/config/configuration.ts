@@ -77,7 +77,9 @@ export class ConfigurationService implements vscode.Disposable {
       approvalPolicy: oneOf(config.get<string>('approvalPolicy'), ['ask', 'approve-for-me'], 'ask'),
       baseUrl,
       autoStart: config.get<boolean>('autoStart', true),
-      scheduleEnabled: config.get<boolean>('schedule.enabled', false),
+      // The official schedule tools are available by default. Users can turn
+      // the mount off when they do not want reminder tools in model context.
+      scheduleEnabled: config.get<boolean>('schedule.enabled', true),
       contextMaxBytes: bounded(config.get<number>('context.maxBytes'), 1_024, 131_072, 32_768),
       contextWindowTokens: bounded(config.get<number>('context.windowTokens'), 16_384, 16_000_000, DEFAULT_CONTEXT_WINDOW_TOKENS),
       pasteFileThreshold: bounded(config.get<number>('context.pasteFileThreshold'), 1_024, 131_072, 4_096),

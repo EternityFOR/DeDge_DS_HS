@@ -102,10 +102,8 @@ let pendingSendText: string | undefined
 let pendingSendBaselineCount = 0
 let pendingSendMode: 'queue' | 'steer' = 'queue'
 let pendingSendBaselineIds = new Set<string>()
-let steerPendingText: string | undefined
-let pendingQueueText: string | undefined
-let pendingQueueLabels: readonly string[] = []
 let pendingQueueBaselineIds = new Set<string>()
+let steerPendingText: string | undefined
 type DeliveryMode = 'auto' | 'queue' | 'steer'
 let deliveryMode: DeliveryMode = 'queue'
 let queueCollapsed = true
@@ -479,6 +477,7 @@ window.addEventListener('message', event => {
         pendingSendPreview = undefined
         pendingSendText = undefined
         pendingSendBaselineIds = new Set<string>()
+        pendingQueueBaselineIds = new Set<string>()
       }
     }
     scheduleRender()
@@ -491,38 +490,27 @@ window.addEventListener('message', event => {
     }
     elements.prompt.focus()
     pendingSendMode = message.mode ?? 'queue'
-    if (pendingSendMode === 'steer') {
-      pendingQueueText = undefined
-      pendingQueueLabels = []
-      pendingQueueBaselineIds = new Set<string>()
-      showPendingSendPreview(message.text, message.attachments.map(item => item.label), pendingSendMode)
-    } else {
-      pendingSendPreview?.remove()
-      pendingSendPreview = undefined
-      pendingQueueText = message.text
-      pendingQueueLabels = message.attachments.map(item => item.label)
-      pendingQueueBaselineIds = new Set(state?.queueItems?.map(item => item.id) ?? [])
-      queueSignature = ''
-      if (state !== undefined) renderQueueDock(state)
-    }
+    // The queue is authoritative Harness state. Keep composer feedback in the
+    // conversation while the prompt receipt settles instead of inventing a
+    // transient queued row for an idle session.
+    showPendingSendPreview(message.text, message.attachments.map(item => item.label), pendingSendMode)
+    const baseline = pendingState ?? state
     pendingSendText = message.text
-    pendingSendBaselineCount = state?.messages.filter(item => item.role === 'user' && item.text === message.text).length ?? 0
-    pendingSendBaselineIds = new Set(state?.messages.map(item => item.id) ?? [])
+    pendingSendBaselineCount = baseline?.messages.filter(item => item.role === 'user' && item.text === message.text).length ?? 0
+    pendingSendBaselineIds = new Set(baseline?.messages.map(item => item.id) ?? [])
+    pendingQueueBaselineIds = new Set(baseline?.queueItems?.map(item => item.id) ?? [])
     if (state !== undefined) placePendingSendPreview(state.messages)
     if (state !== undefined) renderStatus(state)
   } else if (message.type === 'sendProgress') {
     renderPendingVisionProgress(message.progress)
   } else if (message.type === 'sendSettled') {
     sendPending = false
-    pendingQueueText = undefined
-    pendingQueueLabels = []
-    pendingQueueBaselineIds = new Set<string>()
-    queueSignature = ''
     if (!message.accepted) {
       pendingSendPreview?.remove()
       pendingSendPreview = undefined
       pendingSendText = undefined
       pendingSendBaselineIds = new Set<string>()
+      pendingQueueBaselineIds = new Set<string>()
       steerPendingText = undefined
       elements.steerNotice.classList.add('hidden')
       if (elements.prompt.value.trim() === '') {
@@ -872,20 +860,12 @@ function visibleQueueItems(snapshot: WorkbenchSnapshot): NonNullable<WorkbenchSn
 
 function queueDisplayItems(snapshot: WorkbenchSnapshot): NonNullable<WorkbenchSnapshot['queueItems']>[number][] {
   const items = visibleQueueItems(snapshot)
-  if (pendingQueueText === undefined) return items
-  // Once the authoritative queue frame contains the just-submitted text, let
-  // that row replace the local sending placeholder instead of showing a
-  // duplicate while the prompt receipt is still settling.
-  if (items.some(item => item.placement === 'queued' && item.text === pendingQueueText && !pendingQueueBaselineIds.has(item.id))) return items
-  const preview = [pendingQueueText, ...pendingQueueLabels.map(label => `[${label}]`)].join(' ').replace(/\s+/gu, ' ').trim()
-  return [{
-    id: 'pending:queue-send',
-    placement: 'queued',
-    sourceKind: 'user',
-    text: pendingQueueText,
-    preview: preview.length > 200 ? `${preview.slice(0, 197).trimEnd()}...` : preview,
-    ...(pendingQueueLabels.length > 0 ? { hasNonText: true } : {}),
-  }, ...items]
+  const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
+  // Harness briefly exposes an idle follow-up in its authoritative inbox
+  // before AgentLoop claims it. Suppress only newly-created rows from this
+  // send, preserving any messages that were already queued by the user.
+  if (pendingSendMode !== 'queue' || pendingSendText === undefined || active?.running === true) return items
+  return items.filter(item => pendingQueueBaselineIds.has(item.id))
 }
 
 function renderQueueRow(item: NonNullable<WorkbenchSnapshot['queueItems']>[number], snapshot: WorkbenchSnapshot): HTMLElement {
@@ -894,18 +874,6 @@ function renderQueueRow(item: NonNullable<WorkbenchSnapshot['queueItems']>[numbe
   row.className = `queue-row${item.placement === 'steering' ? ' queue-row-steering' : ''}${busy ? ' queue-busy' : ''}`
   row.dataset.queueItemId = item.id
   if (queueDisplayItems(snapshot).length === 1) row.append(svgIcon('list-plus'))
-  if (item.id === 'pending:queue-send') {
-    const preview = document.createElement('span')
-    preview.className = 'queue-preview'
-    preview.textContent = item.preview ?? item.text ?? 'Sending...'
-    preview.title = item.text ?? item.preview ?? 'Sending queued message'
-    row.append(preview)
-    const status = document.createElement('span')
-    status.className = 'queue-steering-label'
-    status.textContent = 'Sending...'
-    row.append(status)
-    return row
-  }
   if (queueEditingId === item.id && item.text !== undefined && item.hasNonText !== true) {
     const input = document.createElement('input')
     input.type = 'text'
@@ -1982,7 +1950,7 @@ function buildAttachmentsRow(attachments: readonly NonNullable<WorkbenchMessage[
     const item = document.createElement('span')
     item.className = 'message-attachment'
     item.title = `${attachment.label} - content hidden from the conversation view`
-    item.append(svgIcon(attachment.kind === 'handoff' ? 'arrow-left-right' : 'paperclip'))
+    item.append(svgIcon(attachment.kind === 'handoff' ? 'arrow-left-right' : attachment.kind === 'skill' ? 'calendar-clock' : 'paperclip'))
     const label = document.createElement('span')
     label.className = 'message-attachment-label'
     label.textContent = attachment.label
@@ -2350,9 +2318,11 @@ function svgIcon(name: IconName): SVGSVGElement {
 }
 
 function send(): void {
-  if (sendPending || state === undefined || promptUnavailableReason(state) !== undefined) return
+  if (sendPending || state === undefined) return
   const value = elements.prompt.value
   if (value.trim() === '' && attachments.length === 0) return
+  const steer = steerAvailable(state) && (deliveryMode === 'steer' || deliveryMode === 'auto')
+  if (promptUnavailableReason(state, { allowSteer: steer }) !== undefined) return
   sendPending = true
   if (value.trim() !== '') {
     if (sentHistory[sentHistory.length - 1] !== value) sentHistory.push(value)
@@ -2360,7 +2330,6 @@ function send(): void {
   }
   historyIndex = -1
   renderStatus(state)
-  const steer = steerAvailable(state) && (deliveryMode === 'steer' || deliveryMode === 'auto')
   if (steer) {
     steerPendingText = value
     elements.steerNoticeText.textContent = 'Steer message sent to the active turn.'
@@ -2854,8 +2823,8 @@ function renderScheduleToggle(snapshot: WorkbenchSnapshot): void {
     : blocked && (active?.running === true || hasActiveTurn(snapshot) || hasAutonomousActivity(snapshot))
       ? 'Stop the active Harness task before changing scheduled follow-ups'
       : enabled
-        ? 'Scheduled follow-ups enabled: official dsh-schedule is mounted; reminders run only while this Harness session stays live. Click to disable (runtime restart required).'
-        : 'Scheduled follow-ups disabled: click to mount the official dsh-schedule plugin (runtime restart required)'
+        ? 'Scheduled follow-ups enabled: schedule_create, schedule_list, and schedule_delete are available to the model; reminders run only while this Harness session stays live. Click to disable (runtime restart required).'
+        : 'Scheduled follow-ups disabled: the model cannot use schedule_create/list/delete. Click to mount the official dsh-schedule plugin (runtime restart required)'
   elements.scheduleToggle.setAttribute('aria-label', elements.scheduleToggle.title)
 }
 

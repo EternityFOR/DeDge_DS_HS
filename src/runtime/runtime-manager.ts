@@ -337,13 +337,14 @@ export class RuntimeManager implements vscode.Disposable {
   private startAttachedLeaseMonitor(expected: GatewayLease): void {
     this.stopAttachedLeaseMonitor()
     this.attachedLeaseMonitor = setInterval(() => {
-      void readGatewayLease(this.gatewayLease).then(current => {
-        if (this.child !== undefined || this.stateValue.phase !== 'ready' || this.stateValue.pid !== expected.pid) return
-        if (current.pid === expected.pid && current.url === expected.url && isProcessRunning(current.pid)) return
+      void readGatewayLease(this.gatewayLease).then(async current => {
+        if (this.disposed || this.child !== undefined || this.stateValue.phase !== 'ready' || this.stateValue.pid !== expected.pid) return
+        if (current.pid === expected.pid && current.url === expected.url && isProcessRunning(current.pid) && await probeGateway(current.url)) return
+        if (this.disposed || this.child !== undefined || this.stateValue.phase !== 'ready' || this.stateValue.pid !== expected.pid) return
         this.stopAttachedLeaseMonitor()
         this.setState({ phase: 'idle' })
       }).catch(() => {
-        if (this.child !== undefined || this.stateValue.phase !== 'ready' || this.stateValue.pid !== expected.pid) return
+        if (this.disposed || this.child !== undefined || this.stateValue.phase !== 'ready' || this.stateValue.pid !== expected.pid) return
         this.stopAttachedLeaseMonitor()
         this.setState({ phase: 'idle' })
       })

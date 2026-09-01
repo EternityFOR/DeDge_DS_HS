@@ -103,6 +103,16 @@ describe('workbench interaction readiness', () => {
     expect(hasAutonomousActivity(userQueue)).toBe(false)
   })
 
+  it('allows an explicit steer while an autonomous job is attached to the running agent', () => {
+    const runningWithJob = snapshot({
+      sessions: [{ id: 's-1', title: 'Session', running: true, blank: false }],
+      jobs: [{ id: 'sleep-1', kind: 'pwsh', label: 'scheduled wait', status: 'running' }],
+    })
+    expect(steerAvailable(runningWithJob)).toBe(true)
+    expect(promptUnavailableReason(runningWithJob)).toContain('autonomous task')
+    expect(promptUnavailableReason(runningWithJob, { allowSteer: true })).toBeUndefined()
+  })
+
   it('does not expose stale autonomous controls while the shared runtime is offline', () => {
     const disconnected = snapshot({
       runtime: { phase: 'idle' },

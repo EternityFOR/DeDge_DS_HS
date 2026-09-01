@@ -93,7 +93,7 @@ const previewSettings = {
   visionBaseUrl: 'https://api.deepseek.com/', visionModel: 'deepseek-v4-flash-vision-exp', visionReasoningEffort: '', mainModelVisionCapable: false, auxiliaryVisionEnabled: false, visionModels: ['deepseek-v4-flash-vision-exp'], hasVisionApiKey: true,
   compactionProvider: '', compactionModel: '',
   pasteFileThreshold: 4096, contextWindowTokens: 1000000,
-  scheduleEnabled: false,
+  scheduleEnabled: true,
   codexHome: '\${userHome}/.codex', claudeHome: '\${userHome}/.claude', handoffLaunchMode: 'clipboard',
   skillDirectories: ['\${userHome}/.codex/skills'],
 }

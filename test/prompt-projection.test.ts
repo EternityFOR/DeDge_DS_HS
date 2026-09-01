@@ -59,4 +59,18 @@ describe('user prompt display projection', () => {
       ],
     })
   })
+
+  it('keeps built-in schedule guidance distinguishable from ordinary files', () => {
+    const prompt = buildPrompt('Set a reminder.', [{
+      id: 'builtin:schedule-guidance',
+      kind: 'skill',
+      label: 'Built-in schedule tools',
+      text: 'Use schedule_create instead of shell sleep.',
+      truncated: false,
+    }])
+    expect(projectUserPrompt(prompt)).toEqual({
+      text: 'Set a reminder.',
+      attachments: [{ kind: 'skill', label: 'Built-in schedule tools' }],
+    })
+  })
 })

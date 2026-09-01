@@ -2,7 +2,7 @@
   "name": "dedge-deepseek-harness-vscode",
   "displayName": "DeDge DeepSeek Harness",
   "description": "Self-contained DeepSeek Harness coding agent for VS Code with a Windows-safe runtime and isolated Codex/Claude handoffs.",
-  "version": "0.1.56",
+  "version": "0.1.57",
   "publisher": "diractive-edge",
   "private": true,
   "packageManager": "pnpm@11.21.0",
@@ -349,8 +349,8 @@
         },
         "dedgeDeepSeekHarness.schedule.enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "Mount the official DeepSeek Harness dsh-schedule plugin. It adds session-local scheduled follow-ups and requires a Harness restart when changed.",
+          "default": true,
+          "description": "Mount the official DeepSeek Harness dsh-schedule plugin by default. It adds session-local scheduled follow-ups; disable it if reminder tools should not be exposed to the model. Requires a Harness restart when changed.",
           "scope": "machine"
         },
         "dedgeDeepSeekHarness.context.maxBytes": {
