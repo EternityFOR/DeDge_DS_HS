@@ -41,7 +41,8 @@ import type { ContextAttachment } from '../../context/context-collector.js'
 import { recommendedVisionModels } from '../../vision/model-catalog.js'
 import type { SkillSummary } from '../../skills/skill-catalog.js'
 import type { WorkbenchMessage, WorkbenchSnapshot } from '../../session/types.js'
-import { hasActiveTurn, hasAgentActivity, hasAutonomousActivity, modelControlsUnavailableReason, promptUnavailableReason, steerAvailable } from '../../session/interaction-readiness.js'
+import { autonomousQueueItems, hasActiveTurn, hasAgentActivity, hasAutonomousActivity, modelControlsUnavailableReason, promptUnavailableReason, steerAvailable } from '../../session/interaction-readiness.js'
+import { isWaitingForUserMessage, shouldShowUserMessageActions } from '../message-actions.js'
 import type { HostToWebviewMessage, WebviewToHostMessage, WorkbenchSettings } from '../webview-protocol.js'
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewToHostMessage): void; setState(value: unknown): void; getState(): unknown }
@@ -115,6 +116,10 @@ const queueBusyItems = new Set<string>()
 let pasteFileThreshold = 4_096
 let scrollBottomButton: HTMLButtonElement | undefined
 let stickToBottom = true
+/** First connected history render must open at the newest tail, not browser top. */
+let initialScrollPending = false
+let initialScrollFrame: number | undefined
+let initialScrollResetTimer: number | undefined
 const collapsedMessages = new Set<string>()
 const expandedTasks = new Set<string>()
 const collapsedTasks = new Set<string>()
@@ -449,7 +454,12 @@ elements.conversation.addEventListener('scroll', () => {
   const conversation = elements.conversation
   const maxScroll = Math.max(0, conversation.scrollHeight - conversation.clientHeight)
   if (conversation.scrollTop >= maxScroll - 24) stickToBottom = true
-  else if (conversation.scrollTop < maxScroll - 96) stickToBottom = false
+  else if (conversation.scrollTop < maxScroll - 96) {
+    stickToBottom = false
+    initialScrollPending = false
+    if (initialScrollResetTimer !== undefined) window.clearTimeout(initialScrollResetTimer)
+    initialScrollResetTimer = undefined
+  }
   updateScrollBottomButton()
 })
 let resizeFrame: number | undefined
@@ -523,8 +533,9 @@ window.addEventListener('message', event => {
     } else {
       const status = pendingSendPreview?.querySelector('.message-send-status')
       if (status !== null && status !== undefined) {
-        status.textContent = 'Sent'
-        status.setAttribute('data-state', 'sent')
+        status.textContent = 'Waiting'
+        status.setAttribute('data-state', 'waiting')
+        status.setAttribute('title', 'Harness accepted the message and is waiting for the next response event')
       }
     }
     if (message.accepted && elements.prompt.value === message.text) {
@@ -1147,14 +1158,15 @@ function renderPresetOptions(snapshot: WorkbenchSnapshot | undefined): void {
   if (snapshot === undefined) return
   const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
   const unavailable = active?.running === true || active?.operation !== undefined
+  const presetLocked = active?.blank === false
   const presets = snapshot.presetCatalog?.presets?.filter(preset => preset.broken === undefined) ?? []
   const options = presets.map(preset => menuOption({
     label: preset.name ?? preset.id,
     ...(preset.description === undefined
-      ? (active?.blank === false && preset.id !== snapshot.agentPreset ? { description: 'Continue in a new isolated session' } : {})
-      : { description: active?.blank === false && preset.id !== snapshot.agentPreset ? `${preset.description} · Continue in a new session` : preset.description }),
+      ? (presetLocked && preset.id !== snapshot.agentPreset ? { description: 'Fixed for this session; start a new session to choose it' } : {})
+      : { description: presetLocked && preset.id !== snapshot.agentPreset ? `${preset.description} · Fixed for this session; start a new session to choose it` : preset.description }),
     selected: preset.id === snapshot.agentPreset,
-    disabled: unavailable,
+    disabled: unavailable || (presetLocked && preset.id !== snapshot.agentPreset),
     handler: () => {
       post({ type: 'selectPreset', preset: preset.id })
       closePopovers()
@@ -1220,6 +1232,14 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     taskFoldElements.clear()
     taskGroupElements.clear()
     stickToBottom = true
+    initialScrollPending = true
+    if (initialScrollFrame !== undefined) window.cancelAnimationFrame(initialScrollFrame)
+    initialScrollFrame = undefined
+    if (initialScrollResetTimer !== undefined) window.clearTimeout(initialScrollResetTimer)
+    initialScrollResetTimer = window.setTimeout(() => {
+      initialScrollPending = false
+      initialScrollResetTimer = undefined
+    }, 2_000)
     emptyNode = undefined
     elements.conversation.replaceChildren()
     historyControls = document.createElement('div')
@@ -1300,6 +1320,10 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
       else if (next !== undefined && next.parentElement === elements.conversation) elements.conversation.insertBefore(node, next)
       else elements.conversation.insertBefore(node, pendingAnchor)
     }
+    // Actions depend on live session state rather than the durable message
+    // signature. A queued/intermediate user card may be rendered before the
+    // active turn projection arrives, so refresh its head on every render.
+    if (message.role !== 'reasoning' && message.role !== 'tool') syncMessageHead(node, message)
     if (message.status === 'streaming') streaming = true
   }
   for (const [id, node] of messageElements) {
@@ -1339,6 +1363,10 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     pendingAnchor.replaceChildren(...renderPendingArea(approvals, questions))
   }
 
+  if (initialScrollPending && messages.length > 0) {
+    initialScrollPending = false
+    scrollConversationToBottomAfterLayout()
+  }
   if (streaming && stickToBottom) {
     const conversation = elements.conversation
     conversation.scrollTop = Math.max(0, conversation.scrollHeight - conversation.clientHeight)
@@ -1347,24 +1375,68 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
   updateScrollBottomButton()
 }
 
+/** Apply the initial tail position after the browser has laid out restored nodes. */
+function scrollConversationToBottomAfterLayout(): void {
+  const conversation = elements.conversation
+  const scroll = (): void => {
+    initialScrollFrame = undefined
+    if (!stickToBottom) return
+    conversation.scrollTop = Math.max(0, conversation.scrollHeight - conversation.clientHeight)
+    updateScrollBottomButton()
+  }
+  scroll()
+  initialScrollFrame = window.requestAnimationFrame(() => {
+    scroll()
+    // Image hydration and task-fold reordering can change height one frame
+    // later; a second pass keeps the restored view anchored to the latest tail.
+    initialScrollFrame = window.requestAnimationFrame(scroll)
+  })
+}
+
 function renderResponseWaiting(snapshot: WorkbenchSnapshot, messages: readonly WorkbenchMessage[], streaming: boolean): void {
   const waiting = responseWaiting
   if (waiting === undefined) return
+  const runtimeReady = snapshot.phase === 'connected' && snapshot.runtime.phase === 'ready'
   const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
   const autonomous = hasAutonomousActivity(snapshot)
-  const activeWork = active?.running === true || autonomous
-  const latest = [...messages].reverse().find(message => message.taskInterrupted !== true)
-  const visible = activeWork && !streaming && latest?.status !== 'streaming'
+  const userInteractionWaiting = snapshot.approvals.length > 0 || snapshot.questions.length > 0
+  const latestUser = [...messages].reverse().find(message => message.role === 'user' && message.taskInterrupted !== true)
+  // A queued/intermediate user prompt should advertise that it is waiting even
+  // while an earlier tool or reasoning block is still streaming. Once output
+  // after that prompt exists, the prompt is no longer waiting for its turn.
+  const running = active?.running === true && active.operation === undefined
+  const userWaiting = running && latestUser !== undefined && isWaitingForUserMessage(latestUser, snapshot)
+  const receiptWaiting = runtimeReady && !sendPending && pendingSendText !== undefined
+  // Harness can spend a long time between visible events while preparing a
+  // request, reading tools, retrying transport, or waiting for the model's
+  // first token. Keep one explicit process row for the whole running window.
+  const visible = runtimeReady && (running || receiptWaiting || (autonomous && !streaming))
   waiting.classList.toggle('hidden', !visible)
   if (!visible) return
   const label = waiting.querySelector('span')
-  if (label !== null) label.textContent = active?.running === true
-    ? 'Waiting for Harness response...'
-    : 'Agent is preparing the next step...'
+  if (label !== null) label.textContent = userInteractionWaiting
+    ? 'Waiting for your input...'
+    : receiptWaiting && !running
+    ? 'Message accepted; waiting for Harness response...'
+    : running
+      ? userWaiting
+        ? 'Waiting for Harness response...'
+        : streaming
+          ? 'Harness is analyzing...'
+          : 'Harness is processing...'
+      : `${autonomousActivityLabel(snapshot)}...`
   if (stickToBottom) {
     const conversation = elements.conversation
     conversation.scrollTop = Math.max(0, conversation.scrollHeight - conversation.clientHeight)
   }
+}
+
+function autonomousActivityLabel(snapshot: WorkbenchSnapshot): string {
+  const queued = autonomousQueueItems(snapshot)
+  if (queued.some(item => item.sourceKind === 'goal')) return 'Goal continuation is queued'
+  if (snapshot.jobs?.some(job => job.status === 'running' || job.status === 'stopping')) return 'Autonomous background task is still running'
+  if (queued.length > 0) return 'Autonomous continuation is queued'
+  return 'Harness is finalizing the autonomous task'
 }
 
 function reorderConversationUnits(messages: readonly WorkbenchMessage[]): void {
@@ -1811,6 +1883,7 @@ function updateMessage(node: HTMLElement, message: WorkbenchMessage): void {
     bindCollapseToggle(node, built.toggle, message)
     node.prepend(head)
   }
+  syncMessageHead(node, message)
   node.querySelectorAll('.message-attachments, .message-copy, .message-preview').forEach(element => element.remove())
   if (message.attachments !== undefined && message.attachments.length > 0) {
     node.append(buildAttachmentsRow(message.attachments))
@@ -1833,37 +1906,55 @@ function buildMessageHead(message: WorkbenchMessage): { head: HTMLDivElement; to
   label.className = 'message-role-label'
   label.textContent = inputRoleLabel(message)
   head.append(toggle, label)
-  if (message.role === 'user' && message.inputKind !== 'automation' && message.text !== '') {
-    const snapshot = state
-    const active = snapshot?.sessions.find(session => session.id === snapshot.activeSessionId)
-    const latestUserId = snapshot?.messages.filter(item => item.role === 'user').at(-1)?.id
-    const hasActiveTurn = snapshot?.messages.some(item => item.status === 'streaming' || item.taskComplete === false) === true
-    if (message.id === latestUserId && active?.running === true && hasActiveTurn && active.operation === undefined) {
-      const actions = document.createElement('span')
-      actions.className = 'message-actions'
-      const edit = document.createElement('button')
-      edit.type = 'button'
-      edit.className = 'message-action'
-      edit.title = 'Edit this prompt and send it as a new message'
-      edit.append(svgIcon('pencil'), document.createTextNode('Edit'))
-      edit.addEventListener('click', () => {
-        elements.prompt.value = message.text
-        resizePrompt()
-        const persisted = vscode.getState()
-        vscode.setState({ ...(typeof persisted === 'object' && persisted !== null ? persisted : {}), draft: message.text })
-        elements.prompt.focus()
-      })
-      const steer = document.createElement('button')
-      steer.type = 'button'
-      steer.className = 'message-action'
-      steer.title = 'Steer the active turn with this prompt'
-      steer.append(svgIcon('corner-down-right'), document.createTextNode('Steer'))
-      steer.addEventListener('click', () => post({ type: 'send', text: message.text, mode: 'steer' }))
-      actions.append(edit, steer)
-      head.append(actions)
-    }
-  }
+  syncMessageHead(head, message)
   return { head, toggle }
+}
+
+/** Keep user-card actions and delivery status in sync with live Harness state. */
+function syncMessageHead(node: HTMLElement, message: WorkbenchMessage): void {
+  const head = node.classList.contains('message-head') ? node : node.querySelector<HTMLElement>('.message-head')
+  if (head === null || head === undefined) return
+  head.querySelector('.message-actions')?.remove()
+  head.querySelector('.message-send-status')?.remove()
+  const snapshot = state
+  if (snapshot === undefined) return
+  const actionable = shouldShowUserMessageActions(message, snapshot)
+  const waiting = isWaitingForUserMessage(message, snapshot)
+  if (!actionable && !waiting) return
+
+  if (waiting) {
+    const status = document.createElement('span')
+    status.className = 'message-send-status'
+    status.dataset.state = 'waiting'
+    status.textContent = 'Waiting'
+    status.title = 'Waiting for the active Harness turn to process this message'
+    head.append(status)
+  }
+
+  if (actionable) {
+    const actions = document.createElement('span')
+    actions.className = 'message-actions'
+    const edit = document.createElement('button')
+    edit.type = 'button'
+    edit.className = 'message-action'
+    edit.title = 'Edit this prompt and send it as a new message'
+    edit.append(svgIcon('pencil'), document.createTextNode('Edit'))
+    edit.addEventListener('click', () => {
+      elements.prompt.value = message.text
+      resizePrompt()
+      const persisted = vscode.getState()
+      vscode.setState({ ...(typeof persisted === 'object' && persisted !== null ? persisted : {}), draft: message.text })
+      elements.prompt.focus()
+    })
+    const steer = document.createElement('button')
+    steer.type = 'button'
+    steer.className = 'message-action'
+    steer.title = 'Steer the active turn with this prompt'
+    steer.append(svgIcon('corner-down-right'), document.createTextNode('Steer'))
+    steer.addEventListener('click', () => post({ type: 'send', text: message.text, mode: 'steer' }))
+    actions.append(edit, steer)
+    head.append(actions)
+  }
 }
 
 function bindCollapseToggle(article: HTMLElement, toggle: HTMLButtonElement, message: WorkbenchMessage): void {
@@ -2162,6 +2253,8 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
   const activeTurn = hasActiveTurn(snapshot)
   const autonomous = hasAutonomousActivity(snapshot)
   const autonomousWaiting = autonomous && !running
+  const streaming = snapshot.messages.some(message => message.status === 'streaming')
+  const userInteractionWaiting = snapshot.approvals.length > 0 || snapshot.questions.length > 0
   const agentWork = hasAgentActivity(snapshot)
   elements.cancel.classList.toggle('hidden', !agentWork)
   elements.cancel.classList.toggle('autonomous', autonomousWaiting)
@@ -2192,7 +2285,8 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
       : sendUnavailable ?? 'Send'
   elements.send.setAttribute('aria-label', elements.send.title)
   elements.modelMenu.disabled = modelControlsUnavailable !== undefined
-  elements.modelMenu.title = modelControlsUnavailable ?? 'Model, reasoning, and agent preset'
+  elements.modelMenu.title = modelControlsUnavailable
+    ?? (running || autonomous ? 'Change the model for the next Harness request; the current activity continues' : 'Model, reasoning, and agent preset')
   elements.modelMenu.setAttribute('aria-label', elements.modelMenu.title)
   const compactDisabled = snapshot.phase !== 'connected' || active === undefined || activeTurn || sendPending || active.operation !== undefined || compactionUnavailable
   elements.compact.disabled = compactDisabled
@@ -2228,9 +2322,13 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
     ? compacting
       ? 'Compacting context...'
       : autonomousWaiting
-      ? 'Agent continuing autonomously - Pause available'
+      ? `${autonomousActivityLabel(snapshot)} - Pause available`
+      : userInteractionWaiting
+      ? 'Waiting for your input - Stop available'
       : running
-      ? 'Response in progress - Stop available'
+      ? streaming
+        ? 'Response in progress - Stop available'
+        : 'Waiting for model output - Stop available'
       : modelUnavailable
       ? 'Selected model is unavailable'
       : `${snapshot.runtime.version ?? 'Harness'}${snapshot.hasApiKey ? '' : ' - API key required'}`

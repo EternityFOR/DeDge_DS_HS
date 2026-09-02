@@ -57,11 +57,11 @@ describe('workbench interaction readiness', () => {
     expect(modelControlsUnavailableReason(loading)).toContain('still loading')
   })
 
-  it('allows steer prompts while a response is running but blocks model changes', () => {
+  it('allows steer prompts and model changes while a response is running', () => {
     const running = snapshot({ sessions: [{ id: 's-1', title: 'Session', running: true, blank: false }] })
     expect(promptUnavailableReason(running)).toBeUndefined()
     expect(steerAvailable(running)).toBe(true)
-    expect(modelControlsUnavailableReason(running)).toContain('Finish or cancel')
+    expect(modelControlsUnavailableReason(running)).toBeUndefined()
   })
 
   it('does not offer steering before the model catalog is ready', () => {
@@ -77,7 +77,7 @@ describe('workbench interaction readiness', () => {
     const waiting = snapshot({ messages: [{ id: 'task-1', role: 'assistant', text: 'Waiting.', taskId: 'turn:1', taskComplete: false }] })
     expect(hasActiveTurn(waiting)).toBe(true)
     expect(promptUnavailableReason(waiting)).toContain('autonomous task')
-    expect(modelControlsUnavailableReason(waiting)).toContain('agent task')
+    expect(modelControlsUnavailableReason(waiting)).toBeUndefined()
   })
 
   it('treats interrupted historical output as settled after a restart', () => {

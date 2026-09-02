@@ -4,6 +4,56 @@
 
 ## [Unreleased]
 
+## [0.1.66] - 2026-09-02
+
+### Changed
+
+- Agent Preset changes are locked after the first prompt, matching the official Harness session boundary; the workbench no longer tries to hot-switch or create an automatic handoff session.
+- Model and reasoning selection remains available while a response or autonomous continuation is active. Harness applies the selection to the next request without changing the current turn.
+
+### Fixed
+
+- Session-owned Agent Preset projections are restored from `session/list`, history, live projections, and preset events, so returning from another session cannot make the original session appear to use the wrong mode.
+- Autonomous wait status now identifies queued goal continuations and running background jobs instead of showing a generic preparation message.
+
+## [0.1.65] - 2026-09-02
+
+### Fixed
+
+- Restored conversation history now opens at the newest tail after VS Code restart or session switching, including a short anchor window while delayed image attachments finish hydrating.
+- User-controlled upward scrolling immediately releases the anchor, so live updates and historical page loads do not pull the reader back down.
+- Waiting indicators now cover the whole active Harness processing gap, including first-token latency, reasoning/tool transitions, and accepted prompts before their durable history event arrives.
+
+## [0.1.64] - 2026-09-01
+
+### Fixed
+
+- Intermediate and queued user prompts now refresh their Edit and Steer actions after live Harness state changes instead of only when the card is first rendered.
+- The newest user prompt shows a compact animated Waiting state until assistant, reasoning, or tool output follows it; an additional response-waiting status appears for the active Harness response.
+- Added state-matrix tests for active, queued, inserted, settled, autonomous, and unavailable user messages.
+
+## [0.1.63] - 2026-09-01
+
+### Fixed
+
+- A newly loaded extension host now repairs missing content-addressed attachment objects before attaching to an already-running shared alpha.3 Harness. Installing an update no longer requires manually restarting the old VS Code window first.
+
+## [0.1.62] - 2026-09-01
+
+### Fixed
+
+- Harness home upgrades now carry the durable content-addressed `attachments` tree together with sessions and storage metadata.
+- Existing alpha.3 homes repair missing attachment objects from the newest prior versioned home without overwriting current files. This recovers image references created before the alpha.3 migration and prevents `Attachment object is missing` on later turns.
+- Added a regression test for non-destructive attachment-tree recovery.
+
+## [0.1.61] - 2026-09-01
+
+### Fixed
+
+- The generated official DeepSeek route now pins the configured endpoint and credential reference in the same runtime overlay, avoiding stale environment resolution when a shared Harness is restarted or attached from another VS Code window.
+- Bundled alpha.3 SSE requests now ask for identity encoding. This avoids compressed event-stream truncation seen with some Windows gateways, VPNs, and endpoint-security proxies.
+- Transport failures retain a short, redacted cause diagnostic so `ECONNRESET`, socket termination, and similar network failures can be distinguished without recording response bodies, API keys, or prompts.
+
 ## [0.1.60] - 2026-09-01
 
 ### Changed
@@ -644,7 +694,13 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.60...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.66...HEAD
+[0.1.66]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.66
+[0.1.65]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.65
+[0.1.64]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.64
+[0.1.63]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.63
+[0.1.62]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.62
+[0.1.61]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.61
 [0.1.60]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.60
 [0.1.57]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.57
 [0.1.56]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.56

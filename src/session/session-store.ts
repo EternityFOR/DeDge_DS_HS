@@ -387,6 +387,9 @@ export class SessionStore {
       if (event.type === 'session/title' && isRecord(event.data) && typeof event.data.title === 'string') {
         summary = { ...summary, title: event.data.title, updatedAt: event.time }
       }
+      if (event.type === 'agent-preset/selected' && isRecord(event.data) && typeof event.data.agentPreset === 'string' && event.data.agentPreset.trim() !== '') {
+        summary = { ...summary, agentPreset: event.data.agentPreset }
+      }
       if (event.type === 'turn/start') {
         this.forcedSettledSessions.delete(sessionId)
         summary = { ...summary, running: true, blank: false, updatedAt: event.time }

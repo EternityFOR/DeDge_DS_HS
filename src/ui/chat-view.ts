@@ -456,15 +456,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (message.type === 'selectPreset') return this.run(async () => {
       const snapshot = this.controller.snapshot()
       const active = snapshot.sessions.find(item => item.id === snapshot.activeSessionId)
-      if (active?.blank !== false) return this.controller.selectPreset(message.preset)
       if (message.preset === snapshot.agentPreset) return
-      const selected = await vscode.window.showWarningMessage(
-        'DeepSeek Harness fixes the Agent Preset after the first prompt because it defines tools, system instructions, and compaction behavior. Continue in a new isolated session with a bounded user/assistant transcript?',
-        { modal: true },
-        'Continue in New Session',
-      )
-      if (selected !== 'Continue in New Session') return
-      this.upsertAttachment(await this.controller.continueWithPreset(message.preset))
+      if (active?.blank === false) {
+        void vscode.window.showInformationMessage(
+          'Agent Preset is fixed after the first prompt because it defines tools, system instructions, and compaction behavior. Start a new session manually to choose another preset.',
+        )
+        return
+      }
+      await this.controller.selectPreset(message.preset)
     })
     if (message.type === 'selectPermission') return this.run(async () => {
       if (message.permission === 'approve-for-me') {
@@ -791,12 +790,13 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .vision-process summary svg { width: 12px; height: 12px; }
     .vision-process > div { margin-top: 5px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
     .message-send-status { margin-left: auto; color: var(--vscode-descriptionForeground); font-size: 10px; }
-    .message-send-status[data-state="sending"]::after { content: ' ···'; display: inline-block; width: 18px; text-align: left; animation: sending-dots 1s steps(4,end) infinite; }
+    .message-send-status[data-state="sending"]::after, .message-send-status[data-state="waiting"]::after { content: ' ···'; display: inline-block; width: 18px; text-align: left; animation: sending-dots 1s steps(4,end) infinite; }
     @keyframes sending-dots { 0%, 20% { content: ' ·'; } 40% { content: ' ··'; } 60%, 100% { content: ' ···'; } }
     .response-waiting { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 3px 8% 7px; padding: 4px 6px; color: var(--vscode-descriptionForeground); font-size: 10px; line-height: 1.3; }
     .response-waiting.hidden { display: none !important; }
     .response-waiting svg { flex: 0 0 12px; width: 12px; height: 12px; color: var(--vscode-progressBar-background); animation: response-waiting-spin 900ms linear infinite; }
     .response-waiting span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .response-waiting span::after { content: ' ···'; display: inline-block; width: 18px; text-align: left; animation: sending-dots 1s steps(4,end) infinite; }
     @keyframes response-waiting-spin { to { transform: rotate(360deg); } }
     .attachment-openable { cursor: pointer; }
     .attachment-openable:hover { border-color: var(--vscode-focusBorder); color: var(--vscode-foreground); }

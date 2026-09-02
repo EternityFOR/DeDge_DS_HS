@@ -268,6 +268,16 @@ describe('session event projection', () => {
     expect(snapshot.messages).toEqual([{ id: 'error:3', role: 'system', text: 'rate limited', status: 'error', seq: 3, time: 12 }])
   })
 
+  it('retains the agent preset recorded by a session event', () => {
+    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000, pasteFileThreshold: 8_192 })
+    store.addSession({ sessionId: 's-1', blank: false, running: false, agentPreset: 'standard' })
+    store.appendEvent('s-1', { type: 'agent-preset/selected', seq: 1, time: 10, data: { agentPreset: 'minimal' } })
+
+    expect(store.snapshot().sessions[0]).toMatchObject({ id: 's-1', agentPreset: 'minimal' })
+    store.setActive('s-1')
+    expect(store.snapshot().agentPreset).toBe('minimal')
+  })
+
   it('projects transient queue and background-job state for an idle active session', () => {
     const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000, pasteFileThreshold: 8_192 })
     store.addSession({ sessionId: 's-1', blank: false, running: false })

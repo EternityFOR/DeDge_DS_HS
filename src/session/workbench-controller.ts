@@ -211,6 +211,8 @@ export class WorkbenchController implements vscode.Disposable {
     this.store.replaceHistory(sessionId, history.events ?? [], history.hasMore === true)
     this.store.setContextPressure(sessionId, parseContextPressureProjection(history.projections?.values?.contextPressure))
     this.store.setPermissions(sessionId, parsePermissionProjection(history.projections?.values?.permissions))
+    const projectedPreset = history.projections?.values?.agentPreset
+    if (typeof projectedPreset === 'string' && projectedPreset.trim() !== '') this.store.setAgentPreset(sessionId, projectedPreset)
     // A persisted history window can end in an unfinished turn when Harness
     // was restarted before it wrote a cancellation/end event.  session.list's
     // running flag is authoritative at this point, so settle that stale turn
@@ -839,7 +841,7 @@ export class WorkbenchController implements vscode.Disposable {
     let selected = preset
     if (sessionId !== undefined) {
       const session = snapshot.sessions.find(item => item.id === sessionId)
-      if (session?.blank !== true) throw new Error('Agent Preset can only be changed before the first prompt in a session.')
+      if (session?.blank !== true) throw new Error('Agent Preset is fixed after the first prompt in this session. Start a new session to use another preset.')
       const result = await this.requireGateway().selectPreset(sessionId, preset)
       selected = result.agentPreset
       this.store.setAgentPreset(sessionId, selected)
@@ -1100,6 +1102,10 @@ export class WorkbenchController implements vscode.Disposable {
       this.store.setSessionTitle(frame.sessionId, frame.value)
       return this.publish()
     }
+    if (frame.type === 'session/projection' && frame.key === 'agentPreset' && typeof frame.value === 'string' && frame.value.trim() !== '') {
+      this.store.setAgentPreset(frame.sessionId, frame.value)
+      return this.publish()
+    }
     if (frame.type === 'session/projection' && frame.key === 'permissions') {
       this.store.setPermissions(frame.sessionId, parsePermissionProjection(frame.value))
       return this.publish()
@@ -1193,6 +1199,8 @@ export class WorkbenchController implements vscode.Disposable {
       if (history.projections?.values !== undefined) {
         this.store.setContextPressure(activeSessionId, parseContextPressureProjection(history.projections.values.contextPressure))
         this.store.setPermissions(activeSessionId, parsePermissionProjection(history.projections.values.permissions))
+        const projectedPreset = history.projections.values.agentPreset
+        if (typeof projectedPreset === 'string' && projectedPreset.trim() !== '') this.store.setAgentPreset(activeSessionId, projectedPreset)
       }
       if (sessions.find(session => session.sessionId === activeSessionId)?.running === true) this.store.setRunning(activeSessionId, true)
       else this.store.markSessionStopped(activeSessionId)

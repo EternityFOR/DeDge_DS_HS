@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import * as path from 'node:path'
 import { EXPECTED_DSH_VERSION, parseNodeVersion, supportsHarnessNode, supportsHarnessVersion } from '../src/runtime/bundled-runtime.js'
-import { normalizeProviderBaseUrl } from '../src/runtime/runtime-manager.js'
+import { copyMissingTree, normalizeProviderBaseUrl, recoverMissingAttachments } from '../src/runtime/runtime-manager.js'
 import { describeWindowsExitCode } from '../src/runtime/windows-compat.js'
 import { renderRuntimeOverlay } from '../src/runtime/overlay.js'
 import type { HarnessConfiguration } from '../src/config/configuration.js'
@@ -48,6 +51,43 @@ describe('Harness runtime compatibility', () => {
     expect(normalizeProviderBaseUrl('https://api.deepseek.com/')).toBe('https://api.deepseek.com')
     expect(normalizeProviderBaseUrl('https://gateway.example/v1///')).toBe('https://gateway.example/v1')
     expect(normalizeProviderBaseUrl('https://gateway.example/v1')).toBe('https://gateway.example/v1')
+  })
+
+  it('restores missing attachment objects without replacing current files', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dedge-attachment-migration-'))
+    try {
+      const source = path.join(root, 'old', 'attachments')
+      const target = path.join(root, 'new', 'attachments')
+      await mkdir(path.join(source, 'v1', 'objects', 'aa'), { recursive: true })
+      await mkdir(path.join(target, 'v1', 'objects', 'aa'), { recursive: true })
+      await writeFile(path.join(source, 'v1', 'objects', 'aa', 'new-object'), 'old-data')
+      await writeFile(path.join(source, 'v1', 'objects', 'aa', 'existing'), 'old-copy')
+      await writeFile(path.join(target, 'v1', 'objects', 'aa', 'existing'), 'current-data')
+      await expect(copyMissingTree(source, target)).resolves.toBe(1)
+      await expect(readFile(path.join(target, 'v1', 'objects', 'aa', 'new-object'), 'utf8')).resolves.toBe('old-data')
+      await expect(readFile(path.join(target, 'v1', 'objects', 'aa', 'existing'), 'utf8')).resolves.toBe('current-data')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('searches every prior Harness home when an intermediate migration omitted attachments', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dedge-attachment-history-'))
+    try {
+      const homes = path.join(root, 'homes')
+      const target = path.join(homes, '0.1.2-alpha.3')
+      const older = path.join(homes, '0.1.1-rc.1', 'attachments', 'v1', 'objects', 'aa')
+      const middle = path.join(homes, '0.1.1-rc.2', 'attachments', 'v1', 'objects', 'bb')
+      await mkdir(older, { recursive: true })
+      await mkdir(middle, { recursive: true })
+      await writeFile(path.join(older, 'from-older'), 'older')
+      await writeFile(path.join(middle, 'from-middle'), 'middle')
+      await expect(recoverMissingAttachments(homes, ['0.1.1-rc.1', '0.1.1-rc.2'], target)).resolves.toBe(2)
+      await expect(readFile(path.join(target, 'attachments', 'v1', 'objects', 'aa', 'from-older'), 'utf8')).resolves.toBe('older')
+      await expect(readFile(path.join(target, 'attachments', 'v1', 'objects', 'bb', 'from-middle'), 'utf8')).resolves.toBe('middle')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
 
@@ -122,6 +162,8 @@ describe('runtime overlay rendering', () => {
     expect(overlay).toContain('id: "deepseek-v4-pro"')
     expect(overlay).toContain('id: "deepseek-v4-flash-vision-exp"')
     expect(overlay).toContain('id: "private-reasoner"')
+    expect(overlay).toContain('apiKeyEnv: "DEEPSEEK_API_KEY"')
+    expect(overlay).toContain('baseURL: "https://api.deepseek.com"')
   })
 
   it('mounts the generic pi-ai route for non-DeepSeek providers', () => {

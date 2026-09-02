@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { cp, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, cp, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
 import * as path from 'node:path'
 import * as vscode from 'vscode'
 import type { ConfigurationService, HarnessConfiguration } from '../config/configuration.js'
@@ -305,6 +306,8 @@ export class RuntimeManager implements vscode.Disposable {
   }
 
   private async attachSharedRuntime(lease: GatewayLease): Promise<string> {
+    await repairSharedRuntimeAttachments(this.layout, lease.version, this.logger)
+      .catch(error => this.logger.warn(`Shared Harness attachment recovery skipped: ${errorMessage(error)}`))
     this.child = undefined
     this.ownedLeasePid = undefined
     this.launchIdentity = undefined
@@ -374,6 +377,26 @@ export class RuntimeManager implements vscode.Disposable {
   }
 }
 
+/** Repair attachment objects before a new extension host reuses a live shared runtime. */
+async function repairSharedRuntimeAttachments(layout: StorageLayout, version: string, logger: Logger): Promise<void> {
+  const target = versionedHome(layout, version)
+  try {
+    await stat(target)
+  } catch {
+    return
+  }
+  let entries: string[]
+  try {
+    entries = await readdir(layout.harnessHomes)
+  } catch {
+    return
+  }
+  const targetName = version.replace(/[^a-zA-Z0-9._-]/gu, '_') || 'unknown'
+  const candidates = entries.filter(name => name !== targetName).sort()
+  const copied = await recoverMissingAttachments(layout.harnessHomes, candidates, target)
+  if (copied > 0) logger.info(`Recovered ${String(copied)} missing Harness attachment object${copied === 1 ? '' : 's'} before attaching to shared runtime`)
+}
+
 /** alpha.3 joins its provider namespace with `/chat/completions` itself. */
 export function normalizeProviderBaseUrl(value: string): string {
   return value.replace(/\/+$/u, '')
@@ -418,11 +441,13 @@ async function writeAtomic(target: string, content: string): Promise<void> {
 }
 
 async function migrateHarnessHomeIfNeeded(layout: StorageLayout, target: string, version: string, logger: Logger): Promise<void> {
+  const targetName = version.replace(/[^a-zA-Z0-9._-]/gu, '_') || 'unknown'
+  let targetExists = true
   try {
     await stat(target)
-    return
   } catch {
     // target home does not exist yet
+    targetExists = false
   }
   let entries
   try {
@@ -430,8 +455,16 @@ async function migrateHarnessHomeIfNeeded(layout: StorageLayout, target: string,
   } catch {
     return
   }
-  const targetName = version.replace(/[^a-zA-Z0-9._-]/gu, '_') || 'unknown'
   const candidates = entries.filter(name => name !== targetName).sort()
+  if (targetExists) {
+    // Older releases migrated sessions and settings but forgot the durable
+    // content-addressed image store. Merge only missing objects from the most
+    // recent prior home that still has an attachment tree; never overwrite the
+    // current home or touch session logs.
+    const copied = await recoverMissingAttachments(layout.harnessHomes, candidates, target)
+    if (copied > 0) logger.info(`Recovered ${String(copied)} missing Harness attachment object${copied === 1 ? '' : 's'} from prior Harness homes`)
+    return
+  }
   const sourceName = candidates[candidates.length - 1]
   if (sourceName === undefined) return
   const source = path.join(layout.harnessHomes, sourceName)
@@ -445,5 +478,59 @@ async function migrateHarnessHomeIfNeeded(layout: StorageLayout, target: string,
     }
     await cp(from, path.join(target, part), { recursive: true })
   }
+  const copied = await recoverMissingAttachments(layout.harnessHomes, candidates, target)
+  if (copied > 0) logger.info(`Recovered ${String(copied)} Harness attachment object${copied === 1 ? '' : 's'} during migration`)
   logger.info(`Migrated Harness home data from ${sourceName} to ${version}`)
+}
+
+export async function recoverMissingAttachments(homes: string, candidates: readonly string[], target: string): Promise<number> {
+  let copied = 0
+  for (const name of [...candidates].reverse()) {
+    try {
+      await stat(path.join(homes, name, 'attachments'))
+    } catch {
+      // Try the next older version; an absent tree is normal for pre-image homes.
+      continue
+    }
+    copied += await copyMissingTree(
+      path.join(homes, name, 'attachments'),
+      path.join(target, 'attachments'),
+    )
+  }
+  return copied
+}
+
+/** Merge a trusted old attachment tree without replacing current objects. */
+export async function copyMissingTree(source: string, target: string): Promise<number> {
+  let entries
+  try {
+    entries = await readdir(source, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  await mkdir(target, { recursive: true })
+  let copied = 0
+  for (const entry of entries) {
+    const from = path.join(source, entry.name)
+    const to = path.join(target, entry.name)
+    if (entry.isDirectory()) {
+      copied += await copyMissingTree(from, to)
+      continue
+    }
+    if (!entry.isFile()) continue
+    try {
+      await stat(to)
+      continue
+    } catch {
+      // The object is absent in the current versioned home.
+    }
+    try {
+      await copyFile(from, to, fsConstants.COPYFILE_EXCL)
+      copied += 1
+    } catch (error: unknown) {
+      // Another VS Code window may have restored the same object first.
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
+    }
+  }
+  return copied
 }

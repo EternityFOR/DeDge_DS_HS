@@ -61,7 +61,8 @@ export function modelControlsUnavailableReason(snapshot: WorkbenchSnapshot): str
   if (snapshot.modelCatalog === undefined) return 'The model catalog is still loading.'
   const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
   if (active === undefined) return 'Models are available after an active Harness session is ready.'
-  if (active?.running === true || hasActiveTurn(snapshot) || hasAutonomousActivity(snapshot)) return 'Finish or cancel the current agent task before changing the model.'
+  // Harness installs model selection for the next request, so an active turn
+  // or autonomous continuation does not make the model picker unsafe.
   if (active?.operation !== undefined) return 'Wait for the current session operation before changing the model.'
   if (snapshot.permissionChanging) return 'Wait for the file permission change before changing the model.'
   return undefined

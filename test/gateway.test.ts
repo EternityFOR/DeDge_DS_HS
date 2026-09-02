@@ -117,11 +117,11 @@ describe('Gateway JSON frame parsing', () => {
         return new Response(JSON.stringify({
           type: 'server-response',
           rpcId: request.rpcId,
-          result: { ok: true, value: { items: [{ sessionId: 'session-1', updatedAt: 1, running: false, blank: false, projections: { asOfSeq: 8, values: { title: 'Vision capability test' } } }] } },
+          result: { ok: true, value: { items: [{ sessionId: 'session-1', updatedAt: 1, running: false, blank: false, projections: { asOfSeq: 8, values: { title: 'Vision capability test', agentPreset: 'minimal' } } }] } },
         }), { status: 200, headers: { 'content-type': 'application/json' } })
       })
       const client = new GatewayClient('http://127.0.0.1:1/', {} as never)
-      await expect(client.listSessions()).resolves.toMatchObject({ items: [{ sessionId: 'session-1', title: 'Vision capability test' }] })
+      await expect(client.listSessions()).resolves.toMatchObject({ items: [{ sessionId: 'session-1', title: 'Vision capability test', agentPreset: 'minimal' }] })
     } finally {
       globalThis.fetch = originalFetch
     }

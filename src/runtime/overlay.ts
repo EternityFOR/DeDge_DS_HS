@@ -14,6 +14,12 @@ export function renderRuntimeOverlay(configuration: HarnessConfiguration): strin
   const deepSeekRoute = configuration.provider === 'deepseek-official' ? [
     '- id: llm-deepseek',
     '  config:',
+    // Keep the endpoint and credential reference in the same generated
+    // settings generation as the model catalog. alpha.3 otherwise resolves
+    // them from the process environment, which can leave a shared runtime
+    // serving a stale endpoint after a VS Code window changes configuration.
+    '    apiKeyEnv: "DEEPSEEK_API_KEY"',
+    `    baseURL: ${JSON.stringify(normalizeProviderBaseUrl(configuration.baseUrl))}`,
     `    thinking: ${thinking}`,
     `    reasoningEffort: ${configuration.reasoningEffort}`,
     `    defaultContextWindow: ${configuration.contextWindowTokens}`,
@@ -70,6 +76,11 @@ export function renderRuntimeOverlay(configuration: HarnessConfiguration): strin
     '',
   ]
   return overlay.join('\n')
+}
+
+/** alpha.3 appends `/chat/completions` directly to this value. */
+function normalizeProviderBaseUrl(value: string): string {
+  return value.replace(/\/+$/u, '')
 }
 
 function renderGenericProvider(configuration: HarnessConfiguration): string[] {

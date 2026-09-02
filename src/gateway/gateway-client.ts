@@ -101,7 +101,18 @@ export class GatewayClient implements vscode.Disposable {
     return this.request<{ readonly items: SessionSummary[] }>('session/list', { _request: {} }).then(result => ({
       items: result.items.map(item => {
         const projectedTitle = item.projections?.values?.title
-        return typeof projectedTitle === 'string' && projectedTitle.trim() !== '' ? { ...item, title: projectedTitle } : item
+        // alpha.3 exposes the session-owned preset through the projection
+        // column rather than a top-level session-list field.
+        const projectedPreset = item.projections?.values?.agentPreset
+        const title = typeof projectedTitle === 'string' && projectedTitle.trim() !== '' ? projectedTitle : item.title
+        const agentPreset = typeof projectedPreset === 'string' && projectedPreset.trim() !== ''
+          ? projectedPreset
+          : item.agentPreset
+        return {
+          ...item,
+          ...(title === undefined ? {} : { title }),
+          ...(agentPreset === undefined ? {} : { agentPreset }),
+        }
       }),
     }))
   }

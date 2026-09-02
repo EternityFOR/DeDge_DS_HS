@@ -72,6 +72,14 @@ if (dshVersion !== expectedDsh) throw new Error(`DSH executable mismatch: expect
 const pnpmVersion = run(node, [pnpm, '--version'])
 if (pnpmVersion !== expectedPnpm) throw new Error(`pnpm executable mismatch: expected ${expectedPnpm}, reported ${pnpmVersion}`)
 
+// The official alpha.3 adapter uses a direct fetch + SSE pipeline. Some
+// Windows gateways/proxies compress or reset event-stream bodies while the
+// response is still active. Keep the upstream package and its version intact,
+// but harden the one provider request at packaging time so every VSIX gets the
+// same deterministic transport behavior. The exact markers make an upstream
+// package drift fail loudly instead of silently shipping an unpatched runtime.
+patchDeepSeekTransport(path.join(runtimeModules, '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js'))
+
 for (const metadata of ['.modules.yaml', '.package-map.json', '.pnpm-workspace-state-v1.json', '.pnpm']) {
   rmSync(path.join(runtimeModules, metadata), { recursive: true, force: true })
 }
@@ -158,6 +166,37 @@ function dependencyVersion(name) {
 function packageVersion(file) {
   const value = JSON.parse(readFileSync(file, 'utf8')).version
   return typeof value === 'string' ? value : '<missing>'
+}
+
+function patchDeepSeekTransport(file) {
+  let source = readFileSync(file, 'utf8')
+  const encodingMarker = '"accept": "text/event-stream",'
+  if (source.split(encodingMarker).length !== 2) {
+    throw new Error(`Unexpected alpha.3 DeepSeek adapter shape; cannot add SSE identity encoding: ${file}`)
+  }
+  source = source.replace(encodingMarker, `${encodingMarker}\n\t\t\t"accept-encoding": "identity",\n\t\t\t"connection": "close",`)
+
+  const errorMarker = 'throw new LlmError(`DeepSeek API stream from ${connection.baseURL} failed`, "TRANSPORT", { cause: error });'
+  if (source.split(errorMarker).length !== 2) {
+    throw new Error(`Unexpected alpha.3 DeepSeek adapter shape; cannot add transport diagnostics: ${file}`)
+  }
+  const diagnostic = 'throw new LlmError(`DeepSeek API stream from ${connection.baseURL} failed (${transportDiagnostic(error)})`, "TRANSPORT", { cause: error });'
+  source = source.replace(errorMarker, diagnostic)
+  const helperMarker = 'var DeepSeekAdapter = class extends LlmAdapter {'
+  if (source.split(helperMarker).length !== 2) {
+    throw new Error(`Unexpected alpha.3 DeepSeek adapter shape; cannot add transport diagnostic helper: ${file}`)
+  }
+  const helper = [
+    'function transportDiagnostic(error) {',
+    '  if (error === null || error === undefined) return "unknown transport error";',
+    '  const cause = error instanceof Error && error.cause instanceof Error ? `; cause=${error.cause.name}: ${error.cause.message}` : "";',
+    '  const value = error instanceof Error ? `${error.name}: ${error.message}${cause}` : String(error);',
+    '  return value.replace(/(?:Bearer\\s+|(?:api[-_ ]?key|token|secret)[=: ]+)\\S+/giu, "<redacted>").slice(0, 240);',
+    '}',
+    '',
+  ].join('\n')
+  source = source.replace(helperMarker, `${helper}${helperMarker}`)
+  writeFileSync(file, source)
 }
 
 function run(command, args) {
