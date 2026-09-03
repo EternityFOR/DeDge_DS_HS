@@ -2243,7 +2243,7 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
   const cancelling = active?.operation === 'cancelling'
   const compacting = active?.operation === 'compacting'
   const modelUnavailable = snapshot.modelCatalog?.routable === false
-  const sendUnavailable = promptUnavailableReason(snapshot)
+  const sendUnavailable = promptUnavailableReason(snapshot, { allowQueue: deliveryMode !== 'steer' })
   const steer = steerAvailable(snapshot)
   renderDeliveryMode()
   renderVisionToggle()
@@ -2276,13 +2276,16 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
   }
   elements.send.classList.toggle('hidden', false)
   const effectiveSteer = steer && (deliveryMode === 'steer' || deliveryMode === 'auto')
+  const queueingAutonomous = hasAutonomousActivity(snapshot) && !effectiveSteer && deliveryMode !== 'steer'
   elements.send.classList.toggle('steer', effectiveSteer)
   elements.send.disabled = sendPending || (sendUnavailable !== undefined && !effectiveSteer)
   elements.send.title = sendPending
     ? 'Sending...'
     : effectiveSteer
       ? 'Steer: deliver this prompt into the active turn'
-      : sendUnavailable ?? 'Send'
+      : queueingAutonomous
+        ? 'Queue this prompt behind the autonomous task'
+        : sendUnavailable ?? 'Send'
   elements.send.setAttribute('aria-label', elements.send.title)
   elements.modelMenu.disabled = modelControlsUnavailable !== undefined
   elements.modelMenu.title = modelControlsUnavailable

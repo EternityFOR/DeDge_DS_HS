@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.1.67] - 2026-09-03
+
+### Changed
+
+- Queue delivery remains available while a Goal continuation or background task is active, matching the Codex-style inbox workflow; Steer keeps its running-turn guard.
+- Autonomous status and cancellation now distinguish Goal continuations from background jobs, with a real Pause path for the current session's work.
+
+### Fixed
+
+- Pause now invokes the official `/goal pause` command before cancelling and removing autonomous queue items, preventing a paused Goal from immediately rearming itself.
+- The packaged runtime adds a session-scoped `/stop-jobs` command for background jobs started by the current Agent; other sessions and unowned jobs are never targeted.
+- Successfully removed autonomous queue items are reflected locally immediately, so stale queue state cannot keep the composer disabled while Gateway events catch up.
+
 ## [0.1.66] - 2026-09-02
 
 ### Changed
@@ -694,7 +707,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.66...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.67...HEAD
+[0.1.67]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.67
 [0.1.66]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.66
 [0.1.65]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.65
 [0.1.64]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.64

@@ -202,6 +202,13 @@ export class SessionStore {
     this.queueItems.set(sessionId, items.map((item, index) => projectQueueItem(item, index)))
   }
 
+  removeSessionQueueItem(sessionId: string, itemId: string): void {
+    const current = this.queueItems.get(sessionId)
+    if (current === undefined) return
+    const next = current.filter(item => item.id !== itemId)
+    if (next.length !== current.length) this.queueItems.set(sessionId, next)
+  }
+
   setSessionJobs(sessionId: string, items: readonly unknown[]): void {
     this.jobs.set(sessionId, items.map((item, index) => projectJob(item, index)))
   }

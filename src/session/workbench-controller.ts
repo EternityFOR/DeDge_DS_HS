@@ -279,7 +279,7 @@ export class WorkbenchController implements vscode.Disposable {
       snapshot = this.store.snapshot()
     }
     const allowSteer = mode === 'steer' && steerAvailable(snapshot)
-    const unavailable = promptUnavailableReason(snapshot, { allowSteer })
+    const unavailable = promptUnavailableReason(snapshot, { allowSteer, allowQueue: mode === 'queue' })
     if (unavailable !== undefined) throw new Error(unavailable)
     const sessionId = snapshot.activeSessionId
     if (sessionId === undefined) throw new Error('Wait for an active Harness session before sending.')
@@ -416,12 +416,25 @@ export class WorkbenchController implements vscode.Disposable {
     }
     return this.sessionOperations.run(sessionId, 'cancelling', async () => {
       const gateway = this.requireGateway()
-      if (session?.running === true || hasActiveTurn(snapshot) || hasAutonomousActivity(snapshot)) await gateway.cancel(sessionId)
-      const agentQueue = autonomousQueueItems(snapshot)
+      const latest = this.store.snapshot()
+      const latestSession = latest.sessions.find(item => item.id === sessionId)
+      const shouldCancelAgent = latestSession?.running === true || hasActiveTurn(latest) || hasAutonomousActivity(latest)
+      if (hasAutonomousActivity(latest)) await this.pauseGoalIfPresent(gateway, sessionId)
+      if (hasRunningBackgroundJobs(latest)) await this.stopBackgroundJobsIfPresent(gateway, sessionId)
+      if (shouldCancelAgent) await gateway.cancel(sessionId)
+      const agentQueue = autonomousQueueItems(this.store.snapshot())
       if (agentQueue.length > 0) {
-        await Promise.all(agentQueue.map(item => gateway.removeQueueItem(sessionId, item.id).catch(error => {
-          this.logger.warn(`Could not remove autonomous queue item ${item.id}: ${errorMessage(error)}`)
-        })))
+        await Promise.all(agentQueue.map(async item => {
+          try {
+            await gateway.removeQueueItem(sessionId, item.id)
+            // The Gateway emits a replacement queue frame as well, but update
+            // the local projection immediately so a successful Pause cannot
+            // leave Send disabled while that frame is in flight.
+            this.store.removeSessionQueueItem(sessionId, item.id)
+          } catch (error) {
+            this.logger.warn(`Could not remove autonomous queue item ${item.id}: ${errorMessage(error)}`)
+          }
+        }))
       }
       this.sessionOperations.finish(sessionId, 'cancelling')
       if (!await this.waitForCancellation(sessionId, 5_000)) {
@@ -429,6 +442,34 @@ export class WorkbenchController implements vscode.Disposable {
         throw new Error('Harness accepted the stop request but the active tool or model call has not stopped yet. You can press Stop again; see Output > DeepSeek Harness for details.')
       }
     }, { retainOnSuccess: true })
+  }
+
+  /** Pause the official same-session Goal before cancelling its queued round. */
+  private async pauseGoalIfPresent(gateway: GatewayClient, sessionId: string): Promise<void> {
+    try {
+      const result = await gateway.executeCommand(sessionId, '/goal pause')
+      if (result.result?.kind === 'error' && !/no goal|not valid/iu.test(result.result.text ?? '')) {
+        this.logger.warn(`Harness could not pause the autonomous goal before cancellation: ${result.result.text ?? 'unknown command error'}`)
+      }
+    } catch (error) {
+      // Older/custom presets may not mount command-goal. Cancellation still
+      // removes the projected inbox work, so an unavailable helper is soft.
+      this.logger.warn(`Could not issue the optional /goal pause command: ${errorMessage(error)}`)
+    }
+  }
+
+  /** Request cancellation of session-owned background jobs through the
+   * packaged tool-jobs command; the upstream API intentionally exposes jobs
+   * only to the owning agent, so this remains a best-effort helper. */
+  private async stopBackgroundJobsIfPresent(gateway: GatewayClient, sessionId: string): Promise<void> {
+    try {
+      const result = await gateway.executeCommand(sessionId, '/stop-jobs')
+      if (result.result?.kind === 'error') this.logger.warn(`Harness could not stop background jobs: ${result.result.text ?? 'unknown command error'}`)
+    } catch (error) {
+      // A pre-patch/shared runtime simply has no command; keep the real job
+      // projection visible instead of claiming it was stopped.
+      this.logger.warn(`Could not issue the optional /stop-jobs command: ${errorMessage(error)}`)
+    }
   }
 
   archiveSession(sessionId: string): Promise<void> {
@@ -1390,6 +1431,10 @@ function isQueueItemNotFound(error: unknown): boolean {
 
 function isSteerUnavailable(error: unknown): boolean {
   return errorMessage(error).includes('steer-unavailable')
+}
+
+function hasRunningBackgroundJobs(snapshot: WorkbenchSnapshot): boolean {
+  return snapshot.jobs?.some(job => job.status === 'running' || job.status === 'stopping') === true
 }
 
 function presetForNewSession(preferred: string, catalog: WorkbenchSnapshot['presetCatalog']): string {

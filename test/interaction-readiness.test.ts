@@ -111,6 +111,7 @@ describe('workbench interaction readiness', () => {
     expect(steerAvailable(runningWithJob)).toBe(true)
     expect(promptUnavailableReason(runningWithJob)).toContain('autonomous task')
     expect(promptUnavailableReason(runningWithJob, { allowSteer: true })).toBeUndefined()
+    expect(promptUnavailableReason(runningWithJob, { allowQueue: true })).toBeUndefined()
   })
 
   it('does not expose stale autonomous controls while the shared runtime is offline', () => {

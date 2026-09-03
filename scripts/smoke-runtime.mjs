@@ -95,6 +95,13 @@ try {
   if (typeof session?.sessionId !== 'string' || session.sessionId === '') {
     throw new Error(`session.create returned a malformed response: ${JSON.stringify(session)}`)
   }
+  const commands = await rpc(url, 'commands/list', { args: { agentId: session.sessionId } }, cookie)
+  if (!Array.isArray(commands) || !commands.every(command => typeof command?.name === 'string')) {
+    throw new Error(`commands.list returned a malformed response: ${JSON.stringify(commands)}`)
+  }
+  if (!commands.some(command => command.name === 'stop-jobs')) {
+    throw new Error('standard Harness preset did not expose the packaged stop-jobs command')
+  }
   const control = await readRemoteStreamItem(url, 'session/control', { args: {} }, cookie)
   if (control?.type !== 'baseline' || typeof control.value?.queues !== 'object' || typeof control.value?.jobs !== 'object') {
     throw new Error(`session/control returned a malformed baseline: ${JSON.stringify(control)}`)
@@ -115,6 +122,10 @@ try {
   const command = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/compact', images: [] } }, cookie)
   if (command?.result?.kind !== 'success' && command?.result?.kind !== 'error') {
     throw new Error(`commands/execute returned a malformed command result: ${JSON.stringify(command)}`)
+  }
+  const stopJobs = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/stop-jobs', images: [] } }, cookie)
+  if (stopJobs?.result?.kind !== 'success' || typeof stopJobs.result.text !== 'string') {
+    throw new Error(`stop-jobs command returned an unexpected result: ${JSON.stringify(stopJobs)}`)
   }
   const visionSession = await rpc(url, 'session/create', { args: { request: { cwd: root, agentPreset: 'standard' } } }, cookie)
   await rpc(url, 'session/selectModel', { args: { request: { sessionId: visionSession.sessionId, provider: 'deepseek-official', model: 'deepseek-v4-flash-vision-exp', reasoningEffort: 'off' } } }, cookie)

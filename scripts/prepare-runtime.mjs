@@ -79,6 +79,7 @@ if (pnpmVersion !== expectedPnpm) throw new Error(`pnpm executable mismatch: exp
 // same deterministic transport behavior. The exact markers make an upstream
 // package drift fail loudly instead of silently shipping an unpatched runtime.
 patchDeepSeekTransport(path.join(runtimeModules, '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js'))
+patchJobStopCommand(path.join(runtimeModules, '@deepseek-ai', 'dsh-tool-jobs', 'lib', 'index.js'))
 
 for (const metadata of ['.modules.yaml', '.package-map.json', '.pnpm-workspace-state-v1.json', '.pnpm']) {
   rmSync(path.join(runtimeModules, metadata), { recursive: true, force: true })
@@ -196,6 +197,45 @@ function patchDeepSeekTransport(file) {
     '',
   ].join('\n')
   source = source.replace(helperMarker, `${helper}${helperMarker}`)
+  writeFileSync(file, source)
+}
+
+function patchJobStopCommand(file) {
+  let source = readFileSync(file, 'utf8')
+  const injectMarker = 'const inject = [\n\t"tools",\n\t"jobs",\n\t"systemPrompt"\n];'
+  if (source.split(injectMarker).length !== 2) {
+    throw new Error(`Unexpected alpha.3 tool-jobs shape; cannot add the stop-jobs command: ${file}`)
+  }
+  source = source.replace(injectMarker, 'const inject = [\n\t"commands",\n\t"tools",\n\t"jobs",\n\t"systemPrompt"\n];')
+  const registrationMarker = '\tctx.jobs.attachController("tool-jobs");'
+  if (source.split(registrationMarker).length !== 2) {
+    throw new Error(`Unexpected alpha.3 tool-jobs shape; cannot add the stop-jobs registration: ${file}`)
+  }
+  const registration = [
+    registrationMarker,
+    '\tctx.commands.register({',
+    '\t\tname: "stop-jobs",',
+    '\t\tdescription: "Stop all running background jobs owned by this session",',
+    '\t\thandler: (invocation) => {',
+    '\t\t\tlet requested = 0;',
+    '\t\t\tfor (const job of ctx.jobs.list(invocation.agent)) {',
+    '\t\t\t\tif (job.ownerSession !== invocation.agent.id) continue;',
+    '\t\t\t\tif (job.status !== "running") continue;',
+    '\t\t\t\ttry {',
+    '\t\t\t\t\tctx.jobs.kill(job.id, invocation.agent, "Stopped by the user from the VS Code workbench");',
+    '\t\t\t\t\trequested += 1;',
+    '\t\t\t\t} catch {',
+    '\t\t\t\t\t// A job can settle between list() and kill(); keep stopping the rest.',
+    '\t\t\t\t}',
+    '\t\t\t}',
+    '\t\t\treturn {',
+    '\t\t\t\tkind: "success",',
+    '\t\t\t\ttext: requested === 0 ? "No running background jobs." : `Requested cancellation for ${requested} background job${requested === 1 ? "" : "s"}.`',
+    '\t\t\t};',
+    '\t\t}',
+    '\t});',
+  ].join('\n')
+  source = source.replace(registrationMarker, registration)
   writeFileSync(file, source)
 }
 

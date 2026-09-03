@@ -290,6 +290,8 @@ describe('session event projection', () => {
       { id: 'user-1', placement: 'queued', sourceKind: 'user' },
     ])
     expect(store.snapshot().jobs).toEqual([{ id: 'job-1', kind: 'bash', label: 'npm test', status: 'running' }])
+    store.removeSessionQueueItem('s-1', 'wake-1')
+    expect(store.snapshot().queueItems).toEqual([{ id: 'user-1', placement: 'queued', sourceKind: 'user' }])
   })
 
   it('projects user queue text while redacting non-text content', () => {
