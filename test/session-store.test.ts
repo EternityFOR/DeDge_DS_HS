@@ -321,6 +321,23 @@ describe('session event projection', () => {
     expect(JSON.stringify(store.snapshot().queueItems)).not.toContain('private-base64-data')
   })
 
+  it('recognizes alpha.3 browser queue rows from their rpcId when source is redacted', () => {
+    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000, pasteFileThreshold: 8_192 })
+    store.addSession({ sessionId: 's-1', blank: false, running: true })
+    store.setActive('s-1')
+    store.setSessionQueue('s-1', [
+      { id: 'user-queued', placement: 'queued', rpcId: 'request-1', message: { id: 'user-queued', content: [{ type: 'text', text: 'Cancel me' }] } },
+      { id: 'goal-queued', placement: 'queued', message: { id: 'goal-queued', content: [{ type: 'text', text: 'Continue automatically' }] } },
+      { id: 'user-steering', placement: 'steering', message: { id: 'user-steering', content: [{ type: 'text', text: 'Steer me' }] } },
+    ])
+
+    expect(store.snapshot().queueItems).toEqual([
+      { id: 'user-queued', placement: 'queued', sourceKind: 'user', text: 'Cancel me', preview: 'Cancel me' },
+      { id: 'goal-queued', placement: 'queued', text: 'Continue automatically', preview: 'Continue automatically' },
+      { id: 'user-steering', placement: 'steering', sourceKind: 'user', text: 'Steer me', preview: 'Steer me' },
+    ])
+  })
+
   it('projects active-session catalogs and keeps duplicate question ids in separate RPC batches', () => {
     const store = new SessionStore({ provider: 'fallback', model: 'fallback-model', reasoningEffort: 'fallback-effort', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000,
     pasteFileThreshold: 8_192, })

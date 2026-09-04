@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.1.68] - 2026-09-04
+
+### Fixed
+
+- Alpha.3 queued user prompts are now recognized from the official queue row `rpcId` even when `message.source` is redacted. Queued messages remain visible with Remove, Edit, and Steer controls.
+- Queue rows created by the current send are no longer hidden during the short idle/admission window, so a newly accepted prompt can be cancelled immediately.
+- A queued prompt now exposes a compact `Cancel` action on its sending card as soon as Harness confirms the inbox item.
+- Pause keeps its cancelling state until the Agent, autonomous inbox, and owned background jobs settle, preventing a stale Pause button from blocking the composer.
+
 ## [0.1.67] - 2026-09-03
 
 ### Changed
@@ -707,7 +716,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.67...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.68...HEAD
+[0.1.68]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.68
 [0.1.67]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.67
 [0.1.66]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.66
 [0.1.65]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.65

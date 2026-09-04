@@ -901,7 +901,15 @@ function projectQueueItem(value: unknown, index: number): WorkbenchQueueItem {
     : 'context'
   const message = isRecord(value.message) ? value.message : undefined
   const source = message !== undefined && isRecord(message.source) ? message.source : undefined
-  const sourceKind = source !== undefined && typeof source.kind === 'string' ? source.kind : undefined
+  // alpha.3's session-control projection intentionally redacts the source
+  // from `message` but carries `rpcId` on the queue row for browser-authored
+  // prompts. Recover ownership from that stable marker; steering placement is
+  // also user-only in the official controller.
+  const sourceKind = source !== undefined && typeof source.kind === 'string'
+    ? source.kind
+    : (typeof value.rpcId === 'string' && value.rpcId.trim() !== '') || placement === 'steering'
+      ? 'user'
+      : undefined
   const content = message?.content
   const projected = projectQueueContent(content)
   return {

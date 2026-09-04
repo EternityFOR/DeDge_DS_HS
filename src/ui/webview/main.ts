@@ -104,6 +104,7 @@ let pendingSendBaselineCount = 0
 let pendingSendMode: 'queue' | 'steer' = 'queue'
 let pendingSendBaselineIds = new Set<string>()
 let pendingQueueBaselineIds = new Set<string>()
+let pendingQueueRemoveRequestedId: string | undefined
 let steerPendingText: string | undefined
 type DeliveryMode = 'auto' | 'queue' | 'steer'
 let deliveryMode: DeliveryMode = 'queue'
@@ -511,6 +512,7 @@ window.addEventListener('message', event => {
     pendingSendBaselineCount = baseline?.messages.filter(item => item.role === 'user' && item.text === message.text).length ?? 0
     pendingSendBaselineIds = new Set(baseline?.messages.map(item => item.id) ?? [])
     pendingQueueBaselineIds = new Set(baseline?.queueItems?.map(item => item.id) ?? [])
+    pendingQueueRemoveRequestedId = undefined
     if (state !== undefined) placePendingSendPreview(state.messages)
     if (state !== undefined) renderStatus(state)
   } else if (message.type === 'sendProgress') {
@@ -523,6 +525,7 @@ window.addEventListener('message', event => {
       pendingSendText = undefined
       pendingSendBaselineIds = new Set<string>()
       pendingQueueBaselineIds = new Set<string>()
+      pendingQueueRemoveRequestedId = undefined
       steerPendingText = undefined
       elements.steerNotice.classList.add('hidden')
       if (elements.prompt.value.trim() === '') {
@@ -550,6 +553,12 @@ window.addEventListener('message', event => {
     if (message.accepted && queueEditingId === message.itemId) {
       queueEditingId = undefined
       queueEditingText = ''
+    }
+    if (message.accepted && pendingQueueRemoveRequestedId === message.itemId) {
+      clearPendingQueuePreview()
+      pendingQueueRemoveRequestedId = undefined
+    } else if (!message.accepted && pendingQueueRemoveRequestedId === message.itemId) {
+      pendingQueueRemoveRequestedId = undefined
     }
     queueSignature = ''
     if (state !== undefined) renderQueueDock(state)
@@ -881,13 +890,54 @@ function visibleQueueItems(snapshot: WorkbenchSnapshot): NonNullable<WorkbenchSn
 }
 
 function queueDisplayItems(snapshot: WorkbenchSnapshot): NonNullable<WorkbenchSnapshot['queueItems']>[number][] {
+  // The authoritative queue row is the only reliable cancellation handle for
+  // an accepted queued prompt. Keep newly-created rows visible even during the
+  // short idle/admission window so Remove/Edit/Steer are available immediately.
   const items = visibleQueueItems(snapshot)
-  const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
-  // Harness briefly exposes an idle follow-up in its authoritative inbox
-  // before AgentLoop claims it. Suppress only newly-created rows from this
-  // send, preserving any messages that were already queued by the user.
-  if (pendingSendMode !== 'queue' || pendingSendText === undefined || active?.running === true) return items
-  return items.filter(item => pendingQueueBaselineIds.has(item.id))
+  syncPendingQueuePreview(items)
+  return items
+}
+
+function syncPendingQueuePreview(items: readonly NonNullable<WorkbenchSnapshot['queueItems']>[number][]): void {
+  const pendingText = pendingSendText
+  if (pendingSendMode !== 'queue' || pendingText === undefined || pendingSendPreview === undefined) return
+  const expectedText = pendingText.trim()
+  const match = items.find(item => item.sourceKind === 'user'
+    && !pendingQueueBaselineIds.has(item.id)
+    && expectedText !== ''
+    && (item.text?.trim() === expectedText || item.text?.includes(expectedText)))
+  const existing = pendingSendPreview.querySelector('.pending-queue-actions')
+  if (match === undefined) {
+    existing?.remove()
+    return
+  }
+  const busy = queueBusyItems.has(match.id)
+  if (existing instanceof HTMLElement) {
+    const button = existing.querySelector<HTMLButtonElement>('button')
+    if (button !== null) {
+      button.disabled = busy
+      button.title = busy ? 'Cancelling queued message...' : 'Cancel queued message'
+      button.setAttribute('aria-label', button.title)
+    }
+    return
+  }
+  const actions = document.createElement('span')
+  actions.className = 'message-actions pending-queue-actions'
+  actions.append(queueActionButton('trash-2', busy ? 'Cancelling queued message...' : 'Cancel queued message', busy, () => {
+    if (busy) return
+    pendingQueueRemoveRequestedId = match.id
+    startQueueAction(match.id, { type: 'removeQueueItem', itemId: match.id })
+  }))
+  pendingSendPreview.querySelector('.message-head')?.append(actions)
+}
+
+function clearPendingQueuePreview(): void {
+  pendingSendPreview?.remove()
+  pendingSendPreview = undefined
+  pendingSendText = undefined
+  pendingSendBaselineCount = 0
+  pendingSendBaselineIds = new Set<string>()
+  pendingQueueBaselineIds = new Set<string>()
 }
 
 function renderQueueRow(item: NonNullable<WorkbenchSnapshot['queueItems']>[number], snapshot: WorkbenchSnapshot): HTMLElement {
@@ -2434,7 +2484,8 @@ function send(): void {
   const value = elements.prompt.value
   if (value.trim() === '' && attachments.length === 0) return
   const steer = steerAvailable(state) && (deliveryMode === 'steer' || deliveryMode === 'auto')
-  if (promptUnavailableReason(state, { allowSteer: steer }) !== undefined) return
+  const allowQueue = !steer && deliveryMode !== 'steer'
+  if (promptUnavailableReason(state, { allowSteer: steer, allowQueue }) !== undefined) return
   sendPending = true
   if (value.trim() !== '') {
     if (sentHistory[sentHistory.length - 1] !== value) sentHistory.push(value)

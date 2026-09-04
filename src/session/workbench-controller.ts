@@ -436,11 +436,14 @@ export class WorkbenchController implements vscode.Disposable {
           }
         }))
       }
-      this.sessionOperations.finish(sessionId, 'cancelling')
       if (!await this.waitForCancellation(sessionId, 5_000)) {
         this.sessionOperations.finish(sessionId, 'cancelling')
-        throw new Error('Harness accepted the stop request but the active tool or model call has not stopped yet. You can press Stop again; see Output > DeepSeek Harness for details.')
+        throw new Error('Harness accepted the stop request but the active task or background job has not stopped yet. The session remains available; try Pause again or inspect Output > DeepSeek Harness.')
       }
+      // Keep the cancelling operation visible until Agent, autonomous inbox,
+      // and owned background jobs have all settled. This prevents a dead
+      // Pause button from reappearing while a job is still stopping.
+      this.sessionOperations.finish(sessionId, 'cancelling')
     }, { retainOnSuccess: true })
   }
 
@@ -1067,7 +1070,6 @@ export class WorkbenchController implements vscode.Disposable {
     if (current?.running === true) this.store.setRunning(sessionId, true)
     else if (current !== undefined) {
       this.store.markSessionStopped(sessionId)
-      this.sessionOperations.finish(sessionId, 'cancelling')
     }
     this.publish()
   }
@@ -1116,7 +1118,6 @@ export class WorkbenchController implements vscode.Disposable {
       this.store.appendEvent(frame.sessionId, frame.event, frame.view)
       if (frame.event.type === 'user/message' || frame.event.type === 'assistant/message') void this.hydrateHistoryImages(frame.sessionId)
       if (frame.event.type === 'turn/end') {
-        this.sessionOperations.finish(frame.sessionId, 'cancelling')
         void this.maybeGenerateSessionTitle(frame.sessionId)
       }
       return this.publish()
@@ -1124,7 +1125,6 @@ export class WorkbenchController implements vscode.Disposable {
     if (frame.type === 'session/projection' && frame.key === 'status' && isRunningValue(frame.value)) {
       if (frame.value.running) this.store.setRunning(frame.sessionId, true)
       else this.store.markSessionStopped(frame.sessionId)
-      if (!frame.value.running) this.sessionOperations.finish(frame.sessionId, 'cancelling')
       return this.publish()
     }
     if (frame.type === 'session/queue') {
@@ -1228,7 +1228,6 @@ export class WorkbenchController implements vscode.Disposable {
         // left behind by a process/agent restart, so the UI cannot retain a
         // dead Pause button or block the next prompt indefinitely.
         this.store.markSessionStopped(session.sessionId)
-        this.sessionOperations.finish(session.sessionId, 'cancelling')
       }
     }
 
@@ -1313,7 +1312,6 @@ export class WorkbenchController implements vscode.Disposable {
     if (frame.type === 'host/session-status') {
       if (frame.running) this.store.setRunning(frame.sessionId, true)
       else this.store.markSessionStopped(frame.sessionId)
-      if (!frame.running) this.sessionOperations.finish(frame.sessionId, 'cancelling')
     }
     if (frame.type === 'host/archived-sessions-changed') this.store.replaceArchivedSessions(frame.archivedSessionIds)
     if (frame.type === 'host/agent-error') this.store.setError(frame.message)
@@ -1333,22 +1331,33 @@ export class WorkbenchController implements vscode.Disposable {
   private async waitForCancellation(sessionId: string, timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
-      if (this.store.snapshot().sessions.find(session => session.id === sessionId)?.running !== true) return true
+      if (this.isCancellationSettled(sessionId)) return true
       await delay(250)
     }
     try {
       const sessions = await this.requireGateway().listSessions()
       this.store.replaceSessions(sessions.items ?? [])
       const current = this.store.snapshot().sessions.find(session => session.id === sessionId)
-      const stopped = current?.running !== true
-      if (current !== undefined && stopped) this.store.markSessionStopped(sessionId)
-      if (stopped) this.sessionOperations.finish(sessionId, 'cancelling')
+      if (current !== undefined && current.running !== true) this.store.markSessionStopped(sessionId)
+      const stopped = this.isCancellationSettled(sessionId)
       this.publish()
       return stopped
     } catch (error) {
       this.logger.warn(`Could not verify stop state for session ${sessionId}: ${errorMessage(error)}`)
       return false
     }
+  }
+
+  private isCancellationSettled(sessionId: string): boolean {
+    const snapshot = this.store.snapshot()
+    const session = snapshot.sessions.find(item => item.id === sessionId)
+    if (session === undefined) return true
+    if (session?.running === true) return false
+    // Queue/job projections are exposed for the active session. Cancellation
+    // only targets that session, so require all autonomous work to disappear;
+    // user-owned queued prompts remain valid and do not block a stopped agent.
+    if (snapshot.activeSessionId === sessionId && (hasActiveTurn(snapshot) || hasAutonomousActivity(snapshot))) return false
+    return true
   }
 }
 
