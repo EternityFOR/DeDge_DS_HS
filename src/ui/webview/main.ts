@@ -495,26 +495,16 @@ window.addEventListener('message', event => {
     }
     scheduleRender()
   } else if (message.type === 'sendStarted') {
-    sendPending = true
     if (elements.prompt.value === message.text) {
       elements.prompt.value = ''
       vscode.setState({ draft: '' })
       resizePrompt()
     }
     elements.prompt.focus()
-    pendingSendMode = message.mode ?? 'queue'
-    // The queue is authoritative Harness state. Keep composer feedback in the
-    // conversation while the prompt receipt settles instead of inventing a
-    // transient queued row for an idle session.
-    showPendingSendPreview(message.text, message.attachments.map(item => item.label), pendingSendMode)
-    const baseline = pendingState ?? state
-    pendingSendText = message.text
-    pendingSendBaselineCount = baseline?.messages.filter(item => item.role === 'user' && item.text === message.text).length ?? 0
-    pendingSendBaselineIds = new Set(baseline?.messages.map(item => item.id) ?? [])
-    pendingQueueBaselineIds = new Set(baseline?.queueItems?.map(item => item.id) ?? [])
-    pendingQueueRemoveRequestedId = undefined
-    if (state !== undefined) placePendingSendPreview(state.messages)
-    if (state !== undefined) renderStatus(state)
+    // The composer creates this preview optimistically on click.  Keep the
+    // host receipt idempotent so a slow settings/vision lookup cannot delay the
+    // user's message or replace an already visible waiting row.
+    beginPendingSend(message.text, message.attachments.map(item => item.label), message.mode ?? 'queue')
   } else if (message.type === 'sendProgress') {
     renderPendingVisionProgress(message.progress)
   } else if (message.type === 'sendSettled') {
@@ -1527,6 +1517,40 @@ function historyControl(label: string, title: string, handler: () => void): HTML
   return button
 }
 
+/**
+ * Start the local send timeline before the host performs any asynchronous
+ * work.  The host sends the same receipt as a compatibility signal; keeping
+ * this operation idempotent prevents that receipt from flashing/reordering the
+ * preview when the provider or vision model is slow to respond.
+ */
+function beginPendingSend(
+  text: string,
+  attachmentLabels: readonly string[],
+  mode: 'queue' | 'steer',
+  force = false,
+): void {
+  const reuse = !force
+    && sendPending
+    && pendingSendText === text
+    && pendingSendMode === mode
+    && pendingSendPreview !== undefined
+  sendPending = true
+  pendingSendMode = mode
+  if (!reuse) {
+    const baseline = pendingState ?? state
+    pendingSendText = text
+    pendingSendBaselineCount = baseline?.messages.filter(item => item.role === 'user' && item.text === text).length ?? 0
+    pendingSendBaselineIds = new Set(baseline?.messages.map(item => item.id) ?? [])
+    pendingQueueBaselineIds = new Set(baseline?.queueItems?.map(item => item.id) ?? [])
+    pendingQueueRemoveRequestedId = undefined
+    showPendingSendPreview(text, attachmentLabels, mode)
+  }
+  if (state !== undefined) {
+    placePendingSendPreview(state.messages)
+    renderStatus(state)
+  }
+}
+
 function showPendingSendPreview(text: string, attachmentLabels: readonly string[], mode: 'queue' | 'steer' = 'queue'): void {
   pendingSendPreview?.remove()
   pendingSendPreview = document.createElement('article')
@@ -2492,6 +2516,16 @@ function send(): void {
     if (sentHistory.length > 200) sentHistory.shift()
   }
   historyIndex = -1
+  const mode = steer ? 'steer' as const : 'queue' as const
+  beginPendingSend(value, attachments.map(item => item.label), mode, true)
+  // Clear the composer locally as soon as the click is accepted.  The host
+  // receipt repeats this for older Webview versions, but must not be the first
+  // visible acknowledgement when settings/model discovery is slow.
+  if (elements.prompt.value === value) {
+    elements.prompt.value = ''
+    vscode.setState({ draft: '' })
+    resizePrompt()
+  }
   renderStatus(state)
   if (steer) {
     steerPendingText = value

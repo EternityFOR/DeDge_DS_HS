@@ -310,25 +310,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
     if (message.type === 'send') {
       const attachments = [...this.attachments]
-      const settings = await this.actions.getSettings()
-      if (attachments.some(item => item.kind === 'image') && settings.mainModelVisionCapable && settings.auxiliaryVisionEnabled) {
-        const confirmed = await vscode.window.showWarningMessage(
-          'The selected main model already accepts images. Auxiliary vision will make an extra model request first, adding latency and token cost.',
-          { modal: true },
-          'Use Auxiliary Vision',
-        )
-        if (confirmed !== 'Use Auxiliary Vision') {
-          await this.post({ type: 'sendSettled', accepted: false, text: message.text })
-          return
-        }
-      }
       const sentIds = new Set(attachments.map(item => item.id))
       this.attachments = this.attachments.filter(item => !sentIds.has(item.id))
-      // Release the composer immediately, matching Codex's image-send UX. Vision conversion and
-      // the Harness RPC continue in this handler; failures are reported through sendSettled.
+      // Release the composer before any settings/model-list lookup.  getSettings()
+      // can perform a provider network request (and an unreachable endpoint must
+      // never make a normal text message look as if it was not sent).
       await this.post({ type: 'sendStarted', text: message.text, attachments: attachments.map(item => ({ label: item.label })), mode: message.mode ?? 'queue' })
       await this.postState()
       try {
+        // Only image sends need the vision settings lookup/confirmation.  Keep
+        // this after sendStarted so the local message and waiting state are
+        // visible while a slow vision endpoint is being resolved.
+        if (attachments.some(item => item.kind === 'image')) {
+          const settings = await this.actions.getSettings()
+          if (settings.mainModelVisionCapable && settings.auxiliaryVisionEnabled) {
+            const confirmed = await vscode.window.showWarningMessage(
+              'The selected main model already accepts images. Auxiliary vision will make an extra model request first, adding latency and token cost.',
+              { modal: true },
+              'Use Auxiliary Vision',
+            )
+            if (confirmed !== 'Use Auxiliary Vision') {
+              this.attachments = [...attachments, ...this.attachments.filter(item => !sentIds.has(item.id))]
+              await this.post({ type: 'sendSettled', accepted: false, text: message.text })
+              await this.postState()
+              return
+            }
+          }
+        }
         await this.controller.send(message.text, attachments, message.mode ?? 'queue', progress => { void this.post({ type: 'sendProgress', progress }) })
         if (this.pendingHandoff?.sessionId === this.controller.snapshot().activeSessionId) await this.clearPendingHandoff()
         await this.post({ type: 'sendSettled', accepted: true, text: message.text })

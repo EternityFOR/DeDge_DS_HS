@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.1.69] - 2026-09-04
+
+### Fixed
+
+- Sending now renders the user's message and clears the composer immediately, before any Vision/model-list lookup or provider network wait.
+- The sending card stays visible with an animated submitting/waiting state until Harness acknowledges the prompt, so a delayed request no longer appears to jump straight to an AI response.
+- Image-send confirmation remains asynchronous and restores the draft and attachments when auxiliary Vision is declined.
+
 ## [0.1.68] - 2026-09-04
 
 ### Fixed
@@ -716,7 +724,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.68...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.69...HEAD
+[0.1.69]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.69
 [0.1.68]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.68
 [0.1.67]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.67
 [0.1.66]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.66
