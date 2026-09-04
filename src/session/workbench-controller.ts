@@ -6,7 +6,7 @@ import * as vscode from 'vscode'
 import type { ConfigurationService, HarnessConfiguration } from '../config/configuration.js'
 import { buildPrompt, type ContextAttachment, ContextCollector } from '../context/context-collector.js'
 import type { GatewayClient, PromptContentPart } from '../gateway/gateway-client.js'
-import { parseContextPressureProjection, parsePermissionProjection, type HostFrame, type MuxFrame, type SessionEvent, type SessionSummary } from '../gateway/protocol.js'
+import { parseContextPressureProjection, parsePermissionProjection, parseScheduleProjection, type HostFrame, type MuxFrame, type SessionEvent, type SessionSummary } from '../gateway/protocol.js'
 import { listSkills, parseSkillRefs, readSkillBody, type SkillSummary } from '../skills/skill-catalog.js'
 import { describeImage } from '../vision/vision-client.js'
 import { resolveVisionRoute } from '../vision/routing.js'
@@ -16,7 +16,7 @@ import type { CredentialStore } from '../security/credentials.js'
 import type { RuntimeManager } from '../runtime/runtime-manager.js'
 import type { PendingApproval, PendingQuestion, QuestionAnswer, WorkbenchImageAttachment, WorkbenchQueueItem, WorkbenchSendProgress, WorkbenchSnapshot } from './types.js'
 import { SessionOperationCoordinator } from './session-operations.js'
-import { autonomousQueueItems, hasActiveTurn, hasAutonomousActivity, promptUnavailableReason, steerAvailable } from './interaction-readiness.js'
+import { autonomousQueueItems, hasActiveTurn, hasAutonomousActivity, hasAutonomousAgentActivity, hasScheduledActivity, promptUnavailableReason, steerAvailable } from './interaction-readiness.js'
 import { SessionStore } from './session-store.js'
 import { SessionTrashService } from './session-trash.js'
 import { validateQuestionAnswers } from './question-answers.js'
@@ -211,6 +211,7 @@ export class WorkbenchController implements vscode.Disposable {
     this.store.replaceHistory(sessionId, history.events ?? [], history.hasMore === true)
     this.store.setContextPressure(sessionId, parseContextPressureProjection(history.projections?.values?.contextPressure))
     this.store.setPermissions(sessionId, parsePermissionProjection(history.projections?.values?.permissions))
+    this.store.setSessionSchedules(sessionId, parseScheduleProjection(history.projections?.values?.schedule) ?? [])
     const projectedPreset = history.projections?.values?.agentPreset
     if (typeof projectedPreset === 'string' && projectedPreset.trim() !== '') this.store.setAgentPreset(sessionId, projectedPreset)
     // A persisted history window can end in an unfinished turn when Harness
@@ -418,9 +419,12 @@ export class WorkbenchController implements vscode.Disposable {
       const gateway = this.requireGateway()
       const latest = this.store.snapshot()
       const latestSession = latest.sessions.find(item => item.id === sessionId)
-      const shouldCancelAgent = latestSession?.running === true || hasActiveTurn(latest) || hasAutonomousActivity(latest)
-      if (hasAutonomousActivity(latest)) await this.pauseGoalIfPresent(gateway, sessionId)
+      const scheduledActivity = hasScheduledActivity(latest)
+      const agentActivity = hasAutonomousAgentActivity(latest)
+      const shouldCancelAgent = latestSession?.running === true || agentActivity
+      if (agentActivity) await this.pauseGoalIfPresent(gateway, sessionId)
       if (hasRunningBackgroundJobs(latest)) await this.stopBackgroundJobsIfPresent(gateway, sessionId)
+      if (scheduledActivity) await this.cancelSchedulesIfPresent(gateway, sessionId)
       if (shouldCancelAgent) await gateway.cancel(sessionId)
       const agentQueue = autonomousQueueItems(this.store.snapshot())
       if (agentQueue.length > 0) {
@@ -473,6 +477,29 @@ export class WorkbenchController implements vscode.Disposable {
       // projection visible instead of claiming it was stopped.
       this.logger.warn(`Could not issue the optional /stop-jobs command: ${errorMessage(error)}`)
     }
+  }
+
+  /** Cancel active session-local reminders through the packaged schedule bridge. */
+  private async cancelSchedulesIfPresent(gateway: GatewayClient, sessionId: string): Promise<void> {
+    const schedules = this.store.snapshot().schedules ?? []
+    if (schedules.length === 0) return
+    let result: Awaited<ReturnType<GatewayClient['executeCommand']>>
+    try {
+      result = await gateway.executeCommand(sessionId, '/schedule-cancel all')
+    } catch (error) {
+      throw new Error(`Harness could not cancel the scheduled reminder${schedules.length === 1 ? '' : 's'}: ${errorMessage(error)}`)
+    }
+    if (result.result?.kind === 'error') {
+      throw new Error(result.result.text ?? 'Harness rejected scheduled reminder cancellation.')
+    }
+    if (result.result?.kind !== 'success') {
+      throw new Error('This Harness runtime does not expose the schedule cancellation command. Reinstall the latest DeDge DeepSeek Harness VSIX before trying Pause again.')
+    }
+    // Do not wait for the replacement projection frame to arrive before
+    // releasing the Pause button; the command's persistence barrier already
+    // proves that every active reminder was removed.
+    this.store.setSessionSchedules(sessionId, [])
+    this.publish()
   }
 
   archiveSession(sessionId: string): Promise<void> {
@@ -1106,11 +1133,12 @@ export class WorkbenchController implements vscode.Disposable {
       // status projection for every session.  Defer one coalesced authoritative
       // refresh until all subscription frames in this connection have arrived.
       this.subscribedSessionIds.add(frame.sessionId)
-      // The protocol omits queue/jobs baseline frames for an empty set. Clear
-      // the previous connection's projections first so absence converges to
-      // idle instead of preserving a stale Pause/queued state.
+      // The protocol omits queue/jobs/schedule baseline frames for an empty
+      // set. Clear the previous connection's projections first so absence
+      // converges to idle instead of preserving stale Pause/queued state.
       this.store.setSessionQueue(frame.sessionId, [])
       this.store.setSessionJobs(frame.sessionId, [])
+      this.store.setSessionSchedules(frame.sessionId, [])
       if (this.store.snapshot().phase === 'connected') this.scheduleGatewayResync()
       return this.publish()
     }
@@ -1133,6 +1161,10 @@ export class WorkbenchController implements vscode.Disposable {
     }
     if (frame.type === 'session/jobs') {
       this.store.setSessionJobs(frame.sessionId, frame.jobs)
+      return this.publish()
+    }
+    if (frame.type === 'session/projection' && frame.key === 'schedule') {
+      this.store.setSessionSchedules(frame.sessionId, parseScheduleProjection(frame.value) ?? [])
       return this.publish()
     }
     if (frame.type === 'session/projection' && frame.key === 'contextPressure') {
@@ -1239,6 +1271,7 @@ export class WorkbenchController implements vscode.Disposable {
       if (history.projections?.values !== undefined) {
         this.store.setContextPressure(activeSessionId, parseContextPressureProjection(history.projections.values.contextPressure))
         this.store.setPermissions(activeSessionId, parsePermissionProjection(history.projections.values.permissions))
+        this.store.setSessionSchedules(activeSessionId, parseScheduleProjection(history.projections.values.schedule) ?? [])
         const projectedPreset = history.projections.values.agentPreset
         if (typeof projectedPreset === 'string' && projectedPreset.trim() !== '') this.store.setAgentPreset(activeSessionId, projectedPreset)
       }

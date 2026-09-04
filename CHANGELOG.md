@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.1.70] - 2026-09-04
+
+### Fixed
+
+- Active reminders from the official alpha.3 `schedule` projection now keep the session visibly marked as autonomous until they fire or are cancelled.
+- The right-side Pause control is available for an armed scheduled reminder and clearly reports the number of reminders it will cancel.
+- Pause now cancels current-session reminders through a persistence-checked `/schedule-cancel` bridge, without touching schedules in other sessions.
+- Schedule state is restored from history and the live control stream after session switching or VS Code restart.
+
 ## [0.1.69] - 2026-09-04
 
 ### Fixed
@@ -724,7 +733,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.69...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.70...HEAD
+[0.1.70]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.70
 [0.1.69]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.69
 [0.1.68]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.68
 [0.1.67]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.67

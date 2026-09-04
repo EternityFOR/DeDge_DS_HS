@@ -8,6 +8,7 @@ import {
   parseHostFrame,
   parseMuxFrame,
   parsePresetCatalog,
+  parseScheduleProjection,
   parseSessionAttachment,
   parseServerRequest,
   parseServerResponse,
@@ -261,6 +262,18 @@ describe('Gateway JSON frame parsing', () => {
       hasDocument: true,
     }).presets.map(preset => preset.id)).toEqual(['standard', 'cordis'])
     expect(parsePresetCatalog({ presets: [{ id: 'standard', trust: 'system', isDefault: true }], authorable: false })).toMatchObject({ hasDocument: false })
+  })
+
+  it('parses the official active schedule projection and rejects malformed records', () => {
+    expect(parseScheduleProjection([
+      { id: 'schedule-1', kind: 'at', prompt: 'Check the market', scheduledAt: '2099-09-04T13:24:00.000Z' },
+      { id: 'schedule-2', kind: 'every', prompt: 'Refresh quotes', scheduledAt: '2099-09-04T13:30:00.000Z', everySeconds: 3_600 },
+    ])).toEqual([
+      { id: 'schedule-1', kind: 'at', prompt: 'Check the market', scheduledAt: '2099-09-04T13:24:00.000Z' },
+      { id: 'schedule-2', kind: 'every', prompt: 'Refresh quotes', scheduledAt: '2099-09-04T13:30:00.000Z', everySeconds: 3_600 },
+    ])
+    expect(parseScheduleProjection([{ id: 'schedule-1', kind: 'every', prompt: 'Too frequent', scheduledAt: '2099-09-04T13:24:00.000Z', everySeconds: 60 }])).toBeUndefined()
+    expect(parseScheduleProjection([{ id: 'schedule-1', kind: 'at', prompt: '', scheduledAt: '2099-09-04T13:24:00.000Z' }])).toBeUndefined()
   })
 
   it('parses host lifecycle frames and rejects malformed envelopes', () => {

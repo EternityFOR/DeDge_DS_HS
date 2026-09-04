@@ -294,6 +294,15 @@ describe('session event projection', () => {
     expect(store.snapshot().queueItems).toEqual([{ id: 'user-1', placement: 'queued', sourceKind: 'user' }])
   })
 
+  it('projects the official active schedule catalog for an idle active session', () => {
+    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000, pasteFileThreshold: 8_192 })
+    store.addSession({ sessionId: 's-1', blank: false, running: false })
+    store.setActive('s-1')
+    store.setSessionSchedules('s-1', [{ id: 'schedule-1', kind: 'every', prompt: 'Check the market', scheduledAt: '2099-09-04T13:24:00.000Z', everySeconds: 3_600 }])
+
+    expect(store.snapshot().schedules).toEqual([{ id: 'schedule-1', kind: 'every', prompt: 'Check the market', scheduledAt: '2099-09-04T13:24:00.000Z', everySeconds: 3_600 }])
+  })
+
   it('projects user queue text while redacting non-text content', () => {
     const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000, pasteFileThreshold: 8_192 })
     store.addSession({ sessionId: 's-1', blank: false, running: false })

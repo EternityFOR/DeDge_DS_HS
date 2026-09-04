@@ -39,8 +39,13 @@ export function autonomousQueueItems(snapshot: WorkbenchSnapshot): readonly Work
   return snapshot.queueItems?.filter(item => item.placement === 'context' || (item.sourceKind !== undefined && item.sourceKind !== 'user')) ?? []
 }
 
-/** True when Harness has work that can continue after the visible turn is idle. */
-export function hasAutonomousActivity(snapshot: WorkbenchSnapshot): boolean {
+/** True when the official session-local schedule plugin has active reminders. */
+export function hasScheduledActivity(snapshot: WorkbenchSnapshot): boolean {
+  return snapshot.schedules?.length !== undefined && snapshot.schedules.length > 0
+}
+
+/** Agent work that can be stopped directly, excluding dormant schedule timers. */
+export function hasAutonomousAgentActivity(snapshot: WorkbenchSnapshot): boolean {
   // An incomplete historical turn is not live control state while its Gateway
   // is disconnected. Treating it as autonomous work leaves a stale Pause
   // button in a second VS Code window after the shared runtime was replaced.
@@ -51,6 +56,11 @@ export function hasAutonomousActivity(snapshot: WorkbenchSnapshot): boolean {
   }
   if (snapshot.jobs?.some(job => job.status === 'running' || job.status === 'stopping')) return true
   return autonomousQueueItems(snapshot).length > 0
+}
+
+/** True when Harness has work that can continue after the visible turn is idle. */
+export function hasAutonomousActivity(snapshot: WorkbenchSnapshot): boolean {
+  return hasAutonomousAgentActivity(snapshot) || hasScheduledActivity(snapshot)
 }
 
 /** True for either an ordinary response or an autonomous/background task. */

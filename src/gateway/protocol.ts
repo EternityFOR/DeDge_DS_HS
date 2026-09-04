@@ -158,6 +158,16 @@ export interface PermissionProjection {
   readonly currentValue: string
 }
 
+/** The active reminder records exposed by alpha.3's official `schedule` projection. */
+export interface ScheduleProjectionRecord {
+  readonly id: string
+  readonly kind: 'after' | 'at' | 'every'
+  readonly prompt: string
+  readonly scheduledAt: string
+  readonly afterSeconds?: number
+  readonly everySeconds?: number
+}
+
 export interface WorkspaceRegistry {
   readonly archivedSessionIds: readonly string[]
 }
@@ -476,6 +486,33 @@ export function parseContextPressureProjection(value: unknown): ContextPressureP
     ...(projectedTokens === undefined ? {} : { projectedTokens }),
     ...(contextWindow === undefined ? {} : { contextWindow }),
   }
+}
+
+/**
+ * Parse the official session `schedule` projection without trusting arbitrary
+ * plugin data. An empty array is meaningful (it clears a previous reminder
+ * catalog); malformed values are treated as unavailable by the caller.
+ */
+export function parseScheduleProjection(value: unknown): ScheduleProjectionRecord[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const records: ScheduleProjectionRecord[] = []
+  for (const item of value) {
+    if (!isRecord(item) || !nonEmptyString(item.id) || !nonEmptyString(item.prompt)
+      || !nonEmptyString(item.scheduledAt)
+      || (item.kind !== 'after' && item.kind !== 'at' && item.kind !== 'every')) return undefined
+    if (item.kind === 'after') {
+      if (!positiveSafeInteger(item.afterSeconds)) return undefined
+      records.push({ id: item.id, kind: item.kind, prompt: item.prompt, scheduledAt: item.scheduledAt, afterSeconds: item.afterSeconds as number })
+      continue
+    }
+    if (item.kind === 'every') {
+      if (!Number.isSafeInteger(item.everySeconds) || (item.everySeconds as number) < 300) return undefined
+      records.push({ id: item.id, kind: item.kind, prompt: item.prompt, scheduledAt: item.scheduledAt, everySeconds: item.everySeconds as number })
+      continue
+    }
+    records.push({ id: item.id, kind: item.kind, prompt: item.prompt, scheduledAt: item.scheduledAt })
+  }
+  return records
 }
 
 function parseModelSelection(value: unknown): ModelSelection {

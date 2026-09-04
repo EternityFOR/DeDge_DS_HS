@@ -102,6 +102,9 @@ try {
   if (!commands.some(command => command.name === 'stop-jobs')) {
     throw new Error('standard Harness preset did not expose the packaged stop-jobs command')
   }
+  if (!commands.some(command => command.name === 'schedule-cancel')) {
+    throw new Error('standard Harness preset did not expose the packaged schedule-cancel command')
+  }
   const control = await readRemoteStreamItem(url, 'session/control', { args: {} }, cookie)
   if (control?.type !== 'baseline' || typeof control.value?.queues !== 'object' || typeof control.value?.jobs !== 'object') {
     throw new Error(`session/control returned a malformed baseline: ${JSON.stringify(control)}`)
@@ -126,6 +129,10 @@ try {
   const stopJobs = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/stop-jobs', images: [] } }, cookie)
   if (stopJobs?.result?.kind !== 'success' || typeof stopJobs.result.text !== 'string') {
     throw new Error(`stop-jobs command returned an unexpected result: ${JSON.stringify(stopJobs)}`)
+  }
+  const cancelSchedules = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/schedule-cancel all', images: [] } }, cookie)
+  if (cancelSchedules?.result?.kind !== 'success' || typeof cancelSchedules.result.text !== 'string') {
+    throw new Error(`schedule-cancel command returned an unexpected result: ${JSON.stringify(cancelSchedules)}`)
   }
   const visionSession = await rpc(url, 'session/create', { args: { request: { cwd: root, agentPreset: 'standard' } } }, cookie)
   await rpc(url, 'session/selectModel', { args: { request: { sessionId: visionSession.sessionId, provider: 'deepseek-official', model: 'deepseek-v4-flash-vision-exp', reasoningEffort: 'off' } } }, cookie)

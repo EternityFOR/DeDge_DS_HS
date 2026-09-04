@@ -41,7 +41,7 @@ import type { ContextAttachment } from '../../context/context-collector.js'
 import { recommendedVisionModels } from '../../vision/model-catalog.js'
 import type { SkillSummary } from '../../skills/skill-catalog.js'
 import type { WorkbenchMessage, WorkbenchSnapshot } from '../../session/types.js'
-import { autonomousQueueItems, hasActiveTurn, hasAgentActivity, hasAutonomousActivity, modelControlsUnavailableReason, promptUnavailableReason, steerAvailable } from '../../session/interaction-readiness.js'
+import { autonomousQueueItems, hasActiveTurn, hasAgentActivity, hasAutonomousActivity, hasAutonomousAgentActivity, modelControlsUnavailableReason, promptUnavailableReason, steerAvailable } from '../../session/interaction-readiness.js'
 import { isWaitingForUserMessage, shouldShowUserMessageActions } from '../message-actions.js'
 import type { HostToWebviewMessage, WebviewToHostMessage, WorkbenchSettings } from '../webview-protocol.js'
 
@@ -1476,6 +1476,8 @@ function autonomousActivityLabel(snapshot: WorkbenchSnapshot): string {
   if (queued.some(item => item.sourceKind === 'goal')) return 'Goal continuation is queued'
   if (snapshot.jobs?.some(job => job.status === 'running' || job.status === 'stopping')) return 'Autonomous background task is still running'
   if (queued.length > 0) return 'Autonomous continuation is queued'
+  const schedules = snapshot.schedules?.length ?? 0
+  if (schedules > 0) return schedules === 1 ? 'Scheduled reminder is armed' : `${String(schedules)} scheduled reminders are armed`
   return 'Harness is finalizing the autonomous task'
 }
 
@@ -2327,6 +2329,7 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
   const activeTurn = hasActiveTurn(snapshot)
   const autonomous = hasAutonomousActivity(snapshot)
   const autonomousWaiting = autonomous && !running
+  const scheduledCount = snapshot.schedules?.length ?? 0
   const streaming = snapshot.messages.some(message => message.status === 'streaming')
   const userInteractionWaiting = snapshot.approvals.length > 0 || snapshot.questions.length > 0
   const agentWork = hasAgentActivity(snapshot)
@@ -2336,7 +2339,11 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
   elements.cancel.title = cancelling
     ? 'Stop request is being processed'
     : autonomousWaiting
-      ? 'Pause autonomous agent task and remove agent-owned queued prompts'
+      ? scheduledCount > 0 && !hasAutonomousAgentActivity(snapshot)
+        ? `Cancel ${scheduledCount === 1 ? 'the scheduled reminder' : `${String(scheduledCount)} scheduled reminders`}`
+        : scheduledCount > 0
+          ? `Pause autonomous agent task and cancel ${String(scheduledCount)} scheduled reminder${scheduledCount === 1 ? '' : 's'}`
+          : 'Pause autonomous agent task and remove agent-owned queued prompts'
       : running
         ? 'Stop current response'
       : 'Stop agent task'
@@ -3006,6 +3013,7 @@ function renderScheduleToggle(snapshot: WorkbenchSnapshot): void {
   const settings = currentSettings
   const enabled = settings?.scheduleEnabled === true
   const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
+  const scheduledCount = snapshot.schedules?.length ?? 0
   const blocked = settings === undefined
     || snapshot.runtime.phase !== 'ready'
     || active?.running === true
@@ -3018,7 +3026,9 @@ function renderScheduleToggle(snapshot: WorkbenchSnapshot): void {
   elements.scheduleToggle.title = settings === undefined
     ? 'Loading scheduled follow-up setting...'
     : blocked && (active?.running === true || hasActiveTurn(snapshot) || hasAutonomousActivity(snapshot))
-      ? 'Stop the active Harness task before changing scheduled follow-ups'
+      ? scheduledCount > 0 && !hasAutonomousAgentActivity(snapshot)
+        ? 'Cancel the active scheduled reminder before changing scheduled follow-ups'
+        : 'Stop the active Harness task before changing scheduled follow-ups'
       : enabled
         ? 'Scheduled follow-ups enabled: schedule_create, schedule_list, and schedule_delete are available to the model; reminders run only while this Harness session stays live. Click to disable (runtime restart required).'
         : 'Scheduled follow-ups disabled: the model cannot use schedule_create/list/delete. Click to mount the official dsh-schedule plugin (runtime restart required)'

@@ -1,5 +1,5 @@
 import type { RuntimeState } from '../runtime/types.js'
-import type { ContextPressureProjection, ModelCatalog, PermissionProjection, PresetCatalog } from '../gateway/protocol.js'
+import type { ContextPressureProjection, ModelCatalog, PermissionProjection, PresetCatalog, ScheduleProjectionRecord } from '../gateway/protocol.js'
 
 export type WorkbenchPhase = 'idle' | 'connecting' | 'connected' | 'error'
 export type SessionOperation = 'archiving' | 'deleting' | 'cancelling' | 'compacting'
@@ -73,6 +73,9 @@ export interface WorkbenchJob {
   readonly status: WorkbenchJobStatus
 }
 
+/** Active session-local reminder records from Harness's official schedule plugin. */
+export type WorkbenchSchedule = ScheduleProjectionRecord
+
 export interface WorkbenchSession {
   readonly id: string
   readonly title: string
@@ -120,6 +123,8 @@ export interface WorkbenchSnapshot {
   readonly queueItems?: readonly WorkbenchQueueItem[]
   /** Background jobs visible to the active agent, when Harness exposes them. */
   readonly jobs?: readonly WorkbenchJob[]
+  /** Active session-local reminders exposed by the official `schedule` projection. */
+  readonly schedules?: readonly WorkbenchSchedule[]
   readonly hasMoreHistory: boolean
   readonly historyExpanded?: boolean
   readonly historyPageCount?: number

@@ -103,6 +103,14 @@ describe('workbench interaction readiness', () => {
     expect(hasAutonomousActivity(userQueue)).toBe(false)
   })
 
+  it('keeps an armed session-local reminder visible as controllable autonomous activity', () => {
+    const scheduled = snapshot({ schedules: [{ id: 'schedule-1', kind: 'at', prompt: 'Check the market', scheduledAt: '2099-09-04T13:24:00.000Z' }] })
+    expect(hasAutonomousActivity(scheduled)).toBe(true)
+    expect(hasAgentActivity(scheduled)).toBe(true)
+    expect(promptUnavailableReason(scheduled)).toContain('autonomous task')
+    expect(promptUnavailableReason(scheduled, { allowQueue: true })).toBeUndefined()
+  })
+
   it('allows an explicit steer while an autonomous job is attached to the running agent', () => {
     const runningWithJob = snapshot({
       sessions: [{ id: 's-1', title: 'Session', running: true, blank: false }],

@@ -1,6 +1,6 @@
-import { isRecord, type ContextPressureProjection, type HistoryEntry, type ModelCatalog, type PermissionProjection, type PresetCatalog, type SessionEvent, type SessionSummary } from '../gateway/protocol.js'
+import { isRecord, type ContextPressureProjection, type HistoryEntry, type ModelCatalog, type PermissionProjection, type PresetCatalog, type ScheduleProjectionRecord, type SessionEvent, type SessionSummary } from '../gateway/protocol.js'
 import type { RuntimeState } from '../runtime/types.js'
-import type { PendingApproval, PendingQuestion, SessionOperation, WorkbenchImageAttachment, WorkbenchJob, WorkbenchMessage, WorkbenchMessageAttachment, WorkbenchPhase, WorkbenchQueueItem, WorkbenchSession, WorkbenchSnapshot } from './types.js'
+import type { PendingApproval, PendingQuestion, SessionOperation, WorkbenchImageAttachment, WorkbenchJob, WorkbenchMessage, WorkbenchMessageAttachment, WorkbenchPhase, WorkbenchQueueItem, WorkbenchSchedule, WorkbenchSession, WorkbenchSnapshot } from './types.js'
 import { projectUserPrompt } from './prompt-projection.js'
 
 export interface StoreConfiguration {
@@ -43,6 +43,7 @@ export class SessionStore {
   private readonly permissions = new Map<string, PermissionProjection>()
   private readonly queueItems = new Map<string, WorkbenchQueueItem[]>()
   private readonly jobs = new Map<string, WorkbenchJob[]>()
+  private readonly schedules = new Map<string, WorkbenchSchedule[]>()
   /** Hydrated image bytes keyed by session and the opaque Harness attachment id. */
   private readonly imageData = new Map<string, { readonly mimeType: WorkbenchImageAttachment['mimeType']; readonly dataBase64: string }>()
   private permissionChanging = false
@@ -66,6 +67,7 @@ export class SessionStore {
     this.permissions.clear()
     this.queueItems.clear()
     this.jobs.clear()
+    this.schedules.clear()
     this.forcedSettledSessions.clear()
   }
 
@@ -130,6 +132,7 @@ export class SessionStore {
     this.contextPressure.delete(sessionId)
     this.queueItems.delete(sessionId)
     this.jobs.delete(sessionId)
+    this.schedules.delete(sessionId)
     this.forcedSettledSessions.delete(sessionId)
     for (const key of this.imageData.keys()) if (key.startsWith(`${sessionId}\u0000`)) this.imageData.delete(key)
     this.sessionOperations.delete(sessionId)
@@ -211,6 +214,10 @@ export class SessionStore {
 
   setSessionJobs(sessionId: string, items: readonly unknown[]): void {
     this.jobs.set(sessionId, items.map((item, index) => projectJob(item, index)))
+  }
+
+  setSessionSchedules(sessionId: string, items: readonly ScheduleProjectionRecord[]): void {
+    this.schedules.set(sessionId, items.map(item => ({ ...item })))
   }
 
   replaceHistory(sessionId: string, entries: readonly HistoryEntry[], hasMore = false): void {
@@ -339,6 +346,7 @@ export class SessionStore {
     const activePermissions = this.activeSessionId === undefined ? undefined : this.permissions.get(this.activeSessionId)
     const activeQueue = this.activeSessionId === undefined ? undefined : this.queueItems.get(this.activeSessionId)
     const activeJobs = this.activeSessionId === undefined ? undefined : this.jobs.get(this.activeSessionId)
+    const activeSchedules = this.activeSessionId === undefined ? undefined : this.schedules.get(this.activeSessionId)
     return {
       phase: this.phase,
       runtime: this.runtime,
@@ -348,6 +356,7 @@ export class SessionStore {
       messages,
       ...(activeQueue === undefined ? {} : { queueItems: activeQueue }),
       ...(activeJobs === undefined ? {} : { jobs: activeJobs }),
+      ...(activeSchedules === undefined ? {} : { schedules: activeSchedules }),
       hasMoreHistory: this.activeSessionId === undefined ? false : (this.historyHasMore.get(this.activeSessionId) ?? false),
       historyExpanded: this.activeSessionId === undefined ? false : (this.historyExpanded.get(this.activeSessionId) ?? false),
       historyPageCount: this.activeSessionId === undefined ? 0 : (this.historyPageStarts.get(this.activeSessionId)?.length ?? 0),
