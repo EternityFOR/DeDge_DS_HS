@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { auxiliaryVisionEnabledForModel, DEEPSEEK_V41_FLASH_MODEL, DEEPSEEK_VISION_EXP_MODEL, isVisionCapableModel, mergedVisionModelIds, recommendedVisionModels, visionModelIds } from '../src/vision/model-catalog.js'
+import { auxiliaryVisionEnabledForModel, DEEPSEEK_V41_FLASH_MODEL, DEEPSEEK_VISION_EXP_MODEL, isDeepSeekV41FlashActive, isVisionCapableModel, LEGACY_DEEPSEEK_V41_FLASH_MODEL, mergedVisionModelIds, normalizeDeepSeekModelId, recommendedVisionModels, visionModelIds } from '../src/vision/model-catalog.js'
 
 describe('Vision model catalog', () => {
   it('keeps models beyond the old 100-entry cutoff and removes duplicates', () => {
@@ -32,5 +32,15 @@ describe('Vision model catalog', () => {
     }
     expect(isVisionCapableModel('deepseek-v4-flash')).toBe(false)
     expect(auxiliaryVisionEnabledForModel('deepseek-v4-flash', { 'deepseek-v4-flash': true })).toBe(true)
+  })
+
+  it('migrates the expired V4.1 preview id and disables the route after its expiry', () => {
+    const beforeExpiry = new Date('2026-09-10T23:59:59+08:00')
+    const afterExpiry = new Date('2026-09-11T00:00:00+08:00')
+    expect(isDeepSeekV41FlashActive(beforeExpiry)).toBe(true)
+    expect(isDeepSeekV41FlashActive(afterExpiry)).toBe(false)
+    expect(normalizeDeepSeekModelId(LEGACY_DEEPSEEK_V41_FLASH_MODEL, beforeExpiry)).toBe(DEEPSEEK_V41_FLASH_MODEL)
+    expect(normalizeDeepSeekModelId(DEEPSEEK_V41_FLASH_MODEL, afterExpiry)).toBe('deepseek-v4-flash')
+    expect(normalizeDeepSeekModelId('deepseek-v4-flash')).toBe('deepseek-v4-flash')
   })
 })

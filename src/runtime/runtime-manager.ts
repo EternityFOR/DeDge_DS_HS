@@ -15,7 +15,7 @@ import { terminateProcessId, terminateProcessTree } from './process-tree.js'
 import type { RuntimeLaunch, RuntimeState } from './types.js'
 import {
   clearGatewayLease,
-  defaultGatewayLeasePath,
+  runtimeGatewayLeasePath,
   hasLiveGatewayClients,
   isProcessRunning,
   registerGatewayClient,
@@ -40,7 +40,7 @@ export class RuntimeManager implements vscode.Disposable {
   private startTask: Promise<string> | undefined
   private stopTask: Promise<void> | undefined
   private launchIdentity: string | undefined
-  private readonly gatewayLease = defaultGatewayLeasePath()
+  private readonly gatewayLease = runtimeGatewayLeasePath(EXPECTED_DSH_VERSION)
   private ownedLeasePid: number | undefined
   private clientRegistration: GatewayClientRegistration | undefined
   private attachedLeaseMonitor: ReturnType<typeof setInterval> | undefined
@@ -294,9 +294,7 @@ export class RuntimeManager implements vscode.Disposable {
       const lease = await readGatewayLease(this.gatewayLease)
       if (!isProcessRunning(lease.pid) || !await probeGateway(lease.url)) return undefined
       if (this.configuration.get().runtimeMode === 'bundled' && !gatewayLeaseMatchesVersion(lease, EXPECTED_DSH_VERSION)) {
-        this.logger.warn(`Discarding shared Harness ${lease.version}; bundled extension requires ${EXPECTED_DSH_VERSION}.`)
-        await clearGatewayLease(this.gatewayLease, lease.pid)
-        await terminateProcessId(lease.pid).catch(error => this.logger.warn(`Could not stop incompatible shared Harness ${lease.pid}: ${errorMessage(error)}`))
+        this.logger.warn(`Ignoring incompatible Harness ${lease.version}; this extension requires ${EXPECTED_DSH_VERSION}. The other runtime was left running.`)
         return undefined
       }
       return lease

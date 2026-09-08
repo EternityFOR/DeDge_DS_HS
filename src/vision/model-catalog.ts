@@ -1,11 +1,26 @@
 const MAX_VISION_MODELS = 1_000
 export const DEEPSEEK_VISION_EXP_MODEL = 'deepseek-v4-flash-vision-exp'
-export const DEEPSEEK_V41_FLASH_MODEL = 'deepseek-v4.1-flash-expires-0901'
+export const LEGACY_DEEPSEEK_V41_FLASH_MODEL = 'deepseek-v4.1-flash-expires-0901'
+// Temporary upstream beta advertised in the DeepSeek developer channel on
+// 2026-09-08. It is intentionally expiry-bound and must not be treated as a
+// stable model; the public catalog still only guarantees the V4 stable routes.
+export const DEEPSEEK_V41_FLASH_MODEL = 'deepseek-v4.1-flash-expires-on-0910'
+export const DEEPSEEK_V41_FLASH_EXPIRES_AT = '2026-09-11T00:00:00+08:00'
+
+export function isDeepSeekV41FlashActive(now = new Date()): boolean {
+  return now.getTime() < Date.parse(DEEPSEEK_V41_FLASH_EXPIRES_AT)
+}
+
+export function normalizeDeepSeekModelId(model: string, now = new Date()): string {
+  if (model !== LEGACY_DEEPSEEK_V41_FLASH_MODEL && model !== DEEPSEEK_V41_FLASH_MODEL) return model
+  return isDeepSeekV41FlashActive(now) ? DEEPSEEK_V41_FLASH_MODEL : 'deepseek-v4-flash'
+}
 
 export function isVisionCapableModel(model: string): boolean {
   const id = model.toLowerCase()
   return id === DEEPSEEK_VISION_EXP_MODEL
     || id === DEEPSEEK_V41_FLASH_MODEL
+    || id === LEGACY_DEEPSEEK_V41_FLASH_MODEL
     || /(?:vision|multimodal|(?:^|[-_.])vl(?:$|[-_.]))/u.test(id)
     || /^(?:gpt-(?:4o|4\.1|5(?:[.-]|$))|o[134](?:[.-]|$))/u.test(id)
     || /^(?:claude-(?:3|sonnet-4|opus-4)|gemini-(?:1\.5|2|3)|pixtral|llama-[\w.-]*vision|glm-4v|qwen[\w.-]*-vl|kimi[\w.-]*-vl)/u.test(id)

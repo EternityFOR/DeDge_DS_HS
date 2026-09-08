@@ -8,6 +8,7 @@ import {
   hasLiveGatewayClients,
   registerGatewayClient,
   readGatewayLease,
+  runtimeGatewayLeasePath,
   tryAcquireGatewayStartupLock,
   writeGatewayLease,
   gatewayLeaseMatchesVersion,
@@ -20,6 +21,13 @@ afterEach(async () => {
 })
 
 describe('Harness gateway lease', () => {
+  it('isolates lease files by bundled Harness version', () => {
+    expect(runtimeGatewayLeasePath('0.1.3-alpha.2', { LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local' }, 'C:\\Users\\test'))
+      .toBe(path.join('C:\\Users\\test\\AppData\\Local', 'DeDge', 'DeepSeekHarness', 'runtimes', '0.1.3-alpha.2', 'gateway-lease.json'))
+    expect(runtimeGatewayLeasePath('0.1.2-alpha.3', { LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local' }, 'C:\\Users\\test'))
+      .not.toBe(runtimeGatewayLeasePath('0.1.3-alpha.2', { LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local' }, 'C:\\Users\\test'))
+  })
+
   it('requires an exact bundled runtime version before attaching', () => {
     expect(gatewayLeaseMatchesVersion({ version: '0.1.3-alpha.2' }, '0.1.3-alpha.2')).toBe(true)
     expect(gatewayLeaseMatchesVersion({ version: '0.1.1-rc.2' }, '0.1.3-alpha.2')).toBe(false)

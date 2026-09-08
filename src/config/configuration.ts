@@ -1,4 +1,5 @@
 import * as vscode from 'vscode'
+import { normalizeDeepSeekModelId } from '../vision/model-catalog.js'
 
 export type RuntimeMode = 'bundled' | 'external'
 export type PermissionMode = 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -60,13 +61,14 @@ export class ConfigurationService implements vscode.Disposable {
   get(): HarnessConfiguration {
     const config = vscode.workspace.getConfiguration(PREFIX)
     const baseUrl = configuredBaseUrl(config.get<string>('baseUrl', OFFICIAL_DEEPSEEK_BASE_URL))
+    const provider = nonEmpty(config.get<string>('provider'), 'deepseek-official')
     return {
       runtimeMode: oneOf(config.get<string>('runtime.mode'), ['bundled', 'external'], 'bundled'),
       runtimeCommand: config.get<string>('runtime.command', '').trim(),
       runtimeNodePath: config.get<string>('runtime.nodePath', '').trim(),
       startTimeoutMs: bounded(config.get<number>('runtime.startTimeoutMs'), 5_000, 300_000, 90_000),
-      provider: nonEmpty(config.get<string>('provider'), 'deepseek-official'),
-      model: nonEmpty(config.get<string>('model'), 'deepseek-v4-flash'),
+      provider,
+      model: normalizeDeepSeekModelId(nonEmpty(config.get<string>('model'), 'deepseek-v4-flash')),
       reasoningEffort: nonEmpty(config.get<string>('reasoningEffort'), 'high'),
       agentPreset: nonEmpty(config.get<string>('agentPreset'), 'standard'),
       permissionMode: oneOf(
@@ -91,13 +93,13 @@ export class ConfigurationService implements vscode.Disposable {
       handoffLaunchMode: oneOf(config.get<string>('handoff.launchMode'), ['clipboard', 'cli'], 'clipboard'),
       skillDirectories: stringList(config.get<string[]>('skills.directories'), ['${userHome}/.codex/skills']),
       visionBaseUrl: config.get<string>('vision.baseUrl', '').trim(),
-      visionModel: config.get<string>('vision.model', '').trim(),
+      visionModel: normalizeDeepSeekModelId(config.get<string>('vision.model', '').trim()),
       visionReasoningEffort: config.get<string>('vision.reasoningEffort', '').trim(),
       visionMaxBytes: bounded(config.get<number>('vision.maxBytes'), 65_536, 8_388_608, 4_194_304),
       visionMode: oneOf(config.get<string>('vision.mode'), ['auto', 'dedicated', 'off'], 'auto'),
       visionModelOverrides: booleanRecord(config.get<Record<string, unknown>>('vision.modelOverrides')),
       compactionProvider: config.get<string>('compaction.provider', '').trim(),
-      compactionModel: config.get<string>('compaction.model', '').trim(),
+      compactionModel: normalizeDeepSeekModelId(config.get<string>('compaction.model', '').trim()),
     }
   }
 

@@ -2,7 +2,7 @@
 
 ## Fixed
 
-- Added the exact `deepseek-v4.1-flash-expires-0901` route to the DeepSeek model catalog.
+- Added the then-current `deepseek-v4.1-flash-expires-0901` route to the DeepSeek model catalog (superseded by the 0910 internal-beta route in 0.1.74).
 - Marked that route as native multimodal so the auxiliary Vision switch defaults off and native image input is used.
 - Kept the alpha.2 legacy-session migration fix from `0.1.72` in this model-list update.
 

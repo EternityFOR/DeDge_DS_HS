@@ -38,7 +38,7 @@ import {
 } from 'lucide'
 import { marked } from 'marked'
 import type { ContextAttachment } from '../../context/context-collector.js'
-import { recommendedVisionModels } from '../../vision/model-catalog.js'
+import { isDeepSeekV41FlashActive, recommendedVisionModels } from '../../vision/model-catalog.js'
 import type { SkillSummary } from '../../skills/skill-catalog.js'
 import type { WorkbenchMessage, WorkbenchSnapshot } from '../../session/types.js'
 import { autonomousQueueItems, hasActiveTurn, hasAgentActivity, hasAutonomousActivity, hasAutonomousAgentActivity, modelControlsUnavailableReason, promptUnavailableReason, steerAvailable } from '../../session/interaction-readiness.js'
@@ -3057,7 +3057,7 @@ function renderCompactionModelOptions(): void {
       ...(state.model === 'deepseek-v4-flash' ? [
         { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
         { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision Exp' },
-        { id: 'deepseek-v4.1-flash-expires-0901', name: 'DeepSeek V4.1 Flash (expires 0901)' },
+        ...(isDeepSeekV41FlashActive() ? [{ id: 'deepseek-v4.1-flash-expires-on-0910', name: 'DeepSeek V4.1 Flash (internal beta; expires 0910)' }] : []),
       ] : []),
     ],
   }])

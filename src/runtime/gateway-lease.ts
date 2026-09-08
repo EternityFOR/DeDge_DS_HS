@@ -35,6 +35,14 @@ export function defaultGatewayLeasePath(env: NodeJS.ProcessEnv = process.env, us
   return path.join(dataRoot, 'DeDge', 'DeepSeekHarness', 'gateway-lease.json')
 }
 
+/** Old extension hosts terminate incompatible PIDs advertised in the legacy
+ * singleton lease. Never publish a new runtime there: isolate the lease, lock,
+ * and consumer markers together so those hosts cannot discover and kill it. */
+export function runtimeGatewayLeasePath(version: string, env: NodeJS.ProcessEnv = process.env, userHome = homedir()): string {
+  if (!/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/u.test(version)) throw new Error('Invalid Harness runtime version for lease storage.')
+  return path.join(path.dirname(defaultGatewayLeasePath(env, userHome)), 'runtimes', version, 'gateway-lease.json')
+}
+
 export async function writeGatewayLease(target: string, lease: GatewayLease): Promise<void> {
   const normalized = normalizeGatewayLease(lease)
   await mkdir(path.dirname(target), { recursive: true })
@@ -127,6 +135,7 @@ export async function tryAcquireGatewayStartupLock(
   ownerPid = process.pid,
   processProbe: (pid: number) => boolean = isProcessRunning,
 ): Promise<GatewayStartupLock | undefined> {
+  await mkdir(path.dirname(leasePath), { recursive: true })
   const lockDirectory = `${leasePath}.startup-lock`
   const ownerFile = path.join(lockDirectory, 'owner.json')
   const nonce = randomUUID()

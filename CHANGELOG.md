@@ -4,11 +4,21 @@
 
 ## [Unreleased]
 
+## [0.1.74] - 2026-09-08
+
+### Fixed
+
+- Bundled Harness leases are now stored under a version-specific directory, so old extension hosts cannot discover and terminate a newer Harness process.
+- Incompatible legacy leases are ignored and left for their owning old host; the current extension starts its own isolated runtime.
+- Replaced the expired `deepseek-v4.1-flash-expires-0901` route with the current time-boxed internal-beta route `deepseek-v4.1-flash-expires-on-0910`; it is clearly marked as experimental and is not a stable API guarantee.
+- Existing saved model and compaction settings using the expired `0901` id are normalized to the current internal-beta id on load.
+- The internal-beta option is automatically hidden at its expiry and any selected value falls back to stable `deepseek-v4-flash` instead of sending a known-dead model id.
+
 ## [0.1.73] - 2026-09-08
 
 ### Fixed
 
-- Added the exact official-compatible `deepseek-v4.1-flash-expires-0901` route to the DeepSeek model catalog.
+- Added the then-current `deepseek-v4.1-flash-expires-0901` preview route to the DeepSeek model catalog.
 - Marked that route as native multimodal so the auxiliary Vision switch defaults off and native image input is used.
 - Kept the alpha.2 legacy-session migration fix from `0.1.72` in this model-list update.
 
@@ -758,7 +768,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.73...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.74...HEAD
+[0.1.74]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.74
 [0.1.73]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.73
 [0.1.72]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.72
 [0.1.71]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.71
