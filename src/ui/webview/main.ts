@@ -41,7 +41,7 @@ import type { ContextAttachment } from '../../context/context-collector.js'
 import { isDeepSeekV41FlashActive, recommendedVisionModels } from '../../vision/model-catalog.js'
 import type { SkillSummary } from '../../skills/skill-catalog.js'
 import type { WorkbenchMessage, WorkbenchSnapshot } from '../../session/types.js'
-import { autonomousQueueItems, hasActiveTurn, hasAgentActivity, hasAutonomousActivity, hasAutonomousAgentActivity, modelControlsUnavailableReason, promptUnavailableReason, steerAvailable } from '../../session/interaction-readiness.js'
+import { autonomousQueueItems, hasActiveTurn, hasAgentActivity, hasAutonomousActivity, hasAutonomousAgentActivity, modelControlsUnavailableReason, modelRecoveryCandidate, promptUnavailableReason, steerAvailable } from '../../session/interaction-readiness.js'
 import { isWaitingForUserMessage, shouldShowUserMessageActions } from '../message-actions.js'
 import type { HostToWebviewMessage, WebviewToHostMessage, WorkbenchSettings } from '../webview-protocol.js'
 
@@ -2366,6 +2366,8 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
       ? 'Steer: deliver this prompt into the active turn'
       : queueingAutonomous
         ? 'Queue this prompt behind the autonomous task'
+      : modelUnavailable && modelRecoveryCandidate(snapshot) !== undefined
+        ? 'Selected model is unavailable; sending will switch to a catalogued recovery model'
         : sendUnavailable ?? 'Send'
   elements.send.setAttribute('aria-label', elements.send.title)
   elements.modelMenu.disabled = modelControlsUnavailable !== undefined

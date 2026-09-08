@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.1.75] - 2026-09-09
+
+### Fixed
+
+- A session that retained an unsupported/expired model no longer dead-locks the composer. The model picker remains available and the next send can recover to a stable DeepSeek route.
+- Partial or failed Harness model catalogs now include stable DeepSeek recovery choices, while preserving the upstream failure details.
+- Sending with an unroutable current model attempts a same-session switch to a catalogued recovery model before submitting the prompt.
+
 ## [0.1.74] - 2026-09-08
 
 ### Fixed
@@ -768,7 +776,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.74...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.75...HEAD
+[0.1.75]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.75
 [0.1.74]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.74
 [0.1.73]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.73
 [0.1.72]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.72

@@ -16,7 +16,8 @@ import type { CredentialStore } from '../security/credentials.js'
 import type { RuntimeManager } from '../runtime/runtime-manager.js'
 import type { PendingApproval, PendingQuestion, QuestionAnswer, WorkbenchImageAttachment, WorkbenchQueueItem, WorkbenchSendProgress, WorkbenchSnapshot } from './types.js'
 import { SessionOperationCoordinator } from './session-operations.js'
-import { autonomousQueueItems, hasActiveTurn, hasAutonomousActivity, hasAutonomousAgentActivity, hasScheduledActivity, promptUnavailableReason, steerAvailable } from './interaction-readiness.js'
+import { autonomousQueueItems, hasActiveTurn, hasAutonomousActivity, hasAutonomousAgentActivity, hasScheduledActivity, modelRecoveryCandidate, promptUnavailableReason, steerAvailable } from './interaction-readiness.js'
+import { fallbackModelCatalog, withRecoveryModels } from './model-recovery.js'
 import { SessionStore } from './session-store.js'
 import { SessionTrashService } from './session-trash.js'
 import { validateQuestionAnswers } from './question-answers.js'
@@ -278,6 +279,15 @@ export class WorkbenchController implements vscode.Disposable {
     if (active !== undefined && active.running !== true && hasAutonomousActivity(snapshot)) {
       await this.reconcileSessionStatus(this.requireGateway(), active.id)
       snapshot = this.store.snapshot()
+    }
+    const recovery = modelRecoveryCandidate(snapshot)
+    if (recovery !== undefined) {
+      try {
+        await this.selectModel(recovery.provider, recovery.model)
+        snapshot = this.store.snapshot()
+      } catch (error) {
+        this.logger.warn(`Could not switch from the unavailable model before sending: ${errorMessage(error)}`)
+      }
     }
     const allowSteer = mode === 'steer' && steerAvailable(snapshot)
     const unavailable = promptUnavailableReason(snapshot, { allowSteer, allowQueue: mode === 'queue' })
@@ -1080,10 +1090,12 @@ export class WorkbenchController implements vscode.Disposable {
 
   private async refreshModelCatalog(gateway: GatewayClient, sessionId: string): Promise<void> {
     try {
-      this.store.setModelCatalog(sessionId, await gateway.models(sessionId))
+      this.store.setModelCatalog(sessionId, withRecoveryModels(await gateway.models(sessionId), this.configuration.get()))
       this.publish()
     } catch (error) {
       this.logger.warn(`Could not load the Harness model catalog: ${errorMessage(error)}`)
+      this.store.setModelCatalog(sessionId, fallbackModelCatalog(this.configuration.get(), errorMessage(error)))
+      this.publish()
     }
   }
 

@@ -15,7 +15,21 @@ export function promptUnavailableReason(snapshot: WorkbenchSnapshot, options: { 
   if (hasAutonomousActivity(snapshot) && options.allowSteer !== true && options.allowQueue !== true) return 'The agent is continuing an autonomous task. Stop it or wait for the task to finish before sending.'
   if (snapshot.permissionChanging) return 'Wait for the file permission change to finish before sending.'
   if (snapshot.modelCatalog === undefined) return 'Wait for the model catalog to finish loading before sending.'
-  if (snapshot.modelCatalog.routable === false) return 'Select an available model before sending.'
+  // A stale/unsupported route must not dead-lock the composer. The controller
+  // can switch to one of the catalogued recovery models before submitting the
+  // next prompt; only block when the catalog offers no alternative at all.
+  if (snapshot.modelCatalog.routable === false && modelRecoveryCandidate(snapshot) === undefined) return 'Select an available model before sending.'
+  return undefined
+}
+
+export function modelRecoveryCandidate(snapshot: WorkbenchSnapshot): { readonly provider: string; readonly model: string } | undefined {
+  const catalog = snapshot.modelCatalog
+  if (catalog === undefined || catalog.routable !== false) return undefined
+  for (const group of catalog.groups) {
+    for (const model of group.models) {
+      if (group.id !== catalog.current.provider || model.id !== catalog.current.model) return { provider: group.id, model: model.id }
+    }
+  }
   return undefined
 }
 

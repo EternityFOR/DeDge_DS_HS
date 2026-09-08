@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hasAgentActivity, hasActiveTurn, hasAutonomousActivity, modelControlsUnavailableReason, promptUnavailableReason, steerAvailable } from '../src/session/interaction-readiness.js'
+import { hasAgentActivity, hasActiveTurn, hasAutonomousActivity, modelControlsUnavailableReason, modelRecoveryCandidate, promptUnavailableReason, steerAvailable } from '../src/session/interaction-readiness.js'
 import type { WorkbenchSnapshot } from '../src/session/types.js'
 
 function snapshot(overrides: Partial<WorkbenchSnapshot> = {}): WorkbenchSnapshot {
@@ -136,5 +136,16 @@ describe('workbench interaction readiness', () => {
     const unavailable = snapshot({ modelCatalog: { current: { provider: 'deepseek-official', model: 'missing' }, groups: [], failures: [], routable: false } })
     expect(promptUnavailableReason(unavailable)).toContain('available model')
     expect(modelControlsUnavailableReason(unavailable)).toBeUndefined()
+  })
+
+  it('keeps the composer recoverable when an alternative route is present', () => {
+    const unavailable = snapshot({ modelCatalog: {
+      current: { provider: 'deepseek-official', model: 'expired-preview' },
+      groups: [{ id: 'deepseek-official', name: 'DeepSeek', models: [{ id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' }] }],
+      failures: [],
+      routable: false,
+    } })
+    expect(modelRecoveryCandidate(unavailable)).toEqual({ provider: 'deepseek-official', model: 'deepseek-v4-flash' })
+    expect(promptUnavailableReason(unavailable)).toBeUndefined()
   })
 })
