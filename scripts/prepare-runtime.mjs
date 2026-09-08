@@ -81,6 +81,7 @@ if (pnpmVersion !== expectedPnpm) throw new Error(`pnpm executable mismatch: exp
 patchDeepSeekTransport(path.join(runtimeModules, '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js'))
 patchJobStopCommand(path.join(runtimeModules, '@deepseek-ai', 'dsh-tool-jobs', 'lib', 'index.js'))
 patchScheduleCancelCommand(path.join(runtimeModules, '@deepseek-ai', 'dsh-schedule', 'lib', 'index.js'))
+patchLegacySessionOrigin(path.join(runtimeModules, '@deepseek-ai', 'dsh-session-format-v0-to-v1', 'lib', 'index.js'))
 
 for (const metadata of ['.modules.yaml', '.package-map.json', '.pnpm-workspace-state-v1.json', '.pnpm']) {
   rmSync(path.join(runtimeModules, metadata), { recursive: true, force: true })
@@ -281,6 +282,34 @@ function patchScheduleCancelCommand(file) {
     '\tctx.inject(["sessionProjections"], (projectionCtx) => {',
   ].join('\n')
   source = source.replace(registrationMarker, registration)
+  writeFileSync(file, source)
+}
+
+/**
+ * Alpha.3 emitted a legacy v0 permission/preset payload with an extra
+ * `origin` member. Alpha.2's frozen v0 codec correctly rejects unknown
+ * members, but the extension must still be able to migrate a copied legacy
+ * session without touching the user's source home. Strip only this known
+ * historical field at the v0->v1 migration boundary.
+ */
+function patchLegacySessionOrigin(file) {
+  let source = readFileSync(file, 'utf8')
+  const dispositionMarker = '"permission/preset": disposition(["preset"]),'
+  if (source.split(dispositionMarker).length !== 2) {
+    throw new Error(`Unexpected alpha.2 session migration shape; cannot admit legacy permission origin: ${file}`)
+  }
+  source = source.replace(dispositionMarker, '"permission/preset": disposition(["preset"], ["origin"]),')
+  const normalizeMarker = 'const message = normalizeLegacyMessage(normalizeLegacyCompaction(normalizeLegacyRetry(normalizeLegacySteering(normalizeLegacyRequestHeader(normalizeLegacyTurnEnd(normalizeLegacyTurnStart(named, sessionId), sessionId), sessionId), sessionId), sessionId, state.retryIds), sessionId, state), sessionId, state.messageIds);'
+  if (source.split(normalizeMarker).length !== 2) {
+    throw new Error(`Unexpected alpha.2 session migration normalizer shape; cannot admit legacy permission origin: ${file}`)
+  }
+  const replacement = [
+    normalizeMarker.replace('const message', 'let message'),
+    'if (message.type === "permission/preset" && isSessionFormatJsonObject(message.data) && Object.hasOwn(message.data, "origin")) {',
+    '\t\tmessage = { ...message, data: { preset: message.data["preset"] } };',
+    '\t}',
+  ].join('\n')
+  source = source.replace(normalizeMarker, replacement)
   writeFileSync(file, source)
 }
 
