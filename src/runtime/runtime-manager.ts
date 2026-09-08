@@ -15,6 +15,7 @@ import { terminateProcessId, terminateProcessTree } from './process-tree.js'
 import type { RuntimeLaunch, RuntimeState } from './types.js'
 import {
   clearGatewayLease,
+  defaultGatewayLeasePath,
   runtimeGatewayLeasePath,
   hasLiveGatewayClients,
   isProcessRunning,
@@ -40,7 +41,11 @@ export class RuntimeManager implements vscode.Disposable {
   private startTask: Promise<string> | undefined
   private stopTask: Promise<void> | undefined
   private launchIdentity: string | undefined
-  private readonly gatewayLease = runtimeGatewayLeasePath(EXPECTED_DSH_VERSION)
+  private readonly primaryGatewayLease = runtimeGatewayLeasePath(EXPECTED_DSH_VERSION)
+  /** Compatibility path used by 0.1.73 and earlier hosts running the same
+   * bundled Harness. It is safe to attach only when its version matches. */
+  private readonly legacyGatewayLease = defaultGatewayLeasePath()
+  private leasePath = this.primaryGatewayLease
   private ownedLeasePid: number | undefined
   private clientRegistration: GatewayClientRegistration | undefined
   private attachedLeaseMonitor: ReturnType<typeof setInterval> | undefined
@@ -101,6 +106,7 @@ export class RuntimeManager implements vscode.Disposable {
 
   private async startInternal(): Promise<string> {
     if (this.stateValue.phase === 'ready' && this.stateValue.url !== undefined) return this.stateValue.url
+    this.leasePath = this.primaryGatewayLease
     const configuration = this.configuration.get()
     const workspace = workspaceDirectory()
     const apiKey = await this.credentials.getApiKey(configuration.baseUrl)
@@ -191,7 +197,7 @@ export class RuntimeManager implements vscode.Disposable {
           if (this.child === child) this.child = undefined
           if (this.ownedLeasePid === child.pid) this.ownedLeasePid = undefined
           if (child.pid !== undefined) {
-            void clearGatewayLease(this.gatewayLease, child.pid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
+            void clearGatewayLease(this.leasePath, child.pid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
           }
           const windowsDetail = describeWindowsExitCode(code)
           const message = `Harness exited (code=${String(code)}, signal=${String(signal)}).${windowsDetail === undefined ? '' : ` ${windowsDetail}`}`
@@ -206,7 +212,7 @@ export class RuntimeManager implements vscode.Disposable {
       try {
         const url = await ready
         if (child.pid !== undefined) {
-          await writeGatewayLease(this.gatewayLease, { url, pid: child.pid, version: launch.version, workspace })
+          await writeGatewayLease(this.leasePath, { url, pid: child.pid, version: launch.version, workspace })
             .catch(error => this.logger.error('Failed to publish the Harness gateway lease', error))
         }
         this.setState({ phase: 'ready', version: launch.version, url, ...(child.pid === undefined ? {} : { pid: child.pid }) })
@@ -230,7 +236,7 @@ export class RuntimeManager implements vscode.Disposable {
     this.launchIdentity = undefined
     if (child === undefined) {
       if (this.ownedLeasePid !== undefined) {
-        await clearGatewayLease(this.gatewayLease, this.ownedLeasePid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
+        await clearGatewayLease(this.leasePath, this.ownedLeasePid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
       }
       this.ownedLeasePid = undefined
       this.setState({ phase: 'idle' })
@@ -239,7 +245,7 @@ export class RuntimeManager implements vscode.Disposable {
     this.setState({ phase: 'stopping', ...(this.stateValue.version === undefined ? {} : { version: this.stateValue.version }) })
     await terminateProcessTree(child).catch(error => this.logger.error('Failed to terminate the Harness process tree', error))
     if (child.pid !== undefined) {
-      await clearGatewayLease(this.gatewayLease, child.pid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
+      await clearGatewayLease(this.leasePath, child.pid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
     }
     this.ownedLeasePid = undefined
     this.setState({ phase: 'idle' })
@@ -247,7 +253,7 @@ export class RuntimeManager implements vscode.Disposable {
 
   private async stopForDispose(): Promise<void> {
     await this.releaseClient()
-    if (await hasLiveGatewayClients(this.gatewayLease)) {
+    if (await hasLiveGatewayClients(this.leasePath)) {
       // Detach from a still-shared child. Its exit handler will clear the
       // lease, but this disposed manager must not publish state afterwards.
       this.stopAttachedLeaseMonitor()
@@ -261,7 +267,7 @@ export class RuntimeManager implements vscode.Disposable {
     if (this.child === undefined && this.stateValue.phase === 'ready' && this.stateValue.pid !== undefined) {
       const pid = this.stateValue.pid
       await terminateProcessId(pid).catch(error => this.logger.warn(`Could not stop shared Harness ${pid}: ${errorMessage(error)}`))
-      await clearGatewayLease(this.gatewayLease, pid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
+      await clearGatewayLease(this.leasePath, pid).catch(error => this.logger.error('Failed to clear the Harness gateway lease', error))
       this.setState({ phase: 'idle' })
       return
     }
@@ -277,7 +283,7 @@ export class RuntimeManager implements vscode.Disposable {
       if (this.disposed) throw new Error('The Harness runtime manager was disposed before launch.')
       const lease = await this.readLiveGatewayLease()
       if (lease !== undefined) return { lease }
-      const lock = await tryAcquireGatewayStartupLock(this.gatewayLease)
+      const lock = await tryAcquireGatewayStartupLock(this.leasePath)
       if (lock !== undefined) {
         const racedLease = await this.readLiveGatewayLease()
         if (racedLease === undefined) return { lock }
@@ -290,17 +296,28 @@ export class RuntimeManager implements vscode.Disposable {
   }
 
   private async readLiveGatewayLease(): Promise<GatewayLease | undefined> {
-    try {
-      const lease = await readGatewayLease(this.gatewayLease)
-      if (!isProcessRunning(lease.pid) || !await probeGateway(lease.url)) return undefined
-      if (this.configuration.get().runtimeMode === 'bundled' && !gatewayLeaseMatchesVersion(lease, EXPECTED_DSH_VERSION)) {
-        this.logger.warn(`Ignoring incompatible Harness ${lease.version}; this extension requires ${EXPECTED_DSH_VERSION}. The other runtime was left running.`)
-        return undefined
+    const candidates = this.leasePath === this.primaryGatewayLease
+      ? [this.primaryGatewayLease, this.legacyGatewayLease]
+      : [this.leasePath]
+    for (const candidate of candidates) {
+      try {
+        const lease = await readGatewayLease(candidate)
+        if (!isProcessRunning(lease.pid) || !await probeGateway(lease.url)) continue
+        if (this.configuration.get().runtimeMode === 'bundled' && !gatewayLeaseMatchesVersion(lease, EXPECTED_DSH_VERSION)) {
+          this.logger.warn(`Ignoring incompatible Harness ${lease.version}; this extension requires ${EXPECTED_DSH_VERSION}. The other runtime was left running.`)
+          continue
+        }
+        if (candidate === this.legacyGatewayLease) {
+          this.leasePath = candidate
+          this.logger.info(`Reusing the legacy Harness lease for compatible runtime ${lease.version}; no duplicate runtime will be started.`)
+        }
+        return lease
+      } catch {
+        // Try the next compatibility path; malformed or stale leases are not
+        // allowed to block a clean startup.
       }
-      return lease
-    } catch {
-      return undefined
     }
+    return undefined
   }
 
   private async attachSharedRuntime(lease: GatewayLease): Promise<string> {
@@ -319,7 +336,7 @@ export class RuntimeManager implements vscode.Disposable {
   private async registerClient(): Promise<void> {
     if (this.disposed || this.clientRegistration !== undefined) return
     try {
-      const registration = await registerGatewayClient(this.gatewayLease)
+      const registration = await registerGatewayClient(this.leasePath)
       if (this.disposed) {
         await registration.release()
         return
@@ -342,7 +359,7 @@ export class RuntimeManager implements vscode.Disposable {
   private startAttachedLeaseMonitor(expected: GatewayLease): void {
     this.stopAttachedLeaseMonitor()
     this.attachedLeaseMonitor = setInterval(() => {
-      void readGatewayLease(this.gatewayLease).then(async current => {
+      void readGatewayLease(this.leasePath).then(async current => {
         if (this.disposed || this.child !== undefined || this.stateValue.phase !== 'ready' || this.stateValue.pid !== expected.pid) return
         if (current.pid === expected.pid && current.url === expected.url && isProcessRunning(current.pid) && await probeGateway(current.url)) return
         if (this.disposed || this.child !== undefined || this.stateValue.phase !== 'ready' || this.stateValue.pid !== expected.pid) return

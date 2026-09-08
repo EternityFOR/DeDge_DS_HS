@@ -884,6 +884,21 @@ export class WorkbenchController implements vscode.Disposable {
   }
 
   async selectModel(provider: string, model: string, reasoningEffort?: string): Promise<void> {
+    try {
+      await this.selectModelOnce(provider, model, reasoningEffort)
+    } catch (error) {
+      if (!isSessionOwnershipConflict(error)) throw error
+      // A legacy 0.1.73 host may still own the same alpha.2 session through
+      // the old singleton lease. Restarting this host lets RuntimeManager
+      // attach to that compatible lease instead of creating a second writer;
+      // the selection is then retried against the owner process.
+      this.logger.warn(`Model selection found an owned Harness session; reconnecting to the compatible runtime before retrying: ${errorMessage(error)}`)
+      await this.restart()
+      await this.selectModelOnce(provider, model, reasoningEffort)
+    }
+  }
+
+  private async selectModelOnce(provider: string, model: string, reasoningEffort?: string): Promise<void> {
     const sessionId = this.store.snapshot().activeSessionId
     if (sessionId === undefined) return
     const gateway = this.requireGateway()
@@ -1485,6 +1500,10 @@ function isQueueItemNotFound(error: unknown): boolean {
 
 function isSteerUnavailable(error: unknown): boolean {
   return errorMessage(error).includes('steer-unavailable')
+}
+
+function isSessionOwnershipConflict(error: unknown): boolean {
+  return /SessionAlreadyOwnedError|already owned by an active write handle|resume failed for session[\s\S]*already owned/iu.test(errorMessage(error))
 }
 
 function hasRunningBackgroundJobs(snapshot: WorkbenchSnapshot): boolean {

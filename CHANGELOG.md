@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.1.76] - 2026-09-09
+
+### Fixed
+
+- Compatible alpha.2 runtimes started by 0.1.73/0.1.74 are now discovered through the legacy lease path instead of spawning a second writer for the same sessions.
+- A `SessionAlreadyOwnedError` during model selection now reconnects to the compatible shared runtime and retries the selection once.
+- The previous model-recovery behavior remains available, so an expired/unsupported model can still fall back without losing the session transcript.
+
 ## [0.1.75] - 2026-09-09
 
 ### Fixed
@@ -776,7 +784,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.75...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.76...HEAD
+[0.1.76]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.76
 [0.1.75]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.75
 [0.1.74]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.74
 [0.1.73]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.73
