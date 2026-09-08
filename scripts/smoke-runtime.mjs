@@ -88,7 +88,7 @@ try {
   })
   const url = await waitForUrl(child, 90_000)
   const cookie = await bootstrapGatewayCookie(url)
-  const description = { version: '0.1.2-alpha.3' }
+  const description = { version: '0.1.3-alpha.2' }
   const listed = await rpc(url, 'session/list', { args: { _request: {} } }, cookie)
   if (!Array.isArray(listed?.items)) throw new Error(`session/list returned a malformed response: ${JSON.stringify(listed)}`)
   const session = await rpc(url, 'session/create', { args: { request: { cwd: root, agentPreset: 'standard' } } }, cookie)
@@ -122,15 +122,15 @@ try {
   for (const model of ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp']) {
     if (!modelIds.has(model)) throw new Error(`session.models did not advertise ${model}: ${JSON.stringify(catalog)}`)
   }
-  const command = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/compact', images: [] } }, cookie)
+  const command = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/compact', submittedAttachments: [] } }, cookie)
   if (command?.result?.kind !== 'success' && command?.result?.kind !== 'error') {
     throw new Error(`commands/execute returned a malformed command result: ${JSON.stringify(command)}`)
   }
-  const stopJobs = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/stop-jobs', images: [] } }, cookie)
+  const stopJobs = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/stop-jobs', submittedAttachments: [] } }, cookie)
   if (stopJobs?.result?.kind !== 'success' || typeof stopJobs.result.text !== 'string') {
     throw new Error(`stop-jobs command returned an unexpected result: ${JSON.stringify(stopJobs)}`)
   }
-  const cancelSchedules = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/schedule-cancel all', images: [] } }, cookie)
+  const cancelSchedules = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/schedule-cancel all', submittedAttachments: [] } }, cookie)
   if (cancelSchedules?.result?.kind !== 'success' || typeof cancelSchedules.result.text !== 'string') {
     throw new Error(`schedule-cancel command returned an unexpected result: ${JSON.stringify(cancelSchedules)}`)
   }
@@ -167,9 +167,9 @@ try {
   const clientWorkspace = await client.listWorkspaces()
   if (!Array.isArray(clientWorkspace.archivedSessionIds)) throw new Error('GatewayClient did not read the workspace baseline')
   const clientCatalog = await client.models(session.sessionId)
-  if (!clientCatalog.groups.some(group => group.models.some(model => model.id === 'deepseek-v4-pro'))) throw new Error('GatewayClient did not parse the alpha.3 model catalog')
+  if (!clientCatalog.groups.some(group => group.models.some(model => model.id === 'deepseek-v4-pro'))) throw new Error('GatewayClient did not parse the alpha.2 model catalog')
   const clientPresets = await client.presets()
-  if (!clientPresets.presets.some(preset => preset.id === 'standard')) throw new Error('GatewayClient did not parse the alpha.3 preset roster')
+  if (!clientPresets.presets.some(preset => preset.id === 'standard')) throw new Error('GatewayClient did not parse the alpha.2 preset roster')
   const clientHistory = await client.history(visionSession.sessionId)
   if (!clientHistory.events.some(item => item.event.type === 'user/message')) throw new Error('GatewayClient did not open the session follow snapshot')
   if (!clientFrames.some(frame => frame.type === 'session/queue')) throw new Error('GatewayClient did not consume the session control stream')

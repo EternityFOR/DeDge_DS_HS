@@ -56,7 +56,7 @@ export class GatewayClient implements vscode.Disposable {
 
   async connect(handlers: GatewayHandlers): Promise<HostDescription> {
     this.cookie = await bootstrapGatewayCookie(this.baseUrl)
-    // alpha.3 removed the old host.describe endpoint. A session list is a
+    // alpha.2 removed the old host.describe endpoint. A session list is a
     // lightweight authenticated RPC that proves the Gateway is ready.
     const listed = await this.request<{ readonly items?: readonly SessionSummary[] }>('session/list', { _request: {} })
     this.stream = new EventStream(this.baseUrl, {
@@ -101,7 +101,7 @@ export class GatewayClient implements vscode.Disposable {
     return this.request<{ readonly items: SessionSummary[] }>('session/list', { _request: {} }).then(result => ({
       items: result.items.map(item => {
         const projectedTitle = item.projections?.values?.title
-        // alpha.3 exposes the session-owned preset through the projection
+        // alpha.2 exposes the session-owned preset through the projection
         // column rather than a top-level session-list field.
         const projectedPreset = item.projections?.values?.agentPreset
         const title = typeof projectedTitle === 'string' && projectedTitle.trim() !== '' ? projectedTitle : item.title
@@ -200,10 +200,10 @@ export class GatewayClient implements vscode.Disposable {
   }
 
   executeCommand(sessionId: string, line: string): Promise<{ readonly result?: { readonly kind?: string; readonly text?: string } }> {
-    return this.request<unknown>('commands/execute', { agentId: sessionId, line, images: [] }).then(value => {
+    return this.request<unknown>('commands/execute', { agentId: sessionId, line, submittedAttachments: [] }).then(value => {
       let execution = value
       // Keep accepting the older RemoteResult envelope for an explicitly
-      // configured external runtime while alpha.3 returns the value directly.
+      // configured external runtime while alpha.2 returns the value directly.
       if (isRecord(value) && typeof value.ok === 'boolean') {
         if (!value.ok) {
           const failure = isRecord(value.error) ? value.error : {}

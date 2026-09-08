@@ -57,7 +57,7 @@ export interface SessionHistory {
 }
 
 /**
- * Expand alpha.3's bounded history records into the event shape consumed by
+ * Expand alpha.2's bounded history records into the event shape consumed by
  * the workbench store. The upstream transport packs consecutive assistant
  * deltas into chunk rows; expanding at this boundary keeps the rest of the
  * extension compatible with the durable event projection it already uses.
@@ -158,7 +158,7 @@ export interface PermissionProjection {
   readonly currentValue: string
 }
 
-/** The active reminder records exposed by alpha.3's official `schedule` projection. */
+/** The active reminder records exposed by alpha.2's official `schedule` projection. */
 export interface ScheduleProjectionRecord {
   readonly id: string
   readonly kind: 'after' | 'at' | 'every'
@@ -429,7 +429,7 @@ export function parsePresetCatalog(value: unknown): PresetCatalog {
   return {
     presets: value.presets.map(parsePresetCatalogEntry),
     authorable: value.authorable,
-    // alpha.3 moved document authoring to a separate API and omits this
+    // alpha.2 moved document authoring to a separate API and omits this
     // legacy capability bit from the roster response.
     hasDocument: value.hasDocument === true,
   }

@@ -15,7 +15,7 @@ export function renderRuntimeOverlay(configuration: HarnessConfiguration): strin
     '- id: llm-deepseek',
     '  config:',
     // Keep the endpoint and credential reference in the same generated
-    // settings generation as the model catalog. alpha.3 otherwise resolves
+    // settings generation as the model catalog. alpha.2 otherwise resolves
     // them from the process environment, which can leave a shared runtime
     // serving a stale endpoint after a VS Code window changes configuration.
     '    apiKeyEnv: "DEEPSEEK_API_KEY"',
@@ -78,7 +78,7 @@ export function renderRuntimeOverlay(configuration: HarnessConfiguration): strin
   return overlay.join('\n')
 }
 
-/** alpha.3 appends `/chat/completions` directly to this value. */
+/** alpha.2 appends `/chat/completions` directly to this value. */
 function normalizeProviderBaseUrl(value: string): string {
   return value.replace(/\/+$/u, '')
 }

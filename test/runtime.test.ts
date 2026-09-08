@@ -34,7 +34,7 @@ describe('bundled Node compatibility', () => {
 
 describe('Harness runtime compatibility', () => {
   it('pins the bundled runtime to the current upstream release', () => {
-    expect(EXPECTED_DSH_VERSION).toBe('0.1.2-alpha.3')
+    expect(EXPECTED_DSH_VERSION).toBe('0.1.3-alpha.2')
   })
 
   it('accepts RC revisions on the same protocol base', () => {

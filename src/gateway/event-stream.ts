@@ -7,7 +7,7 @@ export interface EventHandlers {
   readonly onMux: (frame: MuxFrame, rpcId: string) => void
   readonly onHost: (frame: HostFrame, rpcId: string) => void
   readonly onError?: (error: Error) => void
-  /** Correlate an alpha.3 Remote Event waterfall with its client id. */
+  /** Correlate the alpha.2 Remote Event waterfall with its client id. */
   readonly onEventClient?: (eventId: string, clientId: string, event: string) => void
 }
 
@@ -35,7 +35,7 @@ interface StreamSpec {
 }
 
 /**
- * alpha.3's browser transport is one authenticated RemoteStreamMux socket.
+ * alpha.2's browser transport is one authenticated RemoteStreamMux socket.
  * Each logical stream below is kept independent so a stalled session history
  * feed cannot block control, workspace, or approval events.
  */

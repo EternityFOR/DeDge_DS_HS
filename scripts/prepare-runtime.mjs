@@ -72,7 +72,7 @@ if (dshVersion !== expectedDsh) throw new Error(`DSH executable mismatch: expect
 const pnpmVersion = run(node, [pnpm, '--version'])
 if (pnpmVersion !== expectedPnpm) throw new Error(`pnpm executable mismatch: expected ${expectedPnpm}, reported ${pnpmVersion}`)
 
-// The official alpha.3 adapter uses a direct fetch + SSE pipeline. Some
+// The official alpha.2 adapter uses a direct fetch + SSE pipeline. Some
 // Windows gateways/proxies compress or reset event-stream bodies while the
 // response is still active. Keep the upstream package and its version intact,
 // but harden the one provider request at packaging time so every VSIX gets the
@@ -174,19 +174,19 @@ function patchDeepSeekTransport(file) {
   let source = readFileSync(file, 'utf8')
   const encodingMarker = '"accept": "text/event-stream",'
   if (source.split(encodingMarker).length !== 2) {
-    throw new Error(`Unexpected alpha.3 DeepSeek adapter shape; cannot add SSE identity encoding: ${file}`)
+    throw new Error(`Unexpected alpha.2 DeepSeek adapter shape; cannot add SSE identity encoding: ${file}`)
   }
   source = source.replace(encodingMarker, `${encodingMarker}\n\t\t\t"accept-encoding": "identity",\n\t\t\t"connection": "close",`)
 
   const errorMarker = 'throw new LlmError(`DeepSeek API stream from ${connection.baseURL} failed`, "TRANSPORT", { cause: error });'
   if (source.split(errorMarker).length !== 2) {
-    throw new Error(`Unexpected alpha.3 DeepSeek adapter shape; cannot add transport diagnostics: ${file}`)
+    throw new Error(`Unexpected alpha.2 DeepSeek adapter shape; cannot add transport diagnostics: ${file}`)
   }
   const diagnostic = 'throw new LlmError(`DeepSeek API stream from ${connection.baseURL} failed (${transportDiagnostic(error)})`, "TRANSPORT", { cause: error });'
   source = source.replace(errorMarker, diagnostic)
   const helperMarker = 'var DeepSeekAdapter = class extends LlmAdapter {'
   if (source.split(helperMarker).length !== 2) {
-    throw new Error(`Unexpected alpha.3 DeepSeek adapter shape; cannot add transport diagnostic helper: ${file}`)
+    throw new Error(`Unexpected alpha.2 DeepSeek adapter shape; cannot add transport diagnostic helper: ${file}`)
   }
   const helper = [
     'function transportDiagnostic(error) {',
@@ -205,12 +205,12 @@ function patchJobStopCommand(file) {
   let source = readFileSync(file, 'utf8')
   const injectMarker = 'const inject = [\n\t"tools",\n\t"jobs",\n\t"systemPrompt"\n];'
   if (source.split(injectMarker).length !== 2) {
-    throw new Error(`Unexpected alpha.3 tool-jobs shape; cannot add the stop-jobs command: ${file}`)
+    throw new Error(`Unexpected alpha.2 tool-jobs shape; cannot add the stop-jobs command: ${file}`)
   }
   source = source.replace(injectMarker, 'const inject = [\n\t"commands",\n\t"tools",\n\t"jobs",\n\t"systemPrompt"\n];')
   const registrationMarker = '\tctx.jobs.attachController("tool-jobs");'
   if (source.split(registrationMarker).length !== 2) {
-    throw new Error(`Unexpected alpha.3 tool-jobs shape; cannot add the stop-jobs registration: ${file}`)
+    throw new Error(`Unexpected alpha.2 tool-jobs shape; cannot add the stop-jobs registration: ${file}`)
   }
   const registration = [
     registrationMarker,
@@ -244,12 +244,12 @@ function patchScheduleCancelCommand(file) {
   let source = readFileSync(file, 'utf8')
   const injectMarker = 'const inject = [\n\t"agents",\n\t"sessions",\n\t"tools",\n\t"sessionPersistence"\n];'
   if (source.split(injectMarker).length !== 2) {
-    throw new Error(`Unexpected alpha.3 schedule shape; cannot add the schedule-cancel command: ${file}`)
+    throw new Error(`Unexpected alpha.2 schedule shape; cannot add the schedule-cancel command: ${file}`)
   }
   source = source.replace(injectMarker, 'const inject = [\n\t"agents",\n\t"commands",\n\t"sessions",\n\t"tools",\n\t"sessionPersistence"\n];')
   const registrationMarker = 'function apply(ctx) {\n\tctx.inject(["sessionProjections"], (projectionCtx) => {'
   if (source.split(registrationMarker).length !== 2) {
-    throw new Error(`Unexpected alpha.3 schedule apply shape; cannot add the schedule-cancel command: ${file}`)
+    throw new Error(`Unexpected alpha.2 schedule apply shape; cannot add the schedule-cancel command: ${file}`)
   }
   const registration = [
     'function apply(ctx) {',
@@ -261,7 +261,7 @@ function patchScheduleCancelCommand(file) {
     '\t\t\tconst target = invocation.rawInput.trim();',
     '\t\t\tlet folded;',
     '\t\t\ttry {',
-    '\t\t\t\tfolded = foldScheduleEvents(invocation.agent.session.events, invocation.agent.session.header.seedLength ?? 0);',
+    '\t\t\t\tfolded = foldScheduleEvents(invocation.agent.session.ownEvents());',
     '\t\t\t} catch {',
     '\t\t\t\treturn { kind: "error", text: "The session schedule log is corrupt; no reminder was cancelled." };',
     '\t\t\t}',

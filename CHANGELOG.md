@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.1.71] - 2026-09-08
+
+### Changed
+
+- Bundled official DeepSeek Harness upgraded from `0.1.2-alpha.3` to `0.1.3-alpha.2`.
+- Updated the Gateway command envelope to the new `submittedAttachments` field used by the upgraded Harness.
+- Updated schedule cancellation to fold the new Harness session-owned event stream correctly.
+- Preserved the Windows-safe SSE, background-job stop, and schedule-cancel runtime patches against the new dependency closure.
+
 ## [0.1.70] - 2026-09-04
 
 ### Fixed
@@ -733,7 +742,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.70...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.71...HEAD
+[0.1.71]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.71
 [0.1.70]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.70
 [0.1.69]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.69
 [0.1.68]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.68

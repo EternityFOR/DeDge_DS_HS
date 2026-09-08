@@ -910,7 +910,7 @@ function projectQueueItem(value: unknown, index: number): WorkbenchQueueItem {
     : 'context'
   const message = isRecord(value.message) ? value.message : undefined
   const source = message !== undefined && isRecord(message.source) ? message.source : undefined
-  // alpha.3's session-control projection intentionally redacts the source
+  // alpha.2's session-control projection intentionally redacts the source
   // from `message` but carries `rpcId` on the queue row for browser-authored
   // prompts. Recover ownership from that stable marker; steering placement is
   // also user-only in the official controller.

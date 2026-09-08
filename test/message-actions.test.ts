@@ -5,7 +5,7 @@ import type { WorkbenchMessage, WorkbenchSnapshot } from '../src/session/types.j
 function snapshot(messages: WorkbenchMessage[], overrides: Partial<WorkbenchSnapshot> = {}): WorkbenchSnapshot {
   return {
     phase: 'connected',
-    runtime: { phase: 'ready', version: '0.1.2-alpha.3' },
+    runtime: { phase: 'ready', version: '0.1.3-alpha.2' },
     hasApiKey: true,
     sessions: [{ id: 's-1', title: 'Session', running: true, blank: false }],
     activeSessionId: 's-1',

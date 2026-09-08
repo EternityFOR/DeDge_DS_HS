@@ -146,7 +146,7 @@ describe('Gateway JSON frame parsing', () => {
       const client = new GatewayClient('http://127.0.0.1:1/', {} as never)
       await expect(client.executeCommand('session-1', '/compact')).resolves.toEqual({ result: { kind: 'success', text: 'Compacted 12 history items.' } })
       expect(requestedUrl).toBe('http://127.0.0.1:1/api/commands/execute')
-      expect(requestedBody).toMatchObject({ method: 'commands/execute', payload: { args: { agentId: 'session-1', line: '/compact', images: [] } } })
+      expect(requestedBody).toMatchObject({ method: 'commands/execute', payload: { args: { agentId: 'session-1', line: '/compact', submittedAttachments: [] } } })
     } finally {
       globalThis.fetch = originalFetch
     }

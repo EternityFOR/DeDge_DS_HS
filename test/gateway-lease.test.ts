@@ -21,8 +21,8 @@ afterEach(async () => {
 
 describe('Harness gateway lease', () => {
   it('requires an exact bundled runtime version before attaching', () => {
-    expect(gatewayLeaseMatchesVersion({ version: '0.1.2-alpha.3' }, '0.1.2-alpha.3')).toBe(true)
-    expect(gatewayLeaseMatchesVersion({ version: '0.1.1-rc.2' }, '0.1.2-alpha.3')).toBe(false)
+    expect(gatewayLeaseMatchesVersion({ version: '0.1.3-alpha.2' }, '0.1.3-alpha.2')).toBe(true)
+    expect(gatewayLeaseMatchesVersion({ version: '0.1.1-rc.2' }, '0.1.3-alpha.2')).toBe(false)
   })
   it('uses the per-user local application data directory', () => {
     expect(defaultGatewayLeasePath({ LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local' }, 'C:\\Users\\test'))
@@ -88,7 +88,7 @@ describe('Harness gateway lease', () => {
     await writeGatewayLease(target, {
       url: 'http://127.0.0.1:4323/?token=launch-token&ignored=value',
       pid: 79,
-      version: '0.1.2-alpha.3',
+      version: '0.1.3-alpha.2',
       workspace: 'D:\\other',
     })
     await expect(readGatewayLease(target)).resolves.toMatchObject({ url: 'http://127.0.0.1:4323/?token=launch-token', pid: 79 })

@@ -29,7 +29,7 @@ import {
 } from './gateway-lease.js'
 import { checkWindowsCompatibility, describeWindowsExitCode } from './windows-compat.js'
 
-// alpha.3 prints an authenticated root URL (`/?token=...`); keep the token
+// alpha.2 prints an authenticated root URL (`/?token=...`); keep the token
 // because the Gateway exchanges it for the API session cookie.
 const URL_PATTERN = /dsh web:\s+(http:\/\/127\.0\.0\.1:\d+(?:[/?][^\s()]*)?)/u
 
@@ -142,7 +142,7 @@ export class RuntimeManager implements vscode.Disposable {
         DSH_PERMISSION_MODE: configuration.permissionMode,
         DSH_TELEMETRY_DISABLED: '1',
         ...apiKey === undefined || apiKey === '' ? {} : { DEEPSEEK_API_KEY: apiKey },
-        // alpha.3 appends `/chat/completions` directly. Keep the configured
+        // alpha.2 appends `/chat/completions` directly. Keep the configured
         // URL stable in VS Code, but give the provider a slash-free namespace
         // so official and OpenAI-compatible endpoints never receive `//...`.
         DEEPSEEK_BASE_URL: normalizeProviderBaseUrl(configuration.baseUrl),
@@ -397,7 +397,7 @@ async function repairSharedRuntimeAttachments(layout: StorageLayout, version: st
   if (copied > 0) logger.info(`Recovered ${String(copied)} missing Harness attachment object${copied === 1 ? '' : 's'} before attaching to shared runtime`)
 }
 
-/** alpha.3 joins its provider namespace with `/chat/completions` itself. */
+/** alpha.2 joins its provider namespace with `/chat/completions` itself. */
 export function normalizeProviderBaseUrl(value: string): string {
   return value.replace(/\/+$/u, '')
 }
@@ -421,7 +421,7 @@ async function probeGateway(baseUrl: string): Promise<boolean> {
       redirect: 'manual',
       signal: AbortSignal.timeout(2_000),
     })
-    // alpha.3 returns 303 after accepting the process token. Older compatible
+    // alpha.2 returns 303 after accepting the process token. Older compatible
     // external runtimes may serve the index directly with a 2xx response.
     return response.status === 303 || response.ok
   } catch {

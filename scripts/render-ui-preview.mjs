@@ -9,7 +9,7 @@ if (template === undefined) throw new Error('Could not locate the Webview HTML t
 
 const state = {
   phase: 'connected',
-  runtime: { phase: 'ready', version: '0.1.2-alpha.3' },
+  runtime: { phase: 'ready', version: '0.1.3-alpha.2' },
   hasApiKey: true,
   sessions: [
     { id: 'one', title: 'DeDge_DS_HS', running: false, blank: false },

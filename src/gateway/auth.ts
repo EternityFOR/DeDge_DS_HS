@@ -1,5 +1,5 @@
 /**
- * Exchange the alpha.3 process launch token for the browser-session cookie
+ * Exchange the alpha.2 process launch token for the browser-session cookie
  * required by the local Gateway. Older Harness runtimes did not print a
  * token, so an unqualified URL remains a supported no-cookie transport for
  * explicitly compatible external runtimes.
