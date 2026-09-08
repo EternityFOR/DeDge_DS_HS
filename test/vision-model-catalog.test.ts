@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { auxiliaryVisionEnabledForModel, DEEPSEEK_VISION_EXP_MODEL, isVisionCapableModel, mergedVisionModelIds, recommendedVisionModels, visionModelIds } from '../src/vision/model-catalog.js'
+import { auxiliaryVisionEnabledForModel, DEEPSEEK_V41_FLASH_MODEL, DEEPSEEK_VISION_EXP_MODEL, isVisionCapableModel, mergedVisionModelIds, recommendedVisionModels, visionModelIds } from '../src/vision/model-catalog.js'
 
 describe('Vision model catalog', () => {
   it('keeps models beyond the old 100-entry cutoff and removes duplicates', () => {
@@ -26,7 +26,7 @@ describe('Vision model catalog', () => {
   })
 
   it('recognizes common multimodal model families but keeps auxiliary vision off by default', () => {
-    for (const model of ['deepseek-v4-flash-vision-exp', 'gpt-5.6-sol', 'claude-sonnet-4.5', 'gemini-3-pro', 'qwen3-vl']) {
+    for (const model of ['deepseek-v4-flash-vision-exp', DEEPSEEK_V41_FLASH_MODEL, 'gpt-5.6-sol', 'claude-sonnet-4.5', 'gemini-3-pro', 'qwen3-vl']) {
       expect(isVisionCapableModel(model), model).toBe(true)
       expect(auxiliaryVisionEnabledForModel(model), model).toBe(false)
     }

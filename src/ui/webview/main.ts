@@ -3054,7 +3054,11 @@ function renderCompactionModelOptions(): void {
     name: state.provider,
     models: [
       { id: state.model, name: state.model },
-      ...(state.model === 'deepseek-v4-flash' ? [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }, { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision Exp' }] : []),
+      ...(state.model === 'deepseek-v4-flash' ? [
+        { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+        { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision Exp' },
+        { id: 'deepseek-v4.1-flash-expires-0901', name: 'DeepSeek V4.1 Flash (expires 0901)' },
+      ] : []),
     ],
   }])
   for (const group of groups) {

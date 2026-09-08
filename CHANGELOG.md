@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.1.73] - 2026-09-08
+
+### Fixed
+
+- Added the exact official-compatible `deepseek-v4.1-flash-expires-0901` route to the DeepSeek model catalog.
+- Marked that route as native multimodal so the auxiliary Vision switch defaults off and native image input is used.
+- Kept the alpha.2 legacy-session migration fix from `0.1.72` in this model-list update.
+
 ## [0.1.72] - 2026-09-08
 
 ### Fixed
@@ -750,7 +758,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.72...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.73...HEAD
+[0.1.73]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.73
 [0.1.72]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.72
 [0.1.71]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.71
 [0.1.70]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.70

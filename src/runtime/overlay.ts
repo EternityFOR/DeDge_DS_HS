@@ -111,6 +111,7 @@ function advertisedModels(configuration: HarnessConfiguration): Array<{ readonly
         { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' },
         { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro' },
         { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek-V4-Flash-Vision-Exp' },
+        { id: 'deepseek-v4.1-flash-expires-0901', name: 'DeepSeek-V4.1-Flash (expires 0901)' },
       ]
     : []
   if (!defaults.some(model => model.id === configuration.model)) {

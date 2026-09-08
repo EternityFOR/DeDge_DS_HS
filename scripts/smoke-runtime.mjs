@@ -119,7 +119,7 @@ try {
   }
   const catalog = await rpc(url, 'session/modelCatalog', { args: {} }, cookie)
   const modelIds = new Set(catalog?.groups?.flatMap(group => group.models?.map(model => model.id) ?? []) ?? [])
-  for (const model of ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp']) {
+  for (const model of ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp', 'deepseek-v4.1-flash-expires-0901']) {
     if (!modelIds.has(model)) throw new Error(`session.models did not advertise ${model}: ${JSON.stringify(catalog)}`)
   }
   const command = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/compact', submittedAttachments: [] } }, cookie)
