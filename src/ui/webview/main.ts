@@ -1677,17 +1677,31 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
     const firstAutomation = items.find(item => item.role === 'user' && item.inputKind === 'automation')
     const firstSteering = items.find(item => item.role === 'user' && item.inputKind === 'steering')
     const firstPrompt = firstUser ?? firstAutomation ?? firstSteering
-    const anchor = firstPrompt ?? items[0]
+    const firstPromptIndex = firstPrompt === undefined ? -1 : items.findIndex(item => item.id === firstPrompt.id)
+    // A history window can begin inside a still-running task. If an inserted
+    // user message is the first visible prompt but assistant/tool work already
+    // precedes it, do not promote that prompt above the older visible work.
+    // The earliest visible item remains the DOM anchor so chronological order
+    // survives Hide All and reconnects.
+    const hasLeadingTaskWork = firstPromptIndex > 0
+    const anchor = hasLeadingTaskWork ? items[0] : firstPrompt ?? items[0]
     if (anchor === undefined) continue
-    const firstIndex = firstPrompt === undefined ? -1 : items.findIndex(item => item.id === firstPrompt.id)
+    const firstIndex = firstPromptIndex
     const latestInsertedIndex = firstUser === undefined || complete
       ? -1
       : [...items].findLastIndex(item => item.role === 'user' && item.id !== firstUser.id)
     const final = [...items].reverse().find(item => item.role === 'assistant' || item.role === 'system')
     const fallbackTail = final ?? (interrupted || !complete ? items.at(-1) : undefined)
-    const visibleTailItems = firstUser !== undefined && latestInsertedIndex > firstIndex
+    let visibleTailItems = firstUser !== undefined && latestInsertedIndex > firstIndex
       ? items.slice(latestInsertedIndex)
       : fallbackTail === undefined ? [] : [fallbackTail]
+    if (hasLeadingTaskWork && firstPrompt !== undefined && !visibleTailItems.some(item => item.id === firstPrompt.id)) {
+      // Preserve the visible prompt as a tail item, but rebuild the list in
+      // event order so an older final answer cannot jump below the prompt.
+      const tailIds = new Set(visibleTailItems.map(item => item.id))
+      tailIds.add(firstPrompt.id)
+      visibleTailItems = items.filter(item => tailIds.has(item.id))
+    }
     const visibleTailIds = new Set(visibleTailItems.map(item => item.id))
     // If the history page starts mid-turn, there is no visible user prompt to
     // anchor the task. Keep every visible tool/reasoning item in the fold and
@@ -1784,7 +1798,7 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
       const nodeById = new Map(items.map(item => [item.id, messageElements.get(item.id)] as const))
       const foldedNodes = middle.map(item => nodeById.get(item.id)).filter((node): node is HTMLElement => node !== undefined)
       const tailNodes = visibleTailItems.map(item => nodeById.get(item.id)).filter((node): node is HTMLElement => node !== undefined)
-      const firstNode = firstPrompt === undefined ? undefined : nodeById.get(firstPrompt.id)
+      const firstNode = firstPrompt === undefined || hasLeadingTaskWork ? undefined : nodeById.get(firstPrompt.id)
       group.replaceChildren(taskToggle, ...(firstNode === undefined ? [] : [firstNode]), fold, ...foldedNodes, ...tailNodes)
     }
   }

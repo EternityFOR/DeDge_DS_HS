@@ -154,6 +154,22 @@ describe('session event projection', () => {
     ])
   })
 
+  it('keeps a newly inserted prompt after visible work from an earlier part of the same running turn', () => {
+    const messages = projectMessages([
+      entry('turn/start', 1, { turn: 7 }),
+      entry('assistant/message', 2, { turn: 7, step: 1, message: { content: [{ type: 'text', text: 'Earlier visible work.' }] } }),
+      entry('user/message', 3, { source: { kind: 'user' }, content: [{ type: 'text', text: 'Continue with the next check.' }] }),
+      entry('assistant/message', 4, { turn: 7, step: 2, message: { content: [{ type: 'text', text: 'Current response.' }] } }),
+    ])
+
+    expect(messages.map(message => message.text)).toEqual([
+      'Earlier visible work.',
+      'Continue with the next check.',
+      'Current response.',
+    ])
+    expect(messages.every(message => message.taskId === 'turn:7')).toBe(true)
+  })
+
   it('keeps a user-stopped task settled and marks the whole fold as interrupted', () => {
     const messages = projectMessages([
       entry('user/message', 1, { source: { kind: 'user' }, content: [{ type: 'text', text: 'Start a long task' }] }),

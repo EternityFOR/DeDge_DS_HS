@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [0.1.77] - 2026-09-09
+
+### Fixed
+
+- A newly sent prompt no longer jumps above visible assistant/tool history when the loaded window begins inside an active task.
+- Task folding now keeps the earliest visible work as the chronological anchor after Hide All, reconnects, and partial history loads.
+
 ## [0.1.76] - 2026-09-09
 
 ### Fixed
@@ -784,7 +791,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.76...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.77...HEAD
+[0.1.77]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.77
 [0.1.76]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.76
 [0.1.75]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.75
 [0.1.74]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.74
