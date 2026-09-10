@@ -35,6 +35,7 @@ export class RuntimeDiagnostics {
       `Configured context window: ${String(config.contextWindowTokens)} tokens`,
       `Configured endpoint: ${redactUrl(config.baseUrl)}`,
       `PowerShell: ${powershell ?? '<not applicable or not found>'}`,
+      ...(process.platform === 'win32' ? ['Shell note: Harness launches a fresh PowerShell process per command. PowerShell 7 reduces startup and encoding overhead; Full access bypasses the Windows ACL sandbox only when explicitly selected.'] : []),
       `Git: ${git}`,
       `Host executable: ${node}`,
       `Global storage: ${this.layout.root}`,

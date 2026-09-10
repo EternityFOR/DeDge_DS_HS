@@ -43,7 +43,7 @@ export async function checkWindowsCompatibility(
   }
   const majorVersion = Number(parsed.version.split('.')[0])
   if (Number.isFinite(majorVersion) && majorVersion < 7) {
-    warnings.push('PowerShell 7 is not installed; Harness will use the Windows PowerShell 5.1 fallback. Non-ASCII redirected input can be unreliable.')
+    warnings.push('PowerShell 7 is not installed; Harness will use the Windows PowerShell 5.1 fallback. Each sandboxed pwsh call starts a fresh process, so startup latency can be higher and non-ASCII redirected input can be unreliable.')
   }
   if (workspace.length >= 220) warnings.push(`The workspace path is ${workspace.length} characters long; enable Windows long paths and keep tool output below MAX_PATH-sensitive utilities.`)
   if (/[^\x20-\x7e]/u.test(workspace)) warnings.push('The workspace path contains non-ASCII characters; the UTF-8 probe passed, but third-party CLI tools may still use a legacy code page.')

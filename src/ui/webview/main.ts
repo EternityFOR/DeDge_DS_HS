@@ -1247,7 +1247,7 @@ function renderPermissionOptions(snapshot: WorkbenchSnapshot | undefined): void 
     id: option.value,
     label: option.name,
     short: option.value === 'workspace-write' ? 'Ask' : option.value === 'approve-for-me' ? 'Approve' : option.value === 'danger-full-access' ? 'Full access' : option.name,
-    description: option.description ?? '',
+    description: permissionDescription(option.value, option.description ?? ''),
   })) ?? fallback
   const permissionOptions = options.some(option => option.id === 'approve-for-me') ? options : [...options.slice(0, 2), fallback[2], ...options.slice(2)]
   const currentId = snapshot.approvalPolicy === 'approve-for-me' ? 'approve-for-me' : snapshot.permissionMode
@@ -1269,6 +1269,13 @@ function renderPermissionOptions(snapshot: WorkbenchSnapshot | undefined): void 
       closePopovers()
     },
   })))
+}
+
+function permissionDescription(id: string, description: string): string {
+  if (id === 'workspace-write') return `${description}${description === '' ? '' : ' · '}Windows ACL sandbox stays enabled; shell startup may be slower`
+  if (id === 'approve-for-me') return `${description}${description === '' ? '' : ' · '}Keeps the Windows ACL sandbox; only approval prompts are automated`
+  if (id === 'danger-full-access') return `${description}${description === '' ? '' : ' · '}Fastest shell path, but file and process access are unrestricted`
+  return description
 }
 
 function renderConversation(snapshot: WorkbenchSnapshot): void {

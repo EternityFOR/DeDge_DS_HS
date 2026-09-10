@@ -6,7 +6,7 @@
 
 [Marketplace](https://marketplace.visualstudio.com/items?itemName=diractive-edge.dedge-deepseek-harness-vscode) · [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) · [Changelog](CHANGELOG.md) · [隐私](PRIVACY.md) · [安全](SECURITY.md) · [支持](SUPPORT.md)
 
-> 当前版本为 `0.1.80`。发布产物优先验证 Windows 10/11 x64；DeepSeek Harness 上游仍处于 developer preview，升级前请阅读变更日志和已知限制。
+> 当前版本为 `0.1.81`。发布产物优先验证 Windows 10/11 x64；DeepSeek Harness 上游仍处于 developer preview，升级前请阅读变更日志和已知限制。
 
 ## 主要能力
 
@@ -30,14 +30,14 @@
 
 ### 从 VSIX 安装
 
-1. 从 [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) 下载与 extension host 匹配的文件，例如 `dedge-deepseek-harness-vscode-0.1.80-win32-x64.vsix`。
+1. 从 [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) 下载与 extension host 匹配的文件，例如 `dedge-deepseek-harness-vscode-0.1.81-win32-x64.vsix`。
 2. 在 VS Code 扩展视图右上角菜单选择 **Install from VSIX...**。
 3. 安装完成后按 VS Code 提示重新加载窗口。
 
 也可以显式安装：
 
 ```powershell
-code --install-extension .\dedge-deepseek-harness-vscode-0.1.80-win32-x64.vsix
+code --install-extension .\dedge-deepseek-harness-vscode-0.1.81-win32-x64.vsix
 ```
 
 Remote SSH、WSL 和 Dev Container 使用远端 extension host 的操作系统与架构，不是本地 UI 的平台。平台 VSIX 不能混用。
@@ -105,7 +105,7 @@ Codex / Claude / DeepSeek source session (read-only)
 
 | Extension host | VSIX target | 当前状态 |
 | --- | --- | --- |
-| Windows 10/11 x64 | `win32-x64` | `0.1.80` 完整验证目标 |
+| Windows 10/11 x64 | `win32-x64` | `0.1.81` 完整验证目标 |
 | Linux x64 | `linux-x64` | 源码支持；发布前需要原生 runner 验证 |
 | macOS Apple Silicon | `darwin-arm64` | 源码支持；发布前需要原生 runner 验证 |
 | Windows ARM64 / Linux ARM64 / macOS Intel | 对应 target | 需要对应原生 runner 或设备验证 |
@@ -174,6 +174,10 @@ handoffs/<handoff-id>/        # 用户主动创建的 JSON/Markdown 交接包
 5. 提交问题前删除日志中的工作区路径、文件内容、会话文本和其他私人信息。
 
 更多步骤和已知退出码见 [SUPPORT.md](SUPPORT.md) 与 [兼容性文档](docs/compatibility.md)。
+
+### Windows 性能说明
+
+官方 Harness 每次 shell 调用都会启动一个新的 PowerShell 进程。未安装 PowerShell 7 时会回退到 Windows PowerShell 5.1，启动和编码开销可能更高；安装 PowerShell 7 后请完全重启 VS Code，让 Harness 重新探测。`workspace-write` 会保留 Windows ACL 沙箱，因此每次受限命令可能有额外隔离开销；`Full access` 可能更快，但会关闭这层边界，只应在明确接受风险时选择。
 
 ## 已知限制
 

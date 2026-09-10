@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.1.81] - 2026-09-10
+
+### Fixed
+
+- The VS Code configuration default now matches the official Harness RC model `deepseek-flash` / `DeepSeek-V41-Flash`; new installations no longer silently default to the older V4 Flash alias.
+- Windows compatibility diagnostics explain that the PowerShell 5.1 fallback starts a fresh process for every sandboxed command and may add startup latency.
+- Permission choices now show the performance/security trade-off: workspace-write keeps the Windows ACL sandbox, while Full access is faster but unrestricted.
+
 ## [0.1.80] - 2026-09-10
 
 ### Changed
@@ -820,7 +828,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.80...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.81...HEAD
+[0.1.81]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.81
 [0.1.80]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.80
 [0.1.79]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.79
 [0.1.78]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.78

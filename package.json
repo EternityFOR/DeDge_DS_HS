@@ -2,7 +2,7 @@
   "name": "dedge-deepseek-harness-vscode",
   "displayName": "DeDge DeepSeek Harness",
   "description": "Self-contained DeepSeek Harness coding agent for VS Code with a Windows-safe runtime and isolated Codex/Claude handoffs.",
-  "version": "0.1.80",
+  "version": "0.1.81",
   "publisher": "diractive-edge",
   "private": true,
   "packageManager": "pnpm@11.21.0",
@@ -290,8 +290,8 @@
         },
         "dedgeDeepSeekHarness.model": {
           "type": "string",
-          "default": "deepseek-v4-flash",
-          "description": "Default model for newly created sessions."
+          "default": "deepseek-flash",
+          "description": "Default model for newly created sessions. The official Harness RC exposes this as DeepSeek-V41-Flash with native text and image input."
         },
         "dedgeDeepSeekHarness.provider": {
           "type": "string",

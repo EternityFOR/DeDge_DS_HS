@@ -6,7 +6,7 @@ A self-contained DeepSeek Harness workbench for VS Code. Platform-specific VSIX 
 
 [Marketplace](https://marketplace.visualstudio.com/items?itemName=diractive-edge.dedge-deepseek-harness-vscode) | [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) | [Changelog](CHANGELOG.md) | [Privacy](PRIVACY.md) | [Security](SECURITY.md) | [Support](SUPPORT.md)
 
-> The current version is `0.1.80`. Release artifacts are primarily verified on Windows 10/11 x64. DeepSeek Harness remains a developer preview, so review the changelog and known limitations before upgrading.
+> The current version is `0.1.81`. Release artifacts are primarily verified on Windows 10/11 x64. DeepSeek Harness remains a developer preview, so review the changelog and known limitations before upgrading.
 
 ## Highlights
 
@@ -27,7 +27,7 @@ Search for **DeDge DeepSeek Harness** in VS Code Extensions and verify the publi
 For a pinned build, download the package matching the extension host platform from [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases), then choose **Extensions: Install from VSIX...**.
 
 ```powershell
-code --install-extension .\dedge-deepseek-harness-vscode-0.1.80-win32-x64.vsix
+code --install-extension .\dedge-deepseek-harness-vscode-0.1.81-win32-x64.vsix
 ```
 
 Remote SSH, WSL, and Dev Containers use the remote extension host platform and architecture, not the local UI platform. Platform VSIX packages are not interchangeable.
@@ -68,7 +68,7 @@ See [Session handoff](docs/session-handoff.md) for the full boundary.
 | Node.js | `22.22.3` |
 | pnpm | `11.21.0` |
 
-`0.1.5-rc.1` is the bundled upstream DeepSeek Harness version; it is separate from the extension version `0.1.80`.
+`0.1.5-rc.1` is the bundled upstream DeepSeek Harness version; it is separate from the extension version `0.1.81`.
 
 The source and CI support native Windows x64, Linux x64, and macOS runners. Only packages explicitly attached to a GitHub Release or published to Marketplace are release artifacts.
 
@@ -95,6 +95,10 @@ Harness processes are launched with `spawn(..., { shell: false, windowsHide: tru
 5. Remove workspace paths, file contents, session text, and other private data before filing an issue.
 
 See [Compatibility](docs/compatibility.md) and [Support](SUPPORT.md).
+
+### Windows performance note
+
+The official Harness starts a fresh PowerShell process for each shell command. If PowerShell 7 is unavailable it falls back to Windows PowerShell 5.1, which can add startup and encoding latency; install PowerShell 7 and fully restart VS Code so Harness can detect it. `workspace-write` keeps the Windows ACL sandbox and may add per-command isolation cost. `Full access` can be faster, but disables that boundary and should only be selected deliberately.
 
 ## Development
 
