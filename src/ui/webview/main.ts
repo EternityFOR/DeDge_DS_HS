@@ -38,7 +38,7 @@ import {
 } from 'lucide'
 import { marked } from 'marked'
 import type { ContextAttachment } from '../../context/context-collector.js'
-import { isDeepSeekV41FlashActive, recommendedVisionModels } from '../../vision/model-catalog.js'
+import { recommendedVisionModels } from '../../vision/model-catalog.js'
 import type { SkillSummary } from '../../skills/skill-catalog.js'
 import type { WorkbenchMessage, WorkbenchSnapshot } from '../../session/types.js'
 import { autonomousQueueItems, hasActiveTurn, hasAgentActivity, hasAutonomousActivity, hasAutonomousAgentActivity, modelControlsUnavailableReason, modelRecoveryCandidate, promptUnavailableReason, steerAvailable } from '../../session/interaction-readiness.js'
@@ -483,15 +483,11 @@ window.addEventListener('message', event => {
     pendingState = message.state
     pendingAttachments = message.attachments
     pasteFileThreshold = message.state.pasteFileThreshold
-    if (pendingSendText !== undefined) {
-      const count = message.state.messages.filter(item => item.role === 'user' && item.text === pendingSendText).length
-      if (count > pendingSendBaselineCount) {
-        pendingSendPreview?.remove()
-        pendingSendPreview = undefined
-        pendingSendText = undefined
-        pendingSendBaselineIds = new Set<string>()
-        pendingQueueBaselineIds = new Set<string>()
-      }
+    if (pendingSendText !== undefined && hasPendingDurableMessage(message.state.messages)) {
+      // The durable event is the authoritative acknowledgement. Harness may
+      // normalize whitespace or project attachment/context blocks, so exact
+      // text equality is not reliable enough to retire the optimistic row.
+      clearPendingSendPreview()
     }
     scheduleRender()
   } else if (message.type === 'sendStarted') {
@@ -510,12 +506,7 @@ window.addEventListener('message', event => {
   } else if (message.type === 'sendSettled') {
     sendPending = false
     if (!message.accepted) {
-      pendingSendPreview?.remove()
-      pendingSendPreview = undefined
-      pendingSendText = undefined
-      pendingSendBaselineIds = new Set<string>()
-      pendingQueueBaselineIds = new Set<string>()
-      pendingQueueRemoveRequestedId = undefined
+      clearPendingSendPreview()
       steerPendingText = undefined
       elements.steerNotice.classList.add('hidden')
       if (elements.prompt.value.trim() === '') {
@@ -524,11 +515,14 @@ window.addEventListener('message', event => {
         resizePrompt()
       }
     } else {
-      const status = pendingSendPreview?.querySelector('.message-send-status')
-      if (status !== null && status !== undefined) {
-        status.textContent = 'Waiting'
-        status.setAttribute('data-state', 'waiting')
-        status.setAttribute('title', 'Harness accepted the message and is waiting for the next response event')
+      if (state !== undefined && hasPendingDurableMessage(state.messages)) clearPendingSendPreview()
+      else {
+        const status = pendingSendPreview?.querySelector('.message-send-status')
+        if (status !== null && status !== undefined) {
+          status.textContent = 'Waiting'
+          status.setAttribute('data-state', 'waiting')
+          status.setAttribute('title', 'Harness accepted the message and is waiting for the next response event')
+        }
       }
     }
     if (message.accepted && elements.prompt.value === message.text) {
@@ -928,6 +922,29 @@ function clearPendingQueuePreview(): void {
   pendingSendBaselineCount = 0
   pendingSendBaselineIds = new Set<string>()
   pendingQueueBaselineIds = new Set<string>()
+}
+
+function clearPendingSendPreview(): void {
+  pendingSendPreview?.remove()
+  pendingSendPreview = undefined
+  pendingSendText = undefined
+  pendingSendBaselineCount = 0
+  pendingSendBaselineIds = new Set<string>()
+  pendingQueueBaselineIds = new Set<string>()
+  pendingQueueRemoveRequestedId = undefined
+}
+
+function hasPendingDurableMessage(messages: readonly WorkbenchMessage[]): boolean {
+  if (pendingSendText === undefined) return false
+  const expected = normalizePendingText(pendingSendText)
+  if (expected === '') return false
+  const matching = messages.filter(message => message.role === 'user' && normalizePendingText(message.text) === expected)
+  if (matching.length > pendingSendBaselineCount) return true
+  return matching.some(message => !pendingSendBaselineIds.has(message.id))
+}
+
+function normalizePendingText(value: string): string {
+  return value.replace(/\r\n?/gu, '\n').trim()
 }
 
 function renderQueueRow(item: NonNullable<WorkbenchSnapshot['queueItems']>[number], snapshot: WorkbenchSnapshot): HTMLElement {
@@ -1541,7 +1558,7 @@ function beginPendingSend(
   if (!reuse) {
     const baseline = pendingState ?? state
     pendingSendText = text
-    pendingSendBaselineCount = baseline?.messages.filter(item => item.role === 'user' && item.text === text).length ?? 0
+    pendingSendBaselineCount = baseline?.messages.filter(item => item.role === 'user' && normalizePendingText(item.text) === normalizePendingText(text)).length ?? 0
     pendingSendBaselineIds = new Set(baseline?.messages.map(item => item.id) ?? [])
     pendingQueueBaselineIds = new Set(baseline?.queueItems?.map(item => item.id) ?? [])
     pendingQueueRemoveRequestedId = undefined
@@ -3068,12 +3085,12 @@ function renderCompactionModelOptions(): void {
   const groups = catalog?.groups ?? (state === undefined ? [] : [{
     id: state.provider,
     name: state.provider,
-    models: [
-      { id: state.model, name: state.model },
-      ...(state.model === 'deepseek-v4-flash' ? [
+      models: [
+        { id: state.model, name: state.model },
+      ...(state.model === 'deepseek-v4-flash' || state.model === 'deepseek-flash' ? [
+        { id: 'deepseek-flash', name: 'DeepSeek-V41-Flash' },
         { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
         { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision Exp' },
-        ...(isDeepSeekV41FlashActive() ? [{ id: 'deepseek-v4.1-flash-expires-on-0910', name: 'DeepSeek V4.1 Flash (internal beta; expires 0910)' }] : []),
       ] : []),
     ],
   }])

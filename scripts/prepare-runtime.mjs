@@ -72,16 +72,18 @@ if (dshVersion !== expectedDsh) throw new Error(`DSH executable mismatch: expect
 const pnpmVersion = run(node, [pnpm, '--version'])
 if (pnpmVersion !== expectedPnpm) throw new Error(`pnpm executable mismatch: expected ${expectedPnpm}, reported ${pnpmVersion}`)
 
-// The official alpha.2 adapter uses a direct fetch + SSE pipeline. Some
-// Windows gateways/proxies compress or reset event-stream bodies while the
-// response is still active. Keep the upstream package and its version intact,
-// but harden the one provider request at packaging time so every VSIX gets the
-// same deterministic transport behavior. The exact markers make an upstream
-// package drift fail loudly instead of silently shipping an unpatched runtime.
-patchDeepSeekTransport(path.join(runtimeModules, '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js'))
-patchJobStopCommand(path.join(runtimeModules, '@deepseek-ai', 'dsh-tool-jobs', 'lib', 'index.js'))
-patchScheduleCancelCommand(path.join(runtimeModules, '@deepseek-ai', 'dsh-schedule', 'lib', 'index.js'))
-patchLegacySessionOrigin(path.join(runtimeModules, '@deepseek-ai', 'dsh-session-format-v0-to-v1', 'lib', 'index.js'))
+// 0.1.3-alpha.2 needed local transport, stop-jobs, schedule-cancel, and
+// legacy-origin compatibility patches. Official 0.1.5-rc.1 includes those
+// fixes and ships the DeepSeek-V41-Flash model adapter, so do not apply the
+// alpha-only source rewrites to the new upstream package.
+if (expectedDsh === '0.1.3-alpha.2') {
+  patchDeepSeekTransport(path.join(runtimeModules, '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js'))
+  patchJobStopCommand(path.join(runtimeModules, '@deepseek-ai', 'dsh-tool-jobs', 'lib', 'index.js'))
+  patchScheduleCancelCommand(path.join(runtimeModules, '@deepseek-ai', 'dsh-schedule', 'lib', 'index.js'))
+  patchLegacySessionOrigin(path.join(runtimeModules, '@deepseek-ai', 'dsh-session-format-v0-to-v1', 'lib', 'index.js'))
+} else {
+  console.log(`Using upstream Harness ${expectedDsh}; skipping alpha.2 compatibility patches.`)
+}
 
 for (const metadata of ['.modules.yaml', '.package-map.json', '.pnpm-workspace-state-v1.json', '.pnpm']) {
   rmSync(path.join(runtimeModules, metadata), { recursive: true, force: true })

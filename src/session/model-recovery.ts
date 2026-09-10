@@ -1,10 +1,10 @@
 import type { HarnessConfiguration } from '../config/configuration.js'
 import type { ModelCatalog, ModelCatalogModel } from '../gateway/protocol.js'
-import { isDeepSeekV41FlashActive } from '../vision/model-catalog.js'
 
 const DEEPSEEK_PROVIDER = 'deepseek-official'
 
 const STABLE_DEEPSEEK_MODELS: readonly ModelCatalogModel[] = [
+  { id: 'deepseek-flash', name: 'DeepSeek-V41-Flash' },
   { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' },
   { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro' },
   { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek-V4-Flash-Vision-Exp' },
@@ -53,7 +53,5 @@ export function fallbackModelCatalog(
 }
 
 export function recoveryModels(): readonly ModelCatalogModel[] {
-  return isDeepSeekV41FlashActive()
-    ? [...STABLE_DEEPSEEK_MODELS, { id: 'deepseek-v4.1-flash-expires-on-0910', name: 'DeepSeek-V4.1-Flash (internal beta; expires 0910)' }]
-    : [...STABLE_DEEPSEEK_MODELS]
+  return [...STABLE_DEEPSEEK_MODELS]
 }

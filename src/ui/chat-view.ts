@@ -42,6 +42,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private statePostScheduled = false
   private pendingImageFiles: readonly { readonly name: string; readonly dataUrl: string }[] = []
   private readonly queueActions = new Set<string>()
+  private sendInFlight = false
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -309,6 +310,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       return
     }
     if (message.type === 'send') {
+      if (this.sendInFlight) {
+        this.logger.warn('Ignored a duplicate send event while the previous prompt was still being submitted.')
+        return
+      }
+      this.sendInFlight = true
+      try {
       const attachments = [...this.attachments]
       const sentIds = new Set(attachments.map(item => item.id))
       this.attachments = this.attachments.filter(item => !sentIds.has(item.id))
@@ -350,6 +357,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         await this.postState()
       }
       return
+      } finally {
+        this.sendInFlight = false
+      }
     }
     if (message.type === 'steerQueueItem' || message.type === 'removeQueueItem' || message.type === 'editQueueItem') {
       return this.handleQueueAction(message)
@@ -793,6 +803,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     details.message .summary-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     details.reasoning { border-left: 2px solid var(--vscode-charts-yellow); padding-left: 8px; }
     details.tool { border-left: 2px solid var(--vscode-charts-green); padding-left: 8px; }
+    .task-group > details.reasoning, .task-group > details.tool { margin-left: 10px; }
     .vision-process { width: 100%; margin: 4px 0; padding: 4px 7px; border-left: 2px solid var(--vscode-charts-purple, #b180d7); background: color-mix(in srgb, var(--vscode-charts-purple, #b180d7) 7%, transparent); }
     .vision-process summary { display: flex; align-items: center; gap: 5px; width: 100%; min-height: 24px; padding: 3px 5px; box-sizing: border-box; cursor: pointer; color: var(--vscode-descriptionForeground); font-size: 11px; }
     .vision-process summary svg { width: 12px; height: 12px; }

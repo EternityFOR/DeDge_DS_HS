@@ -68,7 +68,7 @@ export class ConfigurationService implements vscode.Disposable {
       runtimeNodePath: config.get<string>('runtime.nodePath', '').trim(),
       startTimeoutMs: bounded(config.get<number>('runtime.startTimeoutMs'), 5_000, 300_000, 90_000),
       provider,
-      model: normalizeDeepSeekModelId(nonEmpty(config.get<string>('model'), 'deepseek-v4-flash')),
+      model: normalizeDeepSeekModelId(nonEmpty(config.get<string>('model'), 'deepseek-flash')),
       reasoningEffort: nonEmpty(config.get<string>('reasoningEffort'), 'high'),
       agentPreset: nonEmpty(config.get<string>('agentPreset'), 'standard'),
       permissionMode: oneOf(

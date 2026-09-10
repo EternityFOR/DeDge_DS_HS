@@ -1,5 +1,5 @@
 import type { HarnessConfiguration } from '../config/configuration.js'
-import { isDeepSeekV41FlashActive, isVisionCapableModel } from '../vision/model-catalog.js'
+import { isVisionCapableModel } from '../vision/model-catalog.js'
 
 export function renderRuntimeOverlay(configuration: HarnessConfiguration): string {
   const thinking = configuration.reasoningEffort === 'off' ? 'disabled' : 'enabled'
@@ -15,9 +15,9 @@ export function renderRuntimeOverlay(configuration: HarnessConfiguration): strin
     '- id: llm-deepseek',
     '  config:',
     // Keep the endpoint and credential reference in the same generated
-    // settings generation as the model catalog. alpha.2 otherwise resolves
-    // them from the process environment, which can leave a shared runtime
-    // serving a stale endpoint after a VS Code window changes configuration.
+    // Keep endpoint and credential configuration in the same generated
+    // settings generation as the model catalog so shared runtimes do not
+    // serve a stale endpoint after a VS Code window changes configuration.
     '    apiKeyEnv: "DEEPSEEK_API_KEY"',
     `    baseURL: ${JSON.stringify(normalizeProviderBaseUrl(configuration.baseUrl))}`,
     `    thinking: ${thinking}`,
@@ -30,6 +30,7 @@ export function renderRuntimeOverlay(configuration: HarnessConfiguration): strin
       `        name: ${JSON.stringify(model.name)}`,
       `        contextWindow: ${configuration.contextWindowTokens}`,
       ...(isVisionCapableModel(model.id) ? ['        inputModalities: [text, image]'] : []),
+      ...(model.id === 'deepseek-flash' ? ['        systemPromptUpdate: in-history'] : []),
     ]),
     '',
   ] : []
@@ -78,7 +79,7 @@ export function renderRuntimeOverlay(configuration: HarnessConfiguration): strin
   return overlay.join('\n')
 }
 
-/** alpha.2 appends `/chat/completions` directly to this value. */
+/** Harness appends `/chat/completions` directly to this value. */
 function normalizeProviderBaseUrl(value: string): string {
   return value.replace(/\/+$/u, '')
 }
@@ -107,11 +108,11 @@ function renderGenericProvider(configuration: HarnessConfiguration): string[] {
 
 function advertisedModels(configuration: HarnessConfiguration): Array<{ readonly id: string; readonly name: string }> {
   const defaults = configuration.provider === 'deepseek-official'
-    ? [
+      ? [
+        { id: 'deepseek-flash', name: 'DeepSeek-V41-Flash' },
         { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' },
         { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro' },
         { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek-V4-Flash-Vision-Exp' },
-        ...(isDeepSeekV41FlashActive() ? [{ id: 'deepseek-v4.1-flash-expires-on-0910', name: 'DeepSeek-V4.1-Flash (internal beta; expires 0910)' }] : []),
       ]
     : []
   if (!defaults.some(model => model.id === configuration.model)) {

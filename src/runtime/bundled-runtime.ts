@@ -10,7 +10,7 @@ import type { StorageLayout } from '../platform/storage.js'
 import type { RuntimeLaunch } from './types.js'
 
 const execFileAsync = promisify(execFile)
-export const EXPECTED_DSH_VERSION = '0.1.3-alpha.2'
+export const EXPECTED_DSH_VERSION = '0.1.5-rc.1'
 
 export class RuntimeResolver {
   constructor(

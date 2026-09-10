@@ -9,7 +9,7 @@ if (template === undefined) throw new Error('Could not locate the Webview HTML t
 
 const state = {
   phase: 'connected',
-  runtime: { phase: 'ready', version: '0.1.3-alpha.2' },
+  runtime: { phase: 'ready', version: '0.1.5-rc.1' },
   hasApiKey: true,
   sessions: [
     { id: 'one', title: 'DeDge_DS_HS', running: false, blank: false },
@@ -45,14 +45,14 @@ const state = {
   approvals: [],
   questions: [],
   provider: 'deepseek-official',
-  model: 'deepseek-v4-flash',
+  model: 'deepseek-flash',
   reasoningEffort: 'high',
   agentPreset: 'standard',
   permissionMode: 'workspace-write',
   contextWindowTokens: 1_000_000,
   contextPressure: { pressureTokens: 611_000, projectedTokens: 624_000, contextWindow: 1_000_000 },
   modelCatalog: {
-    current: { provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high' },
+    current: { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'high' },
     routable: true,
     failures: [],
     groups: [{
@@ -60,7 +60,7 @@ const state = {
       name: 'DeepSeek official',
       models: [
         {
-          id: 'deepseek-v4-flash',
+          id: 'deepseek-flash',
           name: 'DeepSeek-V4-Flash with a deliberately long model label',
           description: 'Fast coding model exposed by the selected endpoint.',
           reasoning: {

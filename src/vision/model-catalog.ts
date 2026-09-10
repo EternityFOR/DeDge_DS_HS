@@ -1,19 +1,13 @@
 const MAX_VISION_MODELS = 1_000
 export const DEEPSEEK_VISION_EXP_MODEL = 'deepseek-v4-flash-vision-exp'
 export const LEGACY_DEEPSEEK_V41_FLASH_MODEL = 'deepseek-v4.1-flash-expires-0901'
-// Retained only to migrate settings from the time-boxed 0910 preview. The
-// official API keeps the stable v4-pro/v4-flash aliases while routing Pro to
-// the newest Flash backend; it has not published a separate 4.1 model id.
-export const DEEPSEEK_V41_FLASH_MODEL = 'deepseek-v4.1-flash-expires-on-0910'
-export const DEEPSEEK_V41_FLASH_EXPIRES_AT = '2026-09-10T00:00:00+08:00'
+// Stable RC model id published by DeepSeek Harness 0.1.5-rc.1. It is native
+// multimodal and replaces the time-boxed 0910 preview route.
+export const DEEPSEEK_V41_FLASH_MODEL = 'deepseek-flash'
 
-export function isDeepSeekV41FlashActive(now = new Date()): boolean {
-  return now.getTime() < Date.parse(DEEPSEEK_V41_FLASH_EXPIRES_AT)
-}
-
-export function normalizeDeepSeekModelId(model: string, now = new Date()): string {
-  if (model !== LEGACY_DEEPSEEK_V41_FLASH_MODEL && model !== DEEPSEEK_V41_FLASH_MODEL) return model
-  return isDeepSeekV41FlashActive(now) ? DEEPSEEK_V41_FLASH_MODEL : 'deepseek-v4-flash'
+export function normalizeDeepSeekModelId(model: string): string {
+  if (model === LEGACY_DEEPSEEK_V41_FLASH_MODEL || model === 'deepseek-v4.1-flash-expires-on-0910') return DEEPSEEK_V41_FLASH_MODEL
+  return model
 }
 
 export function isVisionCapableModel(model: string): boolean {

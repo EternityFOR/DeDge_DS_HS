@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+## [0.1.80] - 2026-09-10
+
+### Changed
+
+- Bundled official DeepSeek Harness upgraded from `0.1.3-alpha.2` to `0.1.5-rc.1`.
+- Adopted the upstream `deepseek-flash` / `DeepSeek-V41-Flash` native multimodal model catalog entry.
+- Kept the extension's send de-duplication, chronological task layout, and Windows runtime lease compatibility on top of the RC runtime.
+
+### Fixed
+
+- The upstream RC fixes queue/Steer send-state consistency, Web reconnect recovery, and long-session continuation behavior.
+
+## [0.1.79] - 2026-09-10
+
+### Fixed
+
+- A durable user message now retires its optimistic preview using normalized text and baseline IDs, preventing one send from appearing twice.
+- Host-side send handling ignores a duplicate Webview send event while the previous prompt is being submitted.
+- The composer remains locked until the authoritative send-settled receipt, preventing a second click during the short acknowledgement race.
+- Reasoning and command/tool details now share the same task-level left alignment.
+
 ## [0.1.78] - 2026-09-10
 
 ### Changed
@@ -799,7 +820,9 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.78...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.80...HEAD
+[0.1.80]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.80
+[0.1.79]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.79
 [0.1.78]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.78
 [0.1.77]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.77
 [0.1.76]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.76

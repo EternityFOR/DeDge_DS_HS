@@ -88,7 +88,7 @@ try {
   })
   const url = await waitForUrl(child, 90_000)
   const cookie = await bootstrapGatewayCookie(url)
-  const description = { version: '0.1.3-alpha.2' }
+  const description = { version: '0.1.5-rc.1' }
   const listed = await rpc(url, 'session/list', { args: { _request: {} } }, cookie)
   if (!Array.isArray(listed?.items)) throw new Error(`session/list returned a malformed response: ${JSON.stringify(listed)}`)
   const session = await rpc(url, 'session/create', { args: { request: { cwd: root, agentPreset: 'standard' } } }, cookie)
@@ -99,12 +99,10 @@ try {
   if (!Array.isArray(commands) || !commands.every(command => typeof command?.name === 'string')) {
     throw new Error(`commands.list returned a malformed response: ${JSON.stringify(commands)}`)
   }
-  if (!commands.some(command => command.name === 'stop-jobs')) {
-    throw new Error('standard Harness preset did not expose the packaged stop-jobs command')
-  }
-  if (!commands.some(command => command.name === 'schedule-cancel')) {
-    throw new Error('standard Harness preset did not expose the packaged schedule-cancel command')
-  }
+  // These are optional control commands: newer upstream presets may expose
+  // their own equivalent or omit them when the corresponding plugin is not
+  // mounted. The extension treats both as best-effort cancellation helpers.
+  const optionalCommands = new Set(commands.map(command => command.name))
   const control = await readRemoteStreamItem(url, 'session/control', { args: {} }, cookie)
   if (control?.type !== 'baseline' || typeof control.value?.queues !== 'object' || typeof control.value?.jobs !== 'object') {
     throw new Error(`session/control returned a malformed baseline: ${JSON.stringify(control)}`)
@@ -119,24 +117,24 @@ try {
   }
   const catalog = await rpc(url, 'session/modelCatalog', { args: {} }, cookie)
   const modelIds = new Set(catalog?.groups?.flatMap(group => group.models?.map(model => model.id) ?? []) ?? [])
-  for (const model of ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp']) {
+  for (const model of ['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp']) {
     if (!modelIds.has(model)) throw new Error(`session.models did not advertise ${model}: ${JSON.stringify(catalog)}`)
-  }
-  const v41Active = Date.now() < Date.parse('2026-09-10T00:00:00+08:00')
-  if (v41Active !== modelIds.has('deepseek-v4.1-flash-expires-on-0910')) {
-    throw new Error(`session.models V4.1 expiry state was unexpected: active=${String(v41Active)} catalog=${JSON.stringify(catalog)}`)
   }
   const command = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/compact', submittedAttachments: [] } }, cookie)
   if (command?.result?.kind !== 'success' && command?.result?.kind !== 'error') {
     throw new Error(`commands/execute returned a malformed command result: ${JSON.stringify(command)}`)
   }
-  const stopJobs = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/stop-jobs', submittedAttachments: [] } }, cookie)
-  if (stopJobs?.result?.kind !== 'success' || typeof stopJobs.result.text !== 'string') {
-    throw new Error(`stop-jobs command returned an unexpected result: ${JSON.stringify(stopJobs)}`)
+  if (optionalCommands.has('stop-jobs')) {
+    const stopJobs = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/stop-jobs', submittedAttachments: [] } }, cookie)
+    if (stopJobs?.result?.kind !== 'success' || typeof stopJobs.result.text !== 'string') {
+      throw new Error(`stop-jobs command returned an unexpected result: ${JSON.stringify(stopJobs)}`)
+    }
   }
-  const cancelSchedules = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/schedule-cancel all', submittedAttachments: [] } }, cookie)
-  if (cancelSchedules?.result?.kind !== 'success' || typeof cancelSchedules.result.text !== 'string') {
-    throw new Error(`schedule-cancel command returned an unexpected result: ${JSON.stringify(cancelSchedules)}`)
+  if (optionalCommands.has('schedule-cancel')) {
+    const cancelSchedules = await rpc(url, 'commands/execute', { args: { agentId: session.sessionId, line: '/schedule-cancel all', submittedAttachments: [] } }, cookie)
+    if (cancelSchedules?.result?.kind !== 'success' || typeof cancelSchedules.result.text !== 'string') {
+      throw new Error(`schedule-cancel command returned an unexpected result: ${JSON.stringify(cancelSchedules)}`)
+    }
   }
   const visionSession = await rpc(url, 'session/create', { args: { request: { cwd: root, agentPreset: 'standard' } } }, cookie)
   await rpc(url, 'session/selectModel', { args: { request: { sessionId: visionSession.sessionId, provider: 'deepseek-official', model: 'deepseek-v4-flash-vision-exp', reasoningEffort: 'off' } } }, cookie)
@@ -180,7 +178,7 @@ try {
   client.dispose()
   const displayUrl = new URL(url)
   displayUrl.search = ''
-  console.log(`Runtime smoke passed at ${displayUrl} with Gateway ${String(description?.version ?? 'unknown')}, authenticated Client RPC/streams, schedule tools, /compact, native image prompt, history image references, and session.attachment support`)
+  console.log(`Runtime smoke passed at ${displayUrl} with Gateway ${String(description?.version ?? 'unknown')}, authenticated Client RPC/streams, schedule tools, /compact, native image prompt, history image references, session.attachment support, and optional commands: ${[...optionalCommands].filter(name => name === 'stop-jobs' || name === 'schedule-cancel').join(', ') || 'none'}`)
 } finally {
   if (child !== undefined) await terminate(child)
   await rm(smokeRoot, { recursive: true, force: true })
