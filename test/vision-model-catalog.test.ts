@@ -35,8 +35,8 @@ describe('Vision model catalog', () => {
   })
 
   it('migrates the expired V4.1 preview id and disables the route after its expiry', () => {
-    const beforeExpiry = new Date('2026-09-10T23:59:59+08:00')
-    const afterExpiry = new Date('2026-09-11T00:00:00+08:00')
+    const beforeExpiry = new Date('2026-09-09T23:59:59+08:00')
+    const afterExpiry = new Date('2026-09-10T00:00:00+08:00')
     expect(isDeepSeekV41FlashActive(beforeExpiry)).toBe(true)
     expect(isDeepSeekV41FlashActive(afterExpiry)).toBe(false)
     expect(normalizeDeepSeekModelId(LEGACY_DEEPSEEK_V41_FLASH_MODEL, beforeExpiry)).toBe(DEEPSEEK_V41_FLASH_MODEL)

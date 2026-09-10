@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.1.78] - 2026-09-10
+
+### Changed
+
+- Retired the time-boxed `deepseek-v4.1-flash-expires-on-0910` preview from the selectable model catalog.
+- Kept the official stable `deepseek-v4-pro`, `deepseek-v4-flash`, and `deepseek-v4-flash-vision-exp` routes. DeepSeek's current rollout routes V4-Pro requests server-side to the newest Flash backend, so the extension does not guess an undocumented 4.1 model ID.
+- Existing preview settings continue to migrate safely to the stable route without losing the session.
+
 ## [0.1.77] - 2026-09-09
 
 ### Fixed
@@ -791,7 +799,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.77...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.78...HEAD
+[0.1.78]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.78
 [0.1.77]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.77
 [0.1.76]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.76
 [0.1.75]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.75

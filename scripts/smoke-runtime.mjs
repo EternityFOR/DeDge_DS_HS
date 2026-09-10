@@ -122,7 +122,7 @@ try {
   for (const model of ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp']) {
     if (!modelIds.has(model)) throw new Error(`session.models did not advertise ${model}: ${JSON.stringify(catalog)}`)
   }
-  const v41Active = Date.now() < Date.parse('2026-09-11T00:00:00+08:00')
+  const v41Active = Date.now() < Date.parse('2026-09-10T00:00:00+08:00')
   if (v41Active !== modelIds.has('deepseek-v4.1-flash-expires-on-0910')) {
     throw new Error(`session.models V4.1 expiry state was unexpected: active=${String(v41Active)} catalog=${JSON.stringify(catalog)}`)
   }

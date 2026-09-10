@@ -1,11 +1,11 @@
 const MAX_VISION_MODELS = 1_000
 export const DEEPSEEK_VISION_EXP_MODEL = 'deepseek-v4-flash-vision-exp'
 export const LEGACY_DEEPSEEK_V41_FLASH_MODEL = 'deepseek-v4.1-flash-expires-0901'
-// Temporary upstream beta advertised in the DeepSeek developer channel on
-// 2026-09-08. It is intentionally expiry-bound and must not be treated as a
-// stable model; the public catalog still only guarantees the V4 stable routes.
+// Retained only to migrate settings from the time-boxed 0910 preview. The
+// official API keeps the stable v4-pro/v4-flash aliases while routing Pro to
+// the newest Flash backend; it has not published a separate 4.1 model id.
 export const DEEPSEEK_V41_FLASH_MODEL = 'deepseek-v4.1-flash-expires-on-0910'
-export const DEEPSEEK_V41_FLASH_EXPIRES_AT = '2026-09-11T00:00:00+08:00'
+export const DEEPSEEK_V41_FLASH_EXPIRES_AT = '2026-09-10T00:00:00+08:00'
 
 export function isDeepSeekV41FlashActive(now = new Date()): boolean {
   return now.getTime() < Date.parse(DEEPSEEK_V41_FLASH_EXPIRES_AT)
