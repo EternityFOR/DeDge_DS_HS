@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.1.82] - 2026-09-11
+
+### Fixed
+
+- Shared Harness runtimes are now isolated by bundled version and normalized workspace, preventing one VS Code window from attaching to a runtime launched for another workspace.
+- Existing versioned Harness homes now merge missing session and storage records from prior homes, recovering sessions after a partial or interrupted runtime migration without overwriting current data.
+- Added regression coverage for workspace-scoped leases and partial-home migration recovery.
+
 ## [0.1.81] - 2026-09-10
 
 ### Fixed
@@ -828,7 +836,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.81...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.82...HEAD
+[0.1.82]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.82
 [0.1.81]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.81
 [0.1.80]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.80
 [0.1.79]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.79

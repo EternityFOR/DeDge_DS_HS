@@ -92,7 +92,7 @@ DeepSeek Harness 当前没有稳定兼容性保证，因此协议、运行时版
 1. 固定新的 DSH、Node、pnpm 版本并更新锁文件。
 2. 比对 Gateway HTTP/WebSocket 帧和 session event 投影。
 3. 增加协议回归测试，不用宽松类型掩盖新字段语义。
-4. 为新版本创建独立 `harness-homes/<version>`，不迁移旧状态，除非上游提供迁移契约。
+4. 为新版本创建独立 `harness-homes/<version>`；若目标目录已存在，则以不覆盖方式合并旧版本缺失的 sessions、storages 和附件对象，不复制凭据。
 5. 在六个目标 OS/架构的原生 runner 上打包并检查 VSIX 内容。
 6. 完成无密钥启动、正常停止和进程树清理的冒烟测试后再发布。
 

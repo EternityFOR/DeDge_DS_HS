@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { EXPECTED_DSH_VERSION, parseNodeVersion, supportsHarnessNode, supportsHarnessVersion } from '../src/runtime/bundled-runtime.js'
-import { copyMissingTree, normalizeProviderBaseUrl, recoverMissingAttachments } from '../src/runtime/runtime-manager.js'
+import { copyMissingTree, normalizeProviderBaseUrl, recoverMissingAttachments, recoverMissingHarnessHomeData } from '../src/runtime/runtime-manager.js'
 import { describeWindowsExitCode } from '../src/runtime/windows-compat.js'
 import { renderRuntimeOverlay } from '../src/runtime/overlay.js'
 import type { HarnessConfiguration } from '../src/config/configuration.js'
@@ -85,6 +85,26 @@ describe('Harness runtime compatibility', () => {
       await expect(recoverMissingAttachments(homes, ['0.1.1-rc.1', '0.1.1-rc.2'], target)).resolves.toBe(2)
       await expect(readFile(path.join(target, 'attachments', 'v1', 'objects', 'aa', 'from-older'), 'utf8')).resolves.toBe('older')
       await expect(readFile(path.join(target, 'attachments', 'v1', 'objects', 'bb', 'from-middle'), 'utf8')).resolves.toBe('middle')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('merges missing sessions and storage records when the target home already exists', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dedge-home-migration-'))
+    try {
+      const homes = path.join(root, 'homes')
+      const source = path.join(homes, '0.1.3-alpha.2')
+      const target = path.join(homes, '0.1.5-rc.1')
+      await mkdir(path.join(source, 'sessions', 'old-workspace', 'session-1'), { recursive: true })
+      await mkdir(path.join(source, 'storages', 'old-workspace'), { recursive: true })
+      await mkdir(path.join(target, 'sessions', 'old-workspace', 'session-1'), { recursive: true })
+      await mkdir(path.join(target, 'storages'), { recursive: true })
+      await writeFile(path.join(source, 'sessions', 'old-workspace', 'session-1', 'session.v3.jsonl.zstd'), 'session-data')
+      await writeFile(path.join(source, 'storages', 'old-workspace', 'index.json'), 'storage-data')
+      await expect(recoverMissingHarnessHomeData(homes, ['0.1.3-alpha.2'], target)).resolves.toBe(2)
+      await expect(readFile(path.join(target, 'sessions', 'old-workspace', 'session-1', 'session.v3.jsonl.zstd'), 'utf8')).resolves.toBe('session-data')
+      await expect(readFile(path.join(target, 'storages', 'old-workspace', 'index.json'), 'utf8')).resolves.toBe('storage-data')
     } finally {
       await rm(root, { recursive: true, force: true })
     }

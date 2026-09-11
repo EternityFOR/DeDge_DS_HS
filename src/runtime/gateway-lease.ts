@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import * as path from 'node:path'
@@ -41,6 +41,33 @@ export function defaultGatewayLeasePath(env: NodeJS.ProcessEnv = process.env, us
 export function runtimeGatewayLeasePath(version: string, env: NodeJS.ProcessEnv = process.env, userHome = homedir()): string {
   if (!/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/u.test(version)) throw new Error('Invalid Harness runtime version for lease storage.')
   return path.join(path.dirname(defaultGatewayLeasePath(env, userHome)), 'runtimes', version, 'gateway-lease.json')
+}
+
+/**
+ * Return the lease path for one runtime/workspace pair.
+ *
+ * The unscoped runtime lease above is retained for compatibility with older
+ * extension hosts, but it is unsafe as the primary coordination file: a
+ * process started for one VS Code workspace can otherwise be reused by a
+ * different workspace and keep the wrong DSH_CWD. The workspace is hashed so
+ * private paths are not written into the lease filename.
+ */
+export function workspaceGatewayLeasePath(
+  version: string,
+  workspace: string,
+  env: NodeJS.ProcessEnv = process.env,
+  userHome = homedir(),
+): string {
+  const base = runtimeGatewayLeasePath(version, env, userHome)
+  const key = createHash('sha256').update(normalizeWorkspaceIdentity(workspace), 'utf8').digest('hex').slice(0, 16)
+  return path.join(path.dirname(base), `gateway-lease-${key}.json`)
+}
+
+export function gatewayLeaseMatchesWorkspace(
+  lease: Pick<GatewayLease, 'workspace'>,
+  expectedWorkspace: string,
+): boolean {
+  return normalizeWorkspaceIdentity(lease.workspace) === normalizeWorkspaceIdentity(expectedWorkspace)
 }
 
 export async function writeGatewayLease(target: string, lease: GatewayLease): Promise<void> {
@@ -228,4 +255,12 @@ function isAlreadyExists(error: unknown): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function normalizeWorkspaceIdentity(value: string): string {
+  const collapsed = value.trim().replace(/[\\/]+/gu, '/')
+  const root = /^[a-z]:\/$/iu.test(collapsed)
+    ? collapsed
+    : collapsed.replace(/\/+$/u, '')
+  return process.platform === 'win32' || /^[a-z]:\//iu.test(root) ? root.toLowerCase() : root
 }

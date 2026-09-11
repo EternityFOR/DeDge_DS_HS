@@ -16,7 +16,9 @@ import type { RuntimeLaunch, RuntimeState } from './types.js'
 import {
   clearGatewayLease,
   defaultGatewayLeasePath,
+  gatewayLeaseMatchesWorkspace,
   runtimeGatewayLeasePath,
+  workspaceGatewayLeasePath,
   hasLiveGatewayClients,
   isProcessRunning,
   registerGatewayClient,
@@ -41,11 +43,15 @@ export class RuntimeManager implements vscode.Disposable {
   private startTask: Promise<string> | undefined
   private stopTask: Promise<void> | undefined
   private launchIdentity: string | undefined
-  private readonly primaryGatewayLease = runtimeGatewayLeasePath(EXPECTED_DSH_VERSION)
+  /** Compatibility path used by 0.1.80 and earlier hosts for this runtime. */
+  private readonly unscopedRuntimeLease = runtimeGatewayLeasePath(EXPECTED_DSH_VERSION)
+  /** Primary coordination path; replaced with the current workspace hash at start. */
+  private primaryGatewayLease = this.unscopedRuntimeLease
   /** Compatibility path used by 0.1.73 and earlier hosts running the same
    * bundled Harness. It is safe to attach only when its version matches. */
   private readonly legacyGatewayLease = defaultGatewayLeasePath()
   private leasePath = this.primaryGatewayLease
+  private currentWorkspace = ''
   private ownedLeasePid: number | undefined
   private clientRegistration: GatewayClientRegistration | undefined
   private attachedLeaseMonitor: ReturnType<typeof setInterval> | undefined
@@ -106,9 +112,11 @@ export class RuntimeManager implements vscode.Disposable {
 
   private async startInternal(): Promise<string> {
     if (this.stateValue.phase === 'ready' && this.stateValue.url !== undefined) return this.stateValue.url
-    this.leasePath = this.primaryGatewayLease
     const configuration = this.configuration.get()
     const workspace = workspaceDirectory()
+    this.currentWorkspace = workspace
+    this.primaryGatewayLease = workspaceGatewayLeasePath(EXPECTED_DSH_VERSION, workspace)
+    this.leasePath = this.primaryGatewayLease
     const apiKey = await this.credentials.getApiKey(configuration.baseUrl)
     this.setState({ phase: 'resolving' })
 
@@ -296,20 +304,26 @@ export class RuntimeManager implements vscode.Disposable {
   }
 
   private async readLiveGatewayLease(): Promise<GatewayLease | undefined> {
-    const candidates = this.leasePath === this.primaryGatewayLease
-      ? [this.primaryGatewayLease, this.legacyGatewayLease]
-      : [this.leasePath]
+    const candidates = [
+      { path: this.primaryGatewayLease, compatibility: false },
+      { path: this.unscopedRuntimeLease, compatibility: true },
+      { path: this.legacyGatewayLease, compatibility: true },
+    ].filter((candidate, index, all) => all.findIndex(item => item.path === candidate.path) === index)
     for (const candidate of candidates) {
       try {
-        const lease = await readGatewayLease(candidate)
+        const lease = await readGatewayLease(candidate.path)
         if (!isProcessRunning(lease.pid) || !await probeGateway(lease.url)) continue
         if (this.configuration.get().runtimeMode === 'bundled' && !gatewayLeaseMatchesVersion(lease, EXPECTED_DSH_VERSION)) {
           this.logger.warn(`Ignoring incompatible Harness ${lease.version}; this extension requires ${EXPECTED_DSH_VERSION}. The other runtime was left running.`)
           continue
         }
-        if (candidate === this.legacyGatewayLease) {
-          this.leasePath = candidate
-          this.logger.info(`Reusing the legacy Harness lease for compatible runtime ${lease.version}; no duplicate runtime will be started.`)
+        if (this.currentWorkspace !== '' && !gatewayLeaseMatchesWorkspace(lease, this.currentWorkspace)) {
+          this.logger.warn(`Ignoring shared Harness ${lease.version}; it belongs to a different workspace. A workspace-scoped runtime will be started.`)
+          continue
+        }
+        if (candidate.compatibility) {
+          this.leasePath = candidate.path
+          this.logger.info(`Reusing a compatible legacy Harness lease for ${lease.version}; no duplicate runtime will be started.`)
         }
         return lease
       } catch {
@@ -472,12 +486,14 @@ async function migrateHarnessHomeIfNeeded(layout: StorageLayout, target: string,
   }
   const candidates = entries.filter(name => name !== targetName).sort()
   if (targetExists) {
-    // Older releases migrated sessions and settings but forgot the durable
-    // content-addressed image store. Merge only missing objects from the most
-    // recent prior home that still has an attachment tree; never overwrite the
-    // current home or touch session logs.
-    const copied = await recoverMissingAttachments(layout.harnessHomes, candidates, target)
-    if (copied > 0) logger.info(`Recovered ${String(copied)} missing Harness attachment object${copied === 1 ? '' : 's'} from prior Harness homes`)
+    // A failed/early startup can create the new versioned home before the
+    // migration runs. Merge missing durable data in that case as well; the
+    // old implementation only restored attachments and left old sessions
+    // stranded in the previous runtime home. Never overwrite current files.
+    const copiedSessionsAndStorage = await recoverMissingHarnessHomeData(layout.harnessHomes, candidates, target)
+    const copiedAttachments = await recoverMissingAttachments(layout.harnessHomes, candidates, target)
+    const copied = copiedSessionsAndStorage + copiedAttachments
+    if (copied > 0) logger.info(`Recovered ${String(copied)} missing Harness home object${copied === 1 ? '' : 's'} from prior Harness homes`)
     return
   }
   const sourceName = candidates[candidates.length - 1]
@@ -511,6 +527,20 @@ export async function recoverMissingAttachments(homes: string, candidates: reado
       path.join(homes, name, 'attachments'),
       path.join(target, 'attachments'),
     )
+  }
+  return copied
+}
+
+/** Merge missing session and storage records from every prior runtime home. */
+export async function recoverMissingHarnessHomeData(homes: string, candidates: readonly string[], target: string): Promise<number> {
+  let copied = 0
+  for (const part of ['sessions', 'storages']) {
+    for (const name of [...candidates].reverse()) {
+      copied += await copyMissingTree(
+        path.join(homes, name, part),
+        path.join(target, part),
+      )
+    }
   }
   return copied
 }

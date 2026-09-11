@@ -65,7 +65,7 @@ Windows 探针检查：
 - DeepSeek Harness 是 developer preview，Gateway 事件可能在后续 RC 中变化。
 - 上下文占用依赖可选的 `contextPressure` projection；不提供 token-meter 的自定义 preset 会隐藏占用环，而不是显示伪造估算。
 - Codex 历史优先使用官方 app-server 的当前 provider、Active 交互式根会话列表；不可用时才扫描 Codex `sessions/`。Claude 只扫描 `projects/` 的 Active 顶层会话；Codex `archived_sessions/` 永不进入回退扫描。Codex rollout 文本读取限制为末尾 32 MiB，避免超大 JSONL 在 Windows 上阻塞 extension host。
-- 当前没有跨版本会话目录迁移；升级使用新的版本化 `DSH_HOME`。
+- 升级使用新的版本化 `DSH_HOME`；扩展会在目标目录已存在时合并缺失的会话、存储和附件对象，不覆盖当前数据或复制凭据。
 - VSIX 不能在一个平台上交叉生成另一个平台的内置 Node 产物。
 - 系统级工具调用仍受用户安装的软件、企业防护策略、代理和证书配置影响。
 - 扩展避免 Python Harness runtime，因此不依赖当前缺失的 Windows Python wheel。

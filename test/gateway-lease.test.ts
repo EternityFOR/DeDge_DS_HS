@@ -9,8 +9,10 @@ import {
   registerGatewayClient,
   readGatewayLease,
   runtimeGatewayLeasePath,
+  workspaceGatewayLeasePath,
   tryAcquireGatewayStartupLock,
   writeGatewayLease,
+  gatewayLeaseMatchesWorkspace,
   gatewayLeaseMatchesVersion,
 } from '../src/runtime/gateway-lease.js'
 
@@ -28,9 +30,24 @@ describe('Harness gateway lease', () => {
       .not.toBe(runtimeGatewayLeasePath('0.1.3-alpha.2', { LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local' }, 'C:\\Users\\test'))
   })
 
+  it('isolates the primary lease by workspace without writing the workspace path into the filename', () => {
+    const env = { LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local' }
+    const first = workspaceGatewayLeasePath('0.1.5-rc.1', 'D:\\Projects\\One', env, 'C:\\Users\\test')
+    const equivalent = workspaceGatewayLeasePath('0.1.5-rc.1', 'd:/projects/one/', env, 'C:\\Users\\test')
+    const second = workspaceGatewayLeasePath('0.1.5-rc.1', 'D:\\Projects\\Two', env, 'C:\\Users\\test')
+    expect(first).toBe(equivalent)
+    expect(second).not.toBe(first)
+    expect(first).not.toContain('Projects')
+  })
+
   it('requires an exact bundled runtime version before attaching', () => {
     expect(gatewayLeaseMatchesVersion({ version: '0.1.3-alpha.2' }, '0.1.3-alpha.2')).toBe(true)
     expect(gatewayLeaseMatchesVersion({ version: '0.1.1-rc.2' }, '0.1.3-alpha.2')).toBe(false)
+  })
+
+  it('requires a shared runtime lease to belong to the current workspace', () => {
+    expect(gatewayLeaseMatchesWorkspace({ workspace: 'D:\\Work\\Project' }, 'd:/work/project/')).toBe(true)
+    expect(gatewayLeaseMatchesWorkspace({ workspace: 'D:\\Work\\Other' }, 'D:\\Work\\Project')).toBe(false)
   })
   it('uses the per-user local application data directory', () => {
     expect(defaultGatewayLeasePath({ LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local' }, 'C:\\Users\\test'))

@@ -6,7 +6,7 @@
 
 [Marketplace](https://marketplace.visualstudio.com/items?itemName=diractive-edge.dedge-deepseek-harness-vscode) · [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) · [Changelog](CHANGELOG.md) · [隐私](PRIVACY.md) · [安全](SECURITY.md) · [支持](SUPPORT.md)
 
-> 当前版本为 `0.1.81`。发布产物优先验证 Windows 10/11 x64；DeepSeek Harness 上游仍处于 developer preview，升级前请阅读变更日志和已知限制。
+> 当前版本为 `0.1.82`。发布产物优先验证 Windows 10/11 x64；DeepSeek Harness 上游仍处于 developer preview，升级前请阅读变更日志和已知限制。
 
 ## 主要能力
 
@@ -30,14 +30,14 @@
 
 ### 从 VSIX 安装
 
-1. 从 [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) 下载与 extension host 匹配的文件，例如 `dedge-deepseek-harness-vscode-0.1.81-win32-x64.vsix`。
+1. 从 [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) 下载与 extension host 匹配的文件，例如 `dedge-deepseek-harness-vscode-0.1.82-win32-x64.vsix`。
 2. 在 VS Code 扩展视图右上角菜单选择 **Install from VSIX...**。
 3. 安装完成后按 VS Code 提示重新加载窗口。
 
 也可以显式安装：
 
 ```powershell
-code --install-extension .\dedge-deepseek-harness-vscode-0.1.81-win32-x64.vsix
+code --install-extension .\dedge-deepseek-harness-vscode-0.1.82-win32-x64.vsix
 ```
 
 Remote SSH、WSL 和 Dev Container 使用远端 extension host 的操作系统与架构，不是本地 UI 的平台。平台 VSIX 不能混用。
@@ -54,11 +54,10 @@ Remote SSH、WSL 和 Dev Container 使用远端 extension host 的操作系统�
 
 ## DeDge Orbit 接入
 
-扩展运行时就绪后会原子写入
-`%LOCALAPPDATA%\DeDge\DeepSeekHarness\gateway-lease.json`。文件只包含
+扩展运行时就绪后会按 Harness 版本和工作区写入
+`%LOCALAPPDATA%\DeDge\DeepSeekHarness\runtimes\<dsh-version>\gateway-lease-<workspace-hash>.json`。旧的 `gateway-lease.json` 只兼容同一工作区。文件只包含
 `127.0.0.1` Gateway 地址、进程号、运行时版本和工作区路径，不包含 API Key
-或其他凭据。Orbit Bridge 会校验 loopback 地址和进程存活状态后连接；扩展停止、
-异常退出或被新实例替换时，陈旧 lease 不会被当作在线运行时。
+或其他凭据。Orbit Bridge 会校验 loopback 地址和进程存活状态后连接；扩展停止、异常退出或被新实例替换时，陈旧 lease 不会被当作在线运行时。
 
 ## 日常工作流
 
@@ -105,7 +104,7 @@ Codex / Claude / DeepSeek source session (read-only)
 
 | Extension host | VSIX target | 当前状态 |
 | --- | --- | --- |
-| Windows 10/11 x64 | `win32-x64` | `0.1.81` 完整验证目标 |
+| Windows 10/11 x64 | `win32-x64` | `0.1.82` 完整验证目标 |
 | Linux x64 | `linux-x64` | 源码支持；发布前需要原生 runner 验证 |
 | macOS Apple Silicon | `darwin-arm64` | 源码支持；发布前需要原生 runner 验证 |
 | Windows ARM64 / Linux ARM64 / macOS Intel | 对应 target | 需要对应原生 runner 或设备验证 |
@@ -185,7 +184,7 @@ handoffs/<handoff-id>/        # 用户主动创建的 JSON/Markdown 交接包
 - 自定义 preset 不提供 `contextPressure` 时，占用环会隐藏，不会显示猜测值。
 - Codex 优先通过官方 app-server 只读列出 Active 根会话；不可用时才使用严格过滤的 JSONL 回退。Claude Code 会话发现目前使用只读本地 JSONL。
 - 跨平台交接保留最近的可见文本，不复制 reasoning、工具内部状态、凭据或完整私有会话结构。
-- 当前没有跨 DSH 版本迁移 `DSH_HOME`；升级使用新的版本隔离目录。
+- 跨 DSH 版本升级使用新的版本隔离目录；扩展会自动合并缺失的会话、存储和附件对象，不覆盖当前数据或复制凭据。
 - 系统工具调用仍受本机软件、代理、证书、企业策略和 endpoint 能力影响。
 
 ## 开发
