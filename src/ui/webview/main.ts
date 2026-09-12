@@ -1716,8 +1716,17 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
       : [...items].findLastIndex(item => item.role === 'user' && item.id !== firstUser.id)
     const final = [...items].reverse().find(item => item.role === 'assistant' || item.role === 'system')
     const fallbackTail = final ?? (interrupted || !complete ? items.at(-1) : undefined)
-    let visibleTailItems = firstUser !== undefined && latestInsertedIndex > firstIndex
-      ? items.slice(latestInsertedIndex)
+    // When a history page begins inside a running turn, the first visible
+    // human prompt can itself be the newly inserted/steering prompt. Keep the
+    // complete suffix after that prompt together; otherwise reasoning/tool
+    // events that arrived after the prompt get put into the fold before it.
+    const tailStart = latestInsertedIndex > firstIndex
+      ? latestInsertedIndex
+      : hasLeadingTaskWork && firstPrompt !== undefined && !complete
+        ? firstPromptIndex
+        : -1
+    let visibleTailItems = tailStart >= 0
+      ? items.slice(tailStart)
       : fallbackTail === undefined ? [] : [fallbackTail]
     if (hasLeadingTaskWork && firstPrompt !== undefined && !visibleTailItems.some(item => item.id === firstPrompt.id)) {
       // Preserve the visible prompt as a tail item, but rebuild the list in

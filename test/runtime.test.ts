@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { EXPECTED_DSH_VERSION, parseNodeVersion, supportsHarnessNode, supportsHarnessVersion } from '../src/runtime/bundled-runtime.js'
-import { copyMissingTree, normalizeProviderBaseUrl, recoverMissingAttachments, recoverMissingHarnessHomeData } from '../src/runtime/runtime-manager.js'
+import { copyMissingTree, normalizeProviderBaseUrl, readTrashedSessionIds, recoverMissingAttachments, recoverMissingHarnessHomeData } from '../src/runtime/runtime-manager.js'
 import { describeWindowsExitCode } from '../src/runtime/windows-compat.js'
 import { renderRuntimeOverlay } from '../src/runtime/overlay.js'
 import type { HarnessConfiguration } from '../src/config/configuration.js'
@@ -105,6 +105,35 @@ describe('Harness runtime compatibility', () => {
       await expect(recoverMissingHarnessHomeData(homes, ['0.1.3-alpha.2'], target)).resolves.toBe(2)
       await expect(readFile(path.join(target, 'sessions', 'old-workspace', 'session-1', 'session.v3.jsonl.zstd'), 'utf8')).resolves.toBe('session-data')
       await expect(readFile(path.join(target, 'storages', 'old-workspace', 'index.json'), 'utf8')).resolves.toBe('storage-data')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not resurrect sessions that were moved to recovery storage', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dedge-home-tombstones-'))
+    try {
+      const homes = path.join(root, 'homes')
+      const trash = path.join(root, 'session-trash', '2026-09-11T00-00-00-session-deleted-abcd1234')
+      const source = path.join(homes, '0.1.3-alpha.2', 'sessions', 'workspace')
+      const target = path.join(homes, '0.1.5-rc.1', 'sessions', 'workspace')
+      await mkdir(path.join(source, 'session-deleted'), { recursive: true })
+      await mkdir(path.join(source, 'session-kept'), { recursive: true })
+      await mkdir(target, { recursive: true })
+      await mkdir(trash, { recursive: true })
+      await writeFile(path.join(trash, 'manifest.json'), JSON.stringify({ sessionId: 'session-deleted' }))
+      await writeFile(path.join(source, 'session-deleted', 'session.v3.jsonl.zstd'), 'deleted')
+      await writeFile(path.join(source, 'session-kept', 'session.v3.jsonl.zstd'), 'kept')
+      await mkdir(path.join(homes, '0.1.3-alpha.2', 'storages', 'session_projcache'), { recursive: true })
+      await writeFile(path.join(homes, '0.1.3-alpha.2', 'storages', 'session_projcache', 'session-deleted.json'), 'deleted-cache')
+      await writeFile(path.join(homes, '0.1.3-alpha.2', 'storages', 'session_projcache', 'session-kept.json'), 'kept-cache')
+      const deleted = await readTrashedSessionIds(path.join(root, 'session-trash'))
+      expect(deleted.has('session-deleted')).toBe(true)
+      await expect(recoverMissingHarnessHomeData(homes, ['0.1.3-alpha.2'], path.join(homes, '0.1.5-rc.1'), deleted)).resolves.toBe(2)
+      await expect(readFile(path.join(target, 'session-deleted', 'session.v3.jsonl.zstd'), 'utf8')).rejects.toThrow()
+      await expect(readFile(path.join(target, 'session-kept', 'session.v3.jsonl.zstd'), 'utf8')).resolves.toBe('kept')
+      await expect(readFile(path.join(homes, '0.1.5-rc.1', 'storages', 'session_projcache', 'session-deleted.json'), 'utf8')).rejects.toThrow()
+      await expect(readFile(path.join(homes, '0.1.5-rc.1', 'storages', 'session_projcache', 'session-kept.json'), 'utf8')).resolves.toBe('kept-cache')
     } finally {
       await rm(root, { recursive: true, force: true })
     }

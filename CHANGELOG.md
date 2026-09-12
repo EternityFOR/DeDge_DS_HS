@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.1.83] - 2026-09-12
+
+### Fixed
+
+- Runtime-home migration now respects session deletion manifests in recovery storage, so a session moved to trash cannot be resurrected from an older Harness home after the required runtime restart.
+- A newly inserted user prompt now keeps all following reasoning and tool events after it in the task timeline, instead of leaving them folded above the prompt when history starts inside a running turn.
+- Added regression coverage for migration tombstones while preserving recovery of unrelated sessions and storage objects.
+
 ## [0.1.82] - 2026-09-11
 
 ### Fixed
@@ -836,7 +844,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.82...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.83...HEAD
+[0.1.83]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.83
 [0.1.82]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.82
 [0.1.81]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.81
 [0.1.80]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.80

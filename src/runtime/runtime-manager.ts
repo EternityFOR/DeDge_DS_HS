@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { copyFile, cp, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import * as path from 'node:path'
 import * as vscode from 'vscode'
@@ -469,6 +469,10 @@ async function writeAtomic(target: string, content: string): Promise<void> {
   await rename(temporary, target)
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 async function migrateHarnessHomeIfNeeded(layout: StorageLayout, target: string, version: string, logger: Logger): Promise<void> {
   const targetName = version.replace(/[^a-zA-Z0-9._-]/gu, '_') || 'unknown'
   let targetExists = true
@@ -485,12 +489,13 @@ async function migrateHarnessHomeIfNeeded(layout: StorageLayout, target: string,
     return
   }
   const candidates = entries.filter(name => name !== targetName).sort()
+  const trashedSessionIds = await readTrashedSessionIds(layout.sessionTrash)
   if (targetExists) {
     // A failed/early startup can create the new versioned home before the
     // migration runs. Merge missing durable data in that case as well; the
     // old implementation only restored attachments and left old sessions
     // stranded in the previous runtime home. Never overwrite current files.
-    const copiedSessionsAndStorage = await recoverMissingHarnessHomeData(layout.harnessHomes, candidates, target)
+    const copiedSessionsAndStorage = await recoverMissingHarnessHomeData(layout.harnessHomes, candidates, target, trashedSessionIds)
     const copiedAttachments = await recoverMissingAttachments(layout.harnessHomes, candidates, target)
     const copied = copiedSessionsAndStorage + copiedAttachments
     if (copied > 0) logger.info(`Recovered ${String(copied)} missing Harness home object${copied === 1 ? '' : 's'} from prior Harness homes`)
@@ -500,17 +505,21 @@ async function migrateHarnessHomeIfNeeded(layout: StorageLayout, target: string,
   if (sourceName === undefined) return
   const source = path.join(layout.harnessHomes, sourceName)
   await mkdir(target, { recursive: true })
-  for (const part of ['sessions', 'storages', 'settings.yaml', '.anonymous-user-id']) {
+  const copiedSessionsAndStorage = await recoverMissingHarnessHomeData(layout.harnessHomes, candidates, target, trashedSessionIds)
+  for (const part of ['settings.yaml', '.anonymous-user-id']) {
     const from = path.join(source, part)
     try {
       await stat(from)
     } catch {
       continue
     }
-    await cp(from, path.join(target, part), { recursive: true })
+    await copyFile(from, path.join(target, part), fsConstants.COPYFILE_EXCL).catch(error => {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
+    })
   }
   const copied = await recoverMissingAttachments(layout.harnessHomes, candidates, target)
-  if (copied > 0) logger.info(`Recovered ${String(copied)} Harness attachment object${copied === 1 ? '' : 's'} during migration`)
+  const totalCopied = copiedSessionsAndStorage + copied
+  if (totalCopied > 0) logger.info(`Recovered ${String(totalCopied)} Harness home object${totalCopied === 1 ? '' : 's'} during migration`)
   logger.info(`Migrated Harness home data from ${sourceName} to ${version}`)
 }
 
@@ -532,14 +541,119 @@ export async function recoverMissingAttachments(homes: string, candidates: reado
 }
 
 /** Merge missing session and storage records from every prior runtime home. */
-export async function recoverMissingHarnessHomeData(homes: string, candidates: readonly string[], target: string): Promise<number> {
+export async function recoverMissingHarnessHomeData(
+  homes: string,
+  candidates: readonly string[],
+  target: string,
+  excludedSessionIds: ReadonlySet<string> = new Set(),
+): Promise<number> {
   let copied = 0
-  for (const part of ['sessions', 'storages']) {
-    for (const name of [...candidates].reverse()) {
-      copied += await copyMissingTree(
-        path.join(homes, name, part),
-        path.join(target, part),
-      )
+  for (const name of [...candidates].reverse()) {
+    copied += await copyMissingSessionTree(
+      path.join(homes, name, 'sessions'),
+      path.join(target, 'sessions'),
+      excludedSessionIds,
+    )
+    copied += await copyMissingStorageTree(
+      path.join(homes, name, 'storages'),
+      path.join(target, 'storages'),
+      excludedSessionIds,
+    )
+  }
+  return copied
+}
+
+/** Read deletion manifests so an old versioned home cannot resurrect a deleted session. */
+export async function readTrashedSessionIds(sessionTrash: string): Promise<ReadonlySet<string>> {
+  const ids = new Set<string>()
+  let entries
+  try {
+    entries = await readdir(sessionTrash, { withFileTypes: true })
+  } catch {
+    return ids
+  }
+  await Promise.all(entries.filter(entry => entry.isDirectory()).map(async entry => {
+    try {
+      const value: unknown = JSON.parse(await readFile(path.join(sessionTrash, entry.name, 'manifest.json'), 'utf8'))
+      if (!isRecord(value) || typeof value.sessionId !== 'string' || !/^session-[a-z0-9][a-z0-9._-]{0,127}$/iu.test(value.sessionId)) return
+      ids.add(value.sessionId)
+    } catch {
+      // A partial recovery directory is not a valid deletion tombstone.
+    }
+  }))
+  return ids
+}
+
+async function copyMissingSessionTree(source: string, target: string, excludedSessionIds: ReadonlySet<string>, depth = 0): Promise<number> {
+  if (excludedSessionIds.size === 0 && depth === 0) return copyMissingTree(source, target)
+  let entries
+  try {
+    entries = await readdir(source, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  await mkdir(target, { recursive: true })
+  let copied = 0
+  for (const entry of entries) {
+    if (depth === 1 && entry.isDirectory() && excludedSessionIds.has(entry.name)) continue
+    const from = path.join(source, entry.name)
+    const to = path.join(target, entry.name)
+    if (entry.isDirectory()) {
+      copied += await copyMissingSessionTree(from, to, excludedSessionIds, depth + 1)
+      continue
+    }
+    if (!entry.isFile()) continue
+    try {
+      await stat(to)
+      continue
+    } catch {
+      // The object is absent in the current versioned home.
+    }
+    try {
+      await copyFile(from, to, fsConstants.COPYFILE_EXCL)
+      copied += 1
+    } catch (error: unknown) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
+    }
+  }
+  return copied
+}
+
+async function copyMissingStorageTree(source: string, target: string, excludedSessionIds: ReadonlySet<string>): Promise<number> {
+  if (excludedSessionIds.size === 0) return copyMissingTree(source, target)
+  const excludedFileNames = new Set([...excludedSessionIds].map(sessionId => `${sessionId}.json`))
+  return copyMissingStorageEntries(source, target, excludedFileNames)
+}
+
+async function copyMissingStorageEntries(source: string, target: string, excludedFileNames: ReadonlySet<string>): Promise<number> {
+  let entries
+  try {
+    entries = await readdir(source, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  await mkdir(target, { recursive: true })
+  let copied = 0
+  for (const entry of entries) {
+    if (entry.isFile() && excludedFileNames.has(entry.name)) continue
+    const from = path.join(source, entry.name)
+    const to = path.join(target, entry.name)
+    if (entry.isDirectory()) {
+      copied += await copyMissingStorageEntries(from, to, excludedFileNames)
+      continue
+    }
+    if (!entry.isFile()) continue
+    try {
+      await stat(to)
+      continue
+    } catch {
+      // The object is absent in the current versioned home.
+    }
+    try {
+      await copyFile(from, to, fsConstants.COPYFILE_EXCL)
+      copied += 1
+    } catch (error: unknown) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
     }
   }
   return copied
