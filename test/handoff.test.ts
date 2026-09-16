@@ -7,6 +7,7 @@ import { codexThreadListDescriptors } from '../src/handoff/codex-app-server.js'
 import { createHandoffPackage, createStagedHandoff, renderHandoffMarkdown, renderTargetPrompt } from '../src/handoff/handoff-format.js'
 import { groupExternalSessions } from '../src/handoff/session-groups.js'
 import { expandUserPath, listExternalSessions, readExternalSession } from '../src/handoff/session-readers.js'
+import { hasHandoffText } from '../src/handoff/types.js'
 
 const temporaryDirectories: string[] = []
 
@@ -252,6 +253,12 @@ describe('read-only external session discovery', () => {
 })
 
 describe('canonical handoff format', () => {
+  it('rejects empty external sessions before creating a handoff package', () => {
+    expect(hasHandoffText({ turns: [] })).toBe(false)
+    expect(hasHandoffText({ turns: [{ role: 'assistant', text: '  ' }] })).toBe(false)
+    expect(hasHandoffText({ turns: [{ role: 'user', text: 'Continue' }] })).toBe(true)
+  })
+
   it('keeps recent turns within budget and marks source ownership', () => {
     const value = createHandoffPackage({
       platform: 'codex',

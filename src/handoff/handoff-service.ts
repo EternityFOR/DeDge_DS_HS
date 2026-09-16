@@ -10,7 +10,7 @@ import { createHandoffPackage, createStagedHandoff, platformName, renderHandoffM
 import { launchHandoffTarget, resolveAgentCli } from './cli-launcher.js'
 import { groupExternalSessions } from './session-groups.js'
 import { expandUserPath, listExternalSessions as listJsonlSessions, readExternalSession } from './session-readers.js'
-import type { AgentPlatform, ExternalAgentPlatform, ExternalSessionDescriptor, HandoffSource, StagedHandoff, StoredHandoff } from './types.js'
+import { hasHandoffText, type AgentPlatform, type ExternalAgentPlatform, type ExternalSessionDescriptor, type HandoffSource, type StagedHandoff, type StoredHandoff } from './types.js'
 
 export class HandoffService {
   constructor(
@@ -43,7 +43,12 @@ export class HandoffService {
   }
 
   private async execute(source: HandoffSource, target: AgentPlatform): Promise<StagedHandoff | undefined> {
-    if (source.turns.length === 0) throw new Error(`${platformName(source.platform)} session has no user/assistant text to hand off.`)
+    if (!hasHandoffText(source)) {
+      const label = platformName(source.platform)
+      this.logger.warn(`${label} session ${source.sessionId} has no readable user/assistant text; handoff skipped.`)
+      void vscode.window.showWarningMessage(`${label} session has no readable user/assistant text, so nothing was imported. Choose another active session.`)
+      return undefined
+    }
     const folders = vscode.workspace.workspaceFolders?.map(folder => folder.uri.fsPath) ?? []
     const value = createHandoffPackage(source, folders, this.configuration.get().handoffMaxBytes)
     const stored = await this.store(value)
@@ -143,10 +148,16 @@ export class HandoffService {
     })
     if (picked === undefined || !('session' in picked)) return undefined
     if (!await this.confirmExternalLoad(platform, picked.session)) return undefined
-    return vscode.window.withProgress({
+    const sourceValue = await vscode.window.withProgress({
       location: vscode.ProgressLocation.Window,
       title: `Preparing ${platformName(platform)} handoff`,
     }, () => readExternalSession(picked.session, configuration.handoffMaxBytes))
+    if (!hasHandoffText(sourceValue)) {
+      this.logger.info(`${platformName(platform)} session ${sourceValue.sessionId} was skipped because it has no readable user/assistant text.`)
+      void vscode.window.showWarningMessage(`${platformName(platform)} session has no readable user/assistant text, so nothing was imported. Choose another active session.`)
+      return undefined
+    }
+    return sourceValue
   }
 
   private async discoverExternalSessions(platform: ExternalAgentPlatform, configuredHome: string): Promise<ExternalSessionDescriptor[]> {

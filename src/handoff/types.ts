@@ -26,6 +26,11 @@ export interface HandoffSource {
   readonly updatedAt?: number
 }
 
+/** True when a source contains bounded, visible conversation text. */
+export function hasHandoffText(source: Pick<HandoffSource, 'turns'>): boolean {
+  return source.turns.some(turn => turn.text.trim() !== '')
+}
+
 export interface HandoffPackage {
   readonly version: 1
   readonly id: string

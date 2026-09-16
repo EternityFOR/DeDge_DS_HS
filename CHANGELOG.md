@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.1.84] - 2026-09-16
+
+### Fixed
+
+- Empty Codex or Claude sessions no longer raise a red handoff error. They are skipped with a clear warning before an empty handoff package or Harness session can be created.
+- Current Harness handoff now applies the same readable-text guard as external session loading.
+- Added regression coverage for empty handoff sources.
+
 ## [0.1.83] - 2026-09-12
 
 ### Fixed
@@ -844,7 +852,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.83...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.84...HEAD
+[0.1.84]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.84
 [0.1.83]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.83
 [0.1.82]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.82
 [0.1.81]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.81
