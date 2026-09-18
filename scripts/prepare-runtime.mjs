@@ -2,7 +2,12 @@ import { spawnSync } from 'node:child_process'
 import { accessSync, constants, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { patchScheduleCancelCommandAlpha2, patchScheduleCancelCommandRc1 } from './runtime-patches.mjs'
+import {
+  patchPermissionSandboxTerminalClose,
+  patchPersistentShellCacheRecovery,
+  patchScheduleCancelCommandAlpha2,
+  patchScheduleCancelCommandRc1,
+} from './runtime-patches.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
@@ -84,6 +89,9 @@ if (expectedDsh === '0.1.3-alpha.2') {
   patchLegacySessionOrigin(path.join(runtimeModules, '@deepseek-ai', 'dsh-session-format-v0-to-v1', 'lib', 'index.js'))
 } else if (expectedDsh.startsWith('0.1.5-rc.')) {
   patchScheduleCancelCommandRc1(path.join(runtimeModules, '@deepseek-ai', 'dsh-schedule', 'lib', 'index.js'))
+  patchPermissionSandboxTerminalClose(path.join(runtimeModules, '@deepseek-ai', 'dsh-permission-presets', 'lib', 'index.js'))
+  patchPersistentShellCacheRecovery(path.join(runtimeModules, '@deepseek-ai', 'dsh-tool-pwsh-persistent', 'lib', 'index.js'), 'pwsh')
+  patchPersistentShellCacheRecovery(path.join(runtimeModules, '@deepseek-ai', 'dsh-tool-bash-persistent', 'lib', 'index.js'), 'bash')
 } else {
   console.log(`Using upstream Harness ${expectedDsh}; skipping alpha.2 compatibility patches.`)
 }

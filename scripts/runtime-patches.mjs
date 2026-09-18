@@ -94,3 +94,69 @@ function patchScheduleCancelSource(source, label, injectMarker, applyMarker, opt
   ].join('\n')
   return source.replace(applyMarker, registration)
 }
+/**
+ * Close an owner's persistent terminal sessions before one sandbox-mode change.
+ * The terminal backend fences mode switches while a PTY exists; the `/permission`
+ * command must clear its own agent-scoped sessions before appending the switch.
+ * @param {string} source - Compiled `@deepseek-ai/dsh-permission-presets` entry point.
+ * @returns {string} Patched source.
+ */
+export function patchPermissionSandboxTerminalCloseSource(source) {
+  const handlerMarker = 'handler: ({ agent, rawInput }) => {'
+  if (source.split(handlerMarker).length !== 2) {
+    throw new Error('Unexpected permission preset handler shape; cannot close persistent terminals before a sandbox switch.')
+  }
+  source = source.replace(handlerMarker, 'handler: async ({ agent, rawInput }) => {')
+  const applyMarker = 'this.apply(agent.session, name, (policy) => {'
+  if (source.split(applyMarker).length !== 2) {
+    throw new Error('Unexpected permission preset apply shape; cannot close persistent terminals before a sandbox switch.')
+  }
+  const closeBlock = [
+    'const spec = this.resolve(name);',
+    'const terminals = this.ctx.get("terminals");',
+    'const currentSandbox = this.permissionState(agent.session).sandbox ?? this.ctx.shell.sandboxMode;',
+    'if (spec.sandbox !== currentSandbox && typeof terminals?.abortAndClose === "function") {',
+    '  await terminals.abortAndClose(agent, new Error("permission mode change requires closing persistent terminal sessions"), "permission mode change");',
+    '}',
+    'this.apply(agent.session, name, (policy) => {',
+  ].join('\n')
+  return source.replace(applyMarker, closeBlock)
+}
+
+/**
+ * Drop a persistent shell cache entry after its PTY was closed out of band, so
+ * the next tool call starts a fresh owned session instead of failing on a stale
+ * terminal id.
+ * @param {string} source - Compiled persistent tool entry point.
+ * @param {string} label - Tool label used in diagnostic errors.
+ * @returns {string} Patched source.
+ */
+export function patchPersistentShellCacheRecoverySource(source, label) {
+  const marker = 'const existing = pending.get(owner);'
+  if (source.split(marker).length !== 2) {
+    throw new Error(`Unexpected ${label} persistent shell cache shape; cannot recover a closed session.`)
+  }
+  const recovery = [
+    'const liveId = live.get(owner);',
+    'if (liveId !== void 0 && !ctx.terminals.list(owner).some((snapshot) => snapshot.sessionId === liveId)) live.delete(owner);',
+    'const existing = pending.get(owner);',
+  ].join('\n')
+  return source.replace(marker, recovery)
+}
+
+/**
+ * Apply the permission-switch terminal cleanup rewrite to a compiled plugin file.
+ * @param {string} file - Absolute plugin entry point path.
+ */
+export function patchPermissionSandboxTerminalClose(file) {
+  writeFileSync(file, patchPermissionSandboxTerminalCloseSource(readFileSync(file, 'utf8')))
+}
+
+/**
+ * Apply the persistent shell cache recovery rewrite to a compiled tool file.
+ * @param {string} file - Absolute tool entry point path.
+ * @param {string} label - Tool label used in diagnostic errors.
+ */
+export function patchPersistentShellCacheRecovery(file, label) {
+  writeFileSync(file, patchPersistentShellCacheRecoverySource(readFileSync(file, 'utf8'), label))
+}

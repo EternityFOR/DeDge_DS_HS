@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.1.89] - 2026-09-19
+
+### Fixed
+
+- Permission preset switches now close the target session's persistent pwsh/bash terminal sessions before appending the sandbox-mode event. Switching from `workspace-write` to `danger-full-access` no longer fails with "persistent terminal sessions are open or being created".
+- Persistent shell tools now detect terminal sessions closed by a permission switch and start a fresh shell on the next call instead of failing on a stale terminal id.
+- Added regression coverage for both runtime source patches.
+
 ## [0.1.88] - 2026-09-18
 
 ### Fixed
@@ -889,7 +897,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.88...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.89...HEAD
+[0.1.89]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.89
 [0.1.88]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.88
 [0.1.87]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.87
 [0.1.86]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.86
