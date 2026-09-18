@@ -6,6 +6,8 @@ export interface RuntimeState {
   readonly version?: string
   readonly error?: string
   readonly pid?: number
+  /** Workspace this runtime process is bound to, when one is known. */
+  readonly workspace?: string
 }
 
 export interface RuntimeLaunch {

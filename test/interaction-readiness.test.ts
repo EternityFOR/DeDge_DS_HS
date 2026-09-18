@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hasAgentActivity, hasActiveTurn, hasAutonomousActivity, modelControlsUnavailableReason, modelRecoveryCandidate, promptUnavailableReason, steerAvailable } from '../src/session/interaction-readiness.js'
+import { hasAgentActivity, hasActiveTurn, hasAutonomousActivity, modelControlsUnavailableReason, modelRecoveryCandidate, promptUnavailableReason, sendDeliveryPlan, steerAvailable } from '../src/session/interaction-readiness.js'
 import type { WorkbenchSnapshot } from '../src/session/types.js'
 
 function snapshot(overrides: Partial<WorkbenchSnapshot> = {}): WorkbenchSnapshot {
@@ -103,6 +103,29 @@ describe('workbench interaction readiness', () => {
     expect(hasAutonomousActivity(userQueue)).toBe(false)
   })
 
+  it('falls back to queue delivery when Steer is requested without an active turn', () => {
+    expect(sendDeliveryPlan(snapshot(), 'steer')).toMatchObject({ mode: 'queue', steer: false, fallbackToQueue: true })
+  })
+
+  it('lets Steer mode send into the queue behind an armed session-local reminder', () => {
+    const scheduled = snapshot({ schedules: [{ id: 'schedule-1', kind: 'at', prompt: 'Check the market', scheduledAt: '2099-09-04T13:24:00.000Z' }] })
+    const plan = sendDeliveryPlan(scheduled, 'steer')
+    expect(plan.mode).toBe('queue')
+    expect(plan.fallbackToQueue).toBe(true)
+    expect(plan.unavailable).toBeUndefined()
+  })
+
+  it('keeps Steer delivery only while the session has an active turn', () => {
+    const running = snapshot({ sessions: [{ id: 's-1', title: 'Session', running: true, blank: false }] })
+    expect(sendDeliveryPlan(running, 'steer')).toMatchObject({ mode: 'steer', steer: true, fallbackToQueue: false })
+  })
+
+  it('still reports connection and model readiness blockers for queue fallback', () => {
+    const { modelCatalog: _modelCatalog, ...loading } = snapshot()
+    const plan = sendDeliveryPlan(loading, 'queue')
+    expect(plan.mode).toBe('queue')
+    expect(plan.unavailable).toContain('model catalog')
+  })
   it('keeps an armed session-local reminder visible as controllable autonomous activity', () => {
     const scheduled = snapshot({ schedules: [{ id: 'schedule-1', kind: 'at', prompt: 'Check the market', scheduledAt: '2099-09-04T13:24:00.000Z' }] })
     expect(hasAutonomousActivity(scheduled)).toBe(true)

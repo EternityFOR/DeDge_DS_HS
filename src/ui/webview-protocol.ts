@@ -49,6 +49,7 @@ export type WebviewToHostMessage =
   | { readonly type: 'editQueueItem'; readonly itemId: string; readonly text: string }
   | { readonly type: 'newSession' }
   | { readonly type: 'selectSession'; readonly sessionId: string }
+  | { readonly type: 'reorderSessions'; readonly sessionIds: readonly string[] }
   | { readonly type: 'loadOlderHistory' }
   | { readonly type: 'loadAllHistory' }
   | { readonly type: 'hideOlderHistory' }

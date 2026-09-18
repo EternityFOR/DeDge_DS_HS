@@ -257,7 +257,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function normalizeWorkspaceIdentity(value: string): string {
+export function normalizeWorkspaceIdentity(value: string): string {
   const collapsed = value.trim().replace(/[\\/]+/gu, '/')
   const root = /^[a-z]:\/$/iu.test(collapsed)
     ? collapsed

@@ -263,7 +263,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
     if (action?.action === 'delete') {
       const confirmed = await vscode.window.showWarningMessage(
-        `Delete "${session.title}" from DeepSeek Harness? The local runtime will restart, and the complete session directory will be moved to the extension recovery folder.`,
+        `Delete "${session.title}" from DeepSeek Harness? The complete session directory will be moved to the extension recovery folder.`,
         { modal: true },
         'Delete to Recovery Folder',
       )
@@ -301,6 +301,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       message = parseWebviewMessage(value)
     } catch (error) {
       this.logger.warn(`Rejected webview message: ${errorMessage(error)}`)
+      return
+    }
+    if (message.type === 'reorderSessions') {
+      await this.run(() => this.controller.reorderSessions(message.sessionIds))
       return
     }
     if (message.type === 'ready') {
@@ -596,6 +600,7 @@ function parseWebviewMessage(value: unknown): WebviewToHostMessage {
   if ((type === 'steerQueueItem' || type === 'removeQueueItem') && typeof value.itemId === 'string' && value.itemId.length <= 256) return { type, itemId: value.itemId }
   if (type === 'editQueueItem' && typeof value.itemId === 'string' && value.itemId.length <= 256 && typeof value.text === 'string' && value.text.length <= 1_048_576) return { type, itemId: value.itemId, text: value.text }
   if (type === 'selectSession' && typeof value.sessionId === 'string' && value.sessionId.length <= 256) return { type, sessionId: value.sessionId }
+  if (type === 'reorderSessions' && Array.isArray(value.sessionIds) && value.sessionIds.length <= 200 && value.sessionIds.every(item => typeof item === 'string' && item.length <= 256)) return { type, sessionIds: value.sessionIds as string[] }
   if (type === 'manageSession' && typeof value.sessionId === 'string' && value.sessionId.length <= 256) return { type, sessionId: value.sessionId }
   if (type === 'attachUris' && Array.isArray(value.uris) && value.uris.length <= 20 && value.uris.every(item => typeof item === 'string' && item.length <= 8_192)) {
     return { type, uris: value.uris }
@@ -721,8 +726,13 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .search-options span { margin-left: auto; color: var(--vscode-descriptionForeground); }
     .search-row .search-selection.active { color: var(--vscode-charts-yellow); background: var(--vscode-toolbar-activeBackground); }
     ::highlight(dedge-search-current) { background: #ffb000; color: #111; text-decoration: underline 2px solid #d65a00; }
-    .session-tabs { display: flex; align-items: stretch; min-height: 30px; overflow: hidden; border-bottom: 0; scrollbar-width: none; }
-    .session-tabs::-webkit-scrollbar { display: none; }
+    .session-tabs { display: flex; align-items: stretch; min-height: 30px; overflow-x: auto; overflow-y: hidden; border-bottom: 0; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--vscode-scrollbarSlider-background) 55%, transparent) transparent; }
+    .session-tabs::-webkit-scrollbar { height: 6px; }
+    .session-tabs::-webkit-scrollbar-track { background: transparent; }
+    .session-tabs::-webkit-scrollbar-thumb { border-radius: 3px; background: color-mix(in srgb, var(--vscode-scrollbarSlider-background) 55%, transparent); }
+    .session-tabs::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground); }
+    .session-tab-wrap.dragging { opacity: .45; }
+    .session-tab-wrap.drag-over { box-shadow: inset 2px 0 0 var(--vscode-focusBorder); }
     .session-tab-wrap { display: inline-flex; align-items: stretch; flex: 0 0 150px; min-width: 120px; max-width: 150px; height: 30px; }
     .session-tab { position: relative; display: inline-flex; align-items: center; flex: 1 1 auto; min-width: 0; height: 30px; padding: 0 4px 0 9px; border-bottom: 2px solid transparent; background: transparent; color: var(--vscode-descriptionForeground); cursor: pointer; font-size: 11px; white-space: nowrap; }
     .session-tab:hover { background: var(--vscode-list-hoverBackground); color: var(--vscode-foreground); }

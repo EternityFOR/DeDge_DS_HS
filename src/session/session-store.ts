@@ -49,6 +49,8 @@ export class SessionStore {
   private permissionChanging = false
   private readonly sessionOperations = new Map<string, SessionOperation>()
   private configuration: StoreConfiguration
+  /** User-visible session tab order persisted by the workbench. */
+  private sessionOrder: readonly string[] = []
 
   constructor(configuration: StoreConfiguration) {
     this.configuration = configuration
@@ -56,6 +58,11 @@ export class SessionStore {
 
   setConfiguration(configuration: StoreConfiguration): void {
     this.configuration = configuration
+  }
+
+  /** Store the user-defined tab order; duplicate and empty ids are ignored. */
+  setSessionOrder(order: readonly string[]): void {
+    this.sessionOrder = [...new Set(order.filter(id => typeof id === 'string' && id !== ''))]
   }
 
   resetConnectionState(): void {
@@ -104,9 +111,15 @@ export class SessionStore {
     this.error = message
   }
 
+  /** Read one session summary without materializing the full workbench snapshot. */
+  session(sessionId: string): SessionSummary | undefined {
+    return this.sessions.get(sessionId)
+  }
+
   replaceSessions(items: readonly SessionSummary[]): void {
     this.sessions.clear()
     for (const item of items) this.sessions.set(item.sessionId, item)
+    if (this.activeSessionId !== undefined && !this.sessions.has(this.activeSessionId)) this.activeSessionId = undefined
   }
 
   replaceArchivedSessions(sessionIds: readonly string[]): void {
@@ -329,6 +342,13 @@ export class SessionStore {
         const leftBlank = left.blank === true
         const rightBlank = right.blank === true
         if (leftBlank !== rightBlank) return leftBlank ? -1 : 1
+        const leftOrder = this.sessionOrder.indexOf(left.sessionId)
+        const rightOrder = this.sessionOrder.indexOf(right.sessionId)
+        if (leftOrder !== -1 || rightOrder !== -1) {
+          if (leftOrder === -1) return 1
+          if (rightOrder === -1) return -1
+          if (leftOrder !== rightOrder) return leftOrder - rightOrder
+        }
         return (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
       })
       .map(session => toWorkbenchSession(session, this.sessionOperations.get(session.sessionId)))

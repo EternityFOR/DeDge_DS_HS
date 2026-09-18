@@ -98,6 +98,36 @@ export class RuntimeManager implements vscode.Disposable {
     return this.stopTask
   }
 
+  /**
+   * Stop this runtime even when the process belongs to another VS Code window.
+   * Session-file deletion needs the cross-process session write lock released,
+   * which only terminating the shared Gateway can guarantee.
+   */
+  async stopForMaintenance(): Promise<void> {
+    const pid = this.stateValue.pid
+    if (this.child === undefined && pid !== undefined && isProcessRunning(pid)) {
+      const lease = await readGatewayLease(this.leasePath).catch(() => undefined)
+      if (lease === undefined || lease.pid !== pid) {
+        this.stopAttachedLeaseMonitor()
+        this.ownedLeasePid = undefined
+        this.setState({ phase: 'idle' })
+        return
+      }
+      this.stopAttachedLeaseMonitor()
+      this.setState({
+        phase: 'stopping',
+        ...(this.stateValue.version === undefined ? {} : { version: this.stateValue.version }),
+        ...(this.currentWorkspace === '' ? {} : { workspace: this.currentWorkspace }),
+      })
+      await terminateProcessId(pid).catch(error => this.logger.error('Failed to stop the shared Harness process before deleting a session', error))
+      await clearGatewayLease(this.leasePath, pid).catch(error => this.logger.error('Failed to clear the shared Harness gateway lease before deleting a session', error))
+      this.ownedLeasePid = undefined
+      this.setState({ phase: 'idle' })
+      return
+    }
+    await this.stop()
+  }
+
   async dispose(): Promise<void> {
     this.disposed = true
     const pendingStart = this.startTask
@@ -118,7 +148,7 @@ export class RuntimeManager implements vscode.Disposable {
     this.primaryGatewayLease = workspaceGatewayLeasePath(EXPECTED_DSH_VERSION, workspace)
     this.leasePath = this.primaryGatewayLease
     const apiKey = await this.credentials.getApiKey(configuration.baseUrl)
-    this.setState({ phase: 'resolving' })
+    this.setState({ phase: 'resolving', workspace })
 
     const shared = await this.waitForSharedRuntimeOrLock(configuration.startTimeoutMs)
     if ('lease' in shared) return this.attachSharedRuntime(shared.lease)
@@ -162,7 +192,7 @@ export class RuntimeManager implements vscode.Disposable {
         DEEPSEEK_BASE_URL: normalizeProviderBaseUrl(configuration.baseUrl),
       }
       this.logger.info(`Starting ${launch.source} Harness ${launch.version} in ${workspace}`)
-      this.setState({ phase: 'starting', version: launch.version })
+      this.setState({ phase: 'starting', version: launch.version, workspace })
 
       if (this.disposed) throw new Error('The Harness runtime manager was disposed before launch.')
 
@@ -212,7 +242,7 @@ export class RuntimeManager implements vscode.Disposable {
           if (!settled) settle(new Error(message))
           else if (!this.disposed && this.stateValue.phase !== 'stopping' && this.stateValue.phase !== 'idle') {
             this.logger.error(message)
-            this.setState({ phase: 'error', version: launch.version, error: message })
+            this.setState({ phase: 'error', version: launch.version, error: message, workspace })
           }
         })
       })
@@ -223,7 +253,7 @@ export class RuntimeManager implements vscode.Disposable {
           await writeGatewayLease(this.leasePath, { url, pid: child.pid, version: launch.version, workspace })
             .catch(error => this.logger.error('Failed to publish the Harness gateway lease', error))
         }
-        this.setState({ phase: 'ready', version: launch.version, url, ...(child.pid === undefined ? {} : { pid: child.pid }) })
+        this.setState({ phase: 'ready', version: launch.version, url, workspace, ...(child.pid === undefined ? {} : { pid: child.pid }) })
         await this.registerClient()
         return url
       } catch (error) {
@@ -340,7 +370,7 @@ export class RuntimeManager implements vscode.Disposable {
     this.child = undefined
     this.ownedLeasePid = undefined
     this.launchIdentity = undefined
-    this.setState({ phase: 'ready', version: lease.version, url: lease.url, pid: lease.pid })
+    this.setState({ phase: 'ready', version: lease.version, url: lease.url, pid: lease.pid, workspace: this.currentWorkspace })
     this.startAttachedLeaseMonitor(lease)
     await this.registerClient()
     this.logger.info(`Attached to shared Harness ${lease.version} on loopback port ${new URL(lease.url).port}`)
@@ -396,7 +426,7 @@ export class RuntimeManager implements vscode.Disposable {
   private fail(error: unknown, version?: string): never {
     const message = errorMessage(error)
     this.logger.error('Harness runtime failure', error)
-    this.setState({ phase: 'error', error: message, ...(version === undefined ? {} : { version }) })
+    this.setState({ phase: 'error', error: message, ...(this.currentWorkspace === '' ? {} : { workspace: this.currentWorkspace }), ...(version === undefined ? {} : { version }) })
     throw error instanceof Error ? error : new Error(message)
   }
 

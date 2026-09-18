@@ -41,7 +41,7 @@ import type { ContextAttachment } from '../../context/context-collector.js'
 import { recommendedVisionModels } from '../../vision/model-catalog.js'
 import type { SkillSummary } from '../../skills/skill-catalog.js'
 import type { WorkbenchMessage, WorkbenchSnapshot } from '../../session/types.js'
-import { autonomousQueueItems, hasActiveTurn, hasAgentActivity, hasAutonomousActivity, hasAutonomousAgentActivity, modelControlsUnavailableReason, modelRecoveryCandidate, promptUnavailableReason, steerAvailable } from '../../session/interaction-readiness.js'
+import { autonomousQueueItems, hasActiveTurn, hasAgentActivity, hasAutonomousActivity, hasAutonomousAgentActivity, modelControlsUnavailableReason, modelRecoveryCandidate, sendDeliveryPlan } from '../../session/interaction-readiness.js'
 import { isWaitingForUserMessage, shouldShowUserMessageActions } from '../message-actions.js'
 import type { HostToWebviewMessage, WebviewToHostMessage, WorkbenchSettings } from '../webview-protocol.js'
 
@@ -96,6 +96,7 @@ const baseUrlPresets = [
 let state: WorkbenchSnapshot | undefined
 let attachments: readonly ContextAttachment[] = []
 let sessionTabsSignature = ''
+let draggedSessionId: string | undefined
 let noticeTimer: number | undefined
 let sendPending = false
 let pendingSendPreview: HTMLElement | undefined
@@ -442,6 +443,12 @@ elements.composerBox.addEventListener('dragleave', event => {
   elements.composerBox.classList.remove('drop-active')
 })
 elements.composerBox.addEventListener('drop', event => { void handleDrop(event) })
+elements.sessionTabs.addEventListener('wheel', event => {
+  if (elements.sessionTabs.scrollWidth <= elements.sessionTabs.clientWidth) return
+  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+  event.preventDefault()
+  elements.sessionTabs.scrollLeft += event.deltaY
+}, { passive: false })
 elements.contextMeterAnchor.addEventListener('pointerenter', positionContextTooltip)
 elements.contextMeterAnchor.addEventListener('focusin', positionContextTooltip)
 
@@ -474,7 +481,6 @@ window.addEventListener('resize', () => {
       if (!item.popover.classList.contains('hidden')) positionPopover(item)
     }
     if (!elements.contextMeterAnchor.classList.contains('hidden')) positionContextTooltip()
-    fitSessionTabs()
     updateScrollBottomButton()
   })
 })
@@ -1093,6 +1099,40 @@ function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
     const wrapper = document.createElement('div')
     wrapper.className = 'session-tab-wrap'
     wrapper.setAttribute('role', 'presentation')
+    wrapper.draggable = true
+    wrapper.dataset.sessionId = session.id
+    wrapper.addEventListener('dragstart', event => {
+      draggedSessionId = session.id
+      wrapper.classList.add('dragging')
+      event.dataTransfer?.setData('text/plain', session.id)
+      if (event.dataTransfer !== null) event.dataTransfer.effectAllowed = 'move'
+    })
+    wrapper.addEventListener('dragend', () => {
+      draggedSessionId = undefined
+      for (let index = 0; index < elements.sessionTabs.children.length; index++) elements.sessionTabs.children[index]?.classList.remove('dragging', 'drag-over')
+    })
+    wrapper.addEventListener('dragover', event => {
+      if (draggedSessionId === undefined || draggedSessionId === session.id) return
+      event.preventDefault()
+      wrapper.classList.add('drag-over')
+      if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'move'
+      const bounds = elements.sessionTabs.getBoundingClientRect()
+      if (event.clientX > bounds.right - 22) elements.sessionTabs.scrollLeft += 14
+      else if (event.clientX < bounds.left + 22) elements.sessionTabs.scrollLeft -= 14
+    })
+    wrapper.addEventListener('dragleave', () => wrapper.classList.remove('drag-over'))
+    wrapper.addEventListener('drop', event => {
+      event.preventDefault()
+      wrapper.classList.remove('drag-over')
+      const dragged = draggedSessionId
+      draggedSessionId = undefined
+      if (dragged === undefined || dragged === session.id || state === undefined) return
+      const ids = state.sessions.map(item => item.id).filter(id => id !== dragged)
+      const target = ids.indexOf(session.id)
+      if (target === -1) return
+      ids.splice(target, 0, dragged)
+      post({ type: 'reorderSessions', sessionIds: ids })
+    })
     const button = document.createElement('button')
     button.type = 'button'
     const autonomous = session.id === activeId && hasAutonomousActivity(snapshot)
@@ -1146,20 +1186,8 @@ function renderSessionTabs(snapshot: WorkbenchSnapshot): void {
   })
   elements.sessionTabs.replaceChildren(...nodes)
   elements.sessionTabs.scrollLeft = scrollLeft
-  fitSessionTabs()
 }
 
-function fitSessionTabs(): void {
-  const nodes = Array.from(elements.sessionTabs.children) as HTMLElement[]
-  for (const node of nodes) node.hidden = false
-  let used = 0
-  const available = elements.sessionTabs.clientWidth
-  for (const node of nodes) {
-    const width = node.getBoundingClientRect().width
-    if (used + width > available && used > 0) node.hidden = true
-    else used += width
-  }
-}
 
 function renderModelOptions(snapshot: WorkbenchSnapshot | undefined): void {
   if (snapshot === undefined) return
@@ -2432,8 +2460,8 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
   const cancelling = active?.operation === 'cancelling'
   const compacting = active?.operation === 'compacting'
   const modelUnavailable = snapshot.modelCatalog?.routable === false
-  const sendUnavailable = promptUnavailableReason(snapshot, { allowQueue: deliveryMode !== 'steer' })
-  const steer = steerAvailable(snapshot)
+  const delivery = sendDeliveryPlan(snapshot, deliveryMode)
+  const sendUnavailable = delivery.unavailable
   renderDeliveryMode()
   renderVisionToggle()
   renderScheduleToggle(snapshot)
@@ -2469,14 +2497,16 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
     elements.cancel.replaceChildren(icon)
   }
   elements.send.classList.toggle('hidden', false)
-  const effectiveSteer = steer && (deliveryMode === 'steer' || deliveryMode === 'auto')
-  const queueingAutonomous = hasAutonomousActivity(snapshot) && !effectiveSteer && deliveryMode !== 'steer'
+  const effectiveSteer = delivery.steer
+  const queueingAutonomous = hasAutonomousActivity(snapshot) && !effectiveSteer
   elements.send.classList.toggle('steer', effectiveSteer)
-  elements.send.disabled = sendPending || (sendUnavailable !== undefined && !effectiveSteer)
+  elements.send.disabled = sendPending || sendUnavailable !== undefined
   elements.send.title = sendPending
     ? 'Sending...'
     : effectiveSteer
       ? 'Steer: deliver this prompt into the active turn'
+      : delivery.fallbackToQueue
+        ? 'No active turn to Steer; this message will be queued'
       : queueingAutonomous
         ? 'Queue this prompt behind the autonomous task'
       : modelUnavailable && modelRecoveryCandidate(snapshot) !== undefined
@@ -2629,16 +2659,16 @@ function send(): void {
   if (sendPending || state === undefined) return
   const value = elements.prompt.value
   if (value.trim() === '' && attachments.length === 0) return
-  const steer = steerAvailable(state) && (deliveryMode === 'steer' || deliveryMode === 'auto')
-  const allowQueue = !steer && deliveryMode !== 'steer'
-  if (promptUnavailableReason(state, { allowSteer: steer, allowQueue }) !== undefined) return
+  const delivery = sendDeliveryPlan(state, deliveryMode)
+  if (delivery.unavailable !== undefined) return
   sendPending = true
   if (value.trim() !== '') {
     if (sentHistory[sentHistory.length - 1] !== value) sentHistory.push(value)
     if (sentHistory.length > 200) sentHistory.shift()
   }
   historyIndex = -1
-  const mode = steer ? 'steer' as const : 'queue' as const
+  const mode = delivery.mode
+  const steer = mode === 'steer'
   beginPendingSend(value, attachments.map(item => item.label), mode, true)
   // Clear the composer locally as soon as the click is accepted.  The host
   // receipt repeats this for older Webview versions, but must not be the first

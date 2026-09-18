@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.1.88] - 2026-09-18
+
+### Fixed
+
+- Pause now cancels scheduled reminders on the bundled 0.1.5-rc.1 runtime through a generated `/schedule-cancel` bridge, so the previous runtime without that command no longer blocks Pause with a reinstall message.
+- Session lists are limited to the workspace bound to the current Harness runtime, so multiple VS Code windows or projects cannot select or prompt another workspace session. This removes the `SessionAlreadyOwnedError` prompt failures and the stale disabled Send state that required a restart.
+- A prompt that still reaches another runtime owner now restarts/reconnects and retries once, with a clear error if the session remains owned elsewhere.
+- Session deletion moves a cold session directory to recovery storage without restarting Harness. A loaded session stops first, reconnects in the background, and no longer keeps the delete spinner waiting for a full startup.
+- Session tabs now expose a horizontal scrollbar and wheel scrolling, and can be drag-reordered with the order persisted per workspace.
+- Explicit Steer mode now falls back to queue delivery when the session has no active turn, so an armed scheduled reminder can no longer leave the Send button greyed out.
+- Added regression coverage for runtime source patches, workspace-scoped session lists, and persisted tab ordering.
+
 ## [0.1.87] - 2026-09-18
 
 ### Fixed
@@ -877,7 +889,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.87...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.88...HEAD
+[0.1.88]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.88
 [0.1.87]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.87
 [0.1.86]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.86
 [0.1.85]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.85

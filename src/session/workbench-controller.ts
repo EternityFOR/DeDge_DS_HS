@@ -21,6 +21,7 @@ import { fallbackModelCatalog, withRecoveryModels } from './model-recovery.js'
 import { SessionStore } from './session-store.js'
 import { SessionTrashService } from './session-trash.js'
 import { validateQuestionAnswers } from './question-answers.js'
+import { filterWorkspaceSessions, sessionBelongsToWorkspace } from './session-scope.js'
 import type { PromptInspection } from '../ui/webview-protocol.js'
 
 export class WorkbenchController implements vscode.Disposable {
@@ -73,6 +74,8 @@ export class WorkbenchController implements vscode.Disposable {
     })
     const deleted = this.context.workspaceState.get<readonly string[]>('deletedSessions.v1')
     if (Array.isArray(deleted)) for (const id of deleted) this.deletedSessions.add(id)
+    const savedOrder = this.context.workspaceState.get<readonly string[]>('sessionOrder.v1')
+    if (Array.isArray(savedOrder)) this.store.setSessionOrder(savedOrder.filter((item): item is string => typeof item === 'string'))
     this.runtimeSubscription = runtime.onDidChangeState(state => {
       this.store.setRuntime(state)
       if (state.phase === 'idle' || state.phase === 'error') {
@@ -132,11 +135,13 @@ export class WorkbenchController implements vscode.Disposable {
         onHost: (frame, rpcId) => this.handleHost(frame, rpcId),
         onError: error => this.logger.warn(`Gateway event stream: ${error.message}`),
       })
-      let sessions = (await gateway.listSessions()).items ?? []
-      if (sessions.length === 0) {
-        for (let attempt = 0; attempt < 4 && sessions.length === 0; attempt++) {
+      let listedSessions = (await gateway.listSessions()).items ?? []
+      let sessions = this.workspaceSessions(listedSessions)
+      if (listedSessions.length === 0) {
+        for (let attempt = 0; attempt < 4 && listedSessions.length === 0; attempt++) {
           await delay(1_000)
-          sessions = (await gateway.listSessions()).items ?? []
+          listedSessions = (await gateway.listSessions()).items ?? []
+          sessions = this.workspaceSessions(listedSessions)
         }
       }
       const workspaces = await gateway.listWorkspaces()
@@ -167,12 +172,13 @@ export class WorkbenchController implements vscode.Disposable {
     const gateway = this.requireGateway()
     if (this.store.snapshot().presetCatalog === undefined) await this.refreshPresetCatalog(gateway)
     const preset = presetForNewSession(requestedPreset ?? this.configuration.get().agentPreset, this.store.snapshot().presetCatalog)
-    const created = await gateway.createSession(workspaceDirectory(), preset)
+    const workspace = this.workspaceIdentity()
+    const created = await gateway.createSession(workspace, preset)
     this.store.addSession({
       sessionId: created.sessionId,
       blank: true,
       running: false,
-      cwd: workspaceDirectory(),
+      cwd: workspace,
       ...(created.agentPreset === undefined ? {} : { agentPreset: created.agentPreset }),
     })
     await this.selectSession(created.sessionId)
@@ -299,7 +305,7 @@ export class WorkbenchController implements vscode.Disposable {
       : undefined
     const resolved = await this.resolveAttachments(normalized, scheduleGuidance === undefined ? attachments : [scheduleGuidance, ...attachments], onProgress)
     const prompt = nativePromptContent(normalized, resolved)
-    const result = await this.requireGateway().prompt(sessionId, prompt, mode)
+    const result = await this.promptWithOwnershipRecovery(sessionId, prompt, mode)
     if (result.accepted === false) throw new Error('Harness rejected the prompt.')
     if (scheduleGuidance !== undefined) this.scheduleGuidanceSessions.add(sessionId)
   }
@@ -393,11 +399,11 @@ export class WorkbenchController implements vscode.Disposable {
         throw error
       }
       try {
-        const result = await gateway.prompt(target.sessionId, target.item.text, 'steer')
+        const result = await this.promptWithOwnershipRecovery(target.sessionId, target.item.text, 'steer')
         if (result.accepted === false) throw new Error('Harness rejected the paused-session steer request.')
       } catch (error) {
         try {
-          const fallback = await gateway.prompt(target.sessionId, target.item.text, 'queue')
+          const fallback = await this.promptWithOwnershipRecovery(target.sessionId, target.item.text, 'queue')
           if (fallback.accepted === false) throw new Error('Harness rejected the compensation queue request.')
           this.logger.warn(`Paused-session steer for queue item ${target.item.id} was re-queued after wake-up failure.`)
         } catch (compensationError) {
@@ -406,6 +412,18 @@ export class WorkbenchController implements vscode.Disposable {
         throw error
       }
     })
+  }
+
+  /** Persist the user-visible tab order; unknown ids keep their previous position. */
+  async reorderSessions(sessionIds: readonly string[]): Promise<void> {
+    const current = this.store.snapshot().sessions.map(session => session.id)
+    const currentSet = new Set(current)
+    const requested = [...new Set(sessionIds.filter(sessionId => currentSet.has(sessionId)))]
+    const remainder = current.filter(sessionId => !requested.includes(sessionId))
+    const order = [...requested, ...remainder]
+    this.store.setSessionOrder(order)
+    await this.context.workspaceState.update('sessionOrder.v1', order)
+    this.publish()
   }
 
   async cancel(): Promise<void> {
@@ -541,7 +559,7 @@ export class WorkbenchController implements vscode.Disposable {
     const session = snapshot.sessions.find(item => item.id === sessionId)
     if (session === undefined) return 'Session is no longer available.'
     if (snapshot.sessions.some(item => item.running) || hasActiveTurn(snapshot)) {
-      throw new Error('Finish or cancel all agent tasks before deleting a session because the local Harness runtime must restart.')
+      throw new Error('Finish or cancel all agent tasks before deleting a session so the local Harness runtime can release it.')
     }
     const runtimeVersion = this.runtime.state.version
     if (runtimeVersion === undefined) throw new Error('The Harness runtime version is unavailable; deletion was refused.')
@@ -549,42 +567,73 @@ export class WorkbenchController implements vscode.Disposable {
     try {
       sourcePath = await this.sessionTrash.locate(runtimeVersion, sessionId)
     } catch (error) {
-      this.logger.warn(`No persisted data found for session ${sessionId}; falling back to archive removal. ${errorMessage(error)}`)
+      this.logger.warn('No persisted data found for session ' + sessionId + '; falling back to archive removal. ' + errorMessage(error))
     }
     if (snapshot.activeSessionId === sessionId) await this.context.workspaceState.update('activeSessionId', undefined)
     this.deletedSessions.add(sessionId)
     await this.context.workspaceState.update('deletedSessions.v1', [...this.deletedSessions])
-    {
+
+    // Fast path: a session without a live write handle can be moved while the
+    // runtime keeps serving every other session. This avoids the old
+    // stop/start reconnect cost for deleting history that is not loaded.
+    let movedWithoutRestart = false
+    if (sourcePath !== undefined) {
+      try {
+        const trashed = await this.sessionTrash.moveToTrash(runtimeVersion, sessionId, sourcePath)
+        movedWithoutRestart = true
+        this.logger.info('Moved session "' + session.title + '" (' + session.id + ') to recovery storage without restarting Harness: ' + trashed.directory)
+      } catch (error) {
+        this.logger.warn('Session ' + sessionId + ' is still owned by the local Harness process; restarting it before deletion. ' + errorMessage(error))
+      }
+    }
+
+    if (!movedWithoutRestart) {
       if (sourcePath === undefined) {
         const archived = await this.requireGateway().archiveSession(sessionId)
         this.store.replaceArchivedSessions(archived.archivedSessionIds)
-      }
-      await this.stop()
-      if (sourcePath !== undefined) {
-        const trashed = await this.sessionTrash.moveToTrash(runtimeVersion, sessionId, sourcePath)
-        this.logger.info(`Moved session "${session.title}" (${session.id}) to recovery storage: ${trashed.directory}`)
-      }
-      this.store.removeSession(sessionId)
-      this.publish()
-      await this.start()
-      // The local directory move and Harness' session index are separate stores.
-      // Re-archive after restart so a non-active session cannot reappear in session.list.
-      if (sourcePath !== undefined) {
+      } else {
+        await this.runtime.stopForMaintenance()
         try {
-          const archived = await this.requireGateway().archiveSession(sessionId)
-          this.store.replaceArchivedSessions(archived.archivedSessionIds ?? [])
+          const trashed = await this.sessionTrash.moveToTrash(runtimeVersion, sessionId, sourcePath)
+          this.logger.info('Moved session "' + session.title + '" (' + session.id + ') to recovery storage: ' + trashed.directory)
         } catch (error) {
-          this.logger.warn(`Harness index cleanup skipped for deleted session ${sessionId}: ${errorMessage(error)}`)
+          // The runtime was stopped for the move; never leave the workbench
+          // without a Gateway just because the filesystem operation failed.
+          void this.start().catch(recoveryError => this.logger.error('Could not restart Harness after a failed session deletion', recoveryError))
+          throw error
         }
       }
-      this.deletedSessions.delete(sessionId)
-      await this.context.workspaceState.update('deletedSessions.v1', [...this.deletedSessions])
-      this.store.removeSession(sessionId)
-      this.publish()
     }
+
+    this.store.removeSession(sessionId)
+    this.publish()
+
+    if (sourcePath !== undefined && !movedWithoutRestart) {
+      // The file move already succeeded; reconnect in the background so the
+      // deletion spinner does not wait for a full runtime start, and archive
+      // the Harness index once the fresh Gateway is available.
+      const cleanup = this.start()
+        .then(() => this.archiveDeletedSession(sessionId))
+        .catch(error => this.logger.warn('Harness did not return after deleting session ' + sessionId + '; index cleanup will retry on the next start. ' + errorMessage(error)))
+        .finally(async () => {
+          this.deletedSessions.delete(sessionId)
+          await this.context.workspaceState.update('deletedSessions.v1', [...this.deletedSessions])
+          this.store.removeSession(sessionId)
+          this.publish()
+        })
+      void cleanup.catch(error => this.logger.warn('Could not finish deferred deletion cleanup for ' + sessionId + ': ' + errorMessage(error)))
+      return 'Session moved to recovery storage.'
+    }
+
+    if (sourcePath !== undefined) await this.archiveDeletedSession(sessionId)
+    this.deletedSessions.delete(sessionId)
+    await this.context.workspaceState.update('deletedSessions.v1', [...this.deletedSessions])
+    this.store.removeSession(sessionId)
+    this.publish()
+
     return sourcePath === undefined
       ? 'Session removed from the workbench (no persisted data was found on disk).'
-      : 'Session moved to recovery storage.'
+      : 'Session moved to recovery storage; the runtime stayed online.'
   }
 
   async attachSelection(): Promise<ContextAttachment | undefined> {
@@ -1068,6 +1117,55 @@ export class WorkbenchController implements vscode.Disposable {
     return this.gateway
   }
 
+  /** Workspace bound to the live runtime, or the active editor folder before one starts. */
+  private workspaceIdentity(): string {
+    return this.runtime.state.workspace ?? workspaceDirectory()
+  }
+
+  /** Limit session lists and frames to the workspace this runtime can safely serve. */
+  private workspaceSessions(items: readonly SessionSummary[]): SessionSummary[] {
+    return filterWorkspaceSessions(items, this.workspaceIdentity())
+  }
+
+  /** Whether a frame belongs to a session from a different workspace runtime. */
+  private isForeignSessionFrame(sessionId: string): boolean {
+    const session = this.store.session(sessionId)
+    return session !== undefined && !sessionBelongsToWorkspace(session, this.workspaceIdentity())
+  }
+
+  /** Best-effort cleanup of Harness's session index after a local delete. */
+  private async archiveDeletedSession(sessionId: string): Promise<void> {
+    try {
+      const archived = await this.requireGateway().archiveSession(sessionId)
+      this.store.replaceArchivedSessions(archived.archivedSessionIds ?? [])
+    } catch (error) {
+      this.logger.warn('Harness index cleanup skipped for deleted session ' + sessionId + ': ' + errorMessage(error))
+    }
+  }
+
+  /** Prompt with one reconnect retry when another runtime owns the session. */
+  private async promptWithOwnershipRecovery(
+    sessionId: string,
+    prompt: string | readonly PromptContentPart[],
+    mode: 'queue' | 'steer',
+  ): Promise<{ readonly accepted?: boolean }> {
+    try {
+      return await this.requireGateway().prompt(sessionId, prompt, mode)
+    } catch (error) {
+      if (!isSessionOwnershipConflict(error)) throw error
+      this.logger.warn('The active Harness session is owned by another runtime; restarting this host and retrying once: ' + errorMessage(error))
+      await this.restart()
+      try {
+        return await this.requireGateway().prompt(sessionId, prompt, mode)
+      } catch (retryError) {
+        if (isSessionOwnershipConflict(retryError)) {
+          throw new Error('This Harness session is owned by another DeepSeek Harness window. The message was not sent. Finish or close the window that owns this session, then try again.')
+        }
+        throw retryError
+      }
+    }
+  }
+
   private async maybeGenerateSessionTitle(sessionId: string): Promise<void> {
     const snapshot = this.store.snapshot()
     const session = snapshot.sessions.find(item => item.id === sessionId)
@@ -1118,7 +1216,7 @@ export class WorkbenchController implements vscode.Disposable {
   private async reconcileSessionStatus(gateway: GatewayClient, sessionId: string): Promise<void> {
     const listed = await gateway.listSessions()
     if (this.disposed || this.gateway !== gateway || this.store.snapshot().phase !== 'connected') return
-    const sessions = listed.items.filter(item => !this.deletedSessions.has(item.sessionId))
+    const sessions = this.workspaceSessions(listed.items).filter(item => !this.deletedSessions.has(item.sessionId))
     this.store.replaceSessions(sessions)
     const current = sessions.find(item => item.sessionId === sessionId)
     if (current?.running === true) this.store.setRunning(sessionId, true)
@@ -1155,6 +1253,7 @@ export class WorkbenchController implements vscode.Disposable {
   }
 
   private handleMux(frame: MuxFrame, rpcId: string): void {
+    if (frame.type !== 'stream/error' && this.isForeignSessionFrame(frame.sessionId)) return
     if (frame.type === 'session/subscribed') {
       // A mux reconnect replays transient queue/job frames but not the host
       // status projection for every session.  Defer one coalesced authoritative
@@ -1268,7 +1367,7 @@ export class WorkbenchController implements vscode.Disposable {
   private async refreshAfterGatewayReconnect(gateway: GatewayClient, subscribedSessionIds: readonly string[]): Promise<void> {
     const listed = await gateway.listSessions()
     if (this.disposed || this.gateway !== gateway || this.store.snapshot().phase !== 'connected') return
-    const sessions = listed.items.filter(item => !this.deletedSessions.has(item.sessionId))
+    const sessions = this.workspaceSessions(listed.items).filter(item => !this.deletedSessions.has(item.sessionId))
     this.store.replaceSessions(sessions)
     try {
       const workspaces = await gateway.listWorkspaces()
@@ -1359,7 +1458,9 @@ export class WorkbenchController implements vscode.Disposable {
   }
 
   private handleHost(frame: HostFrame, _rpcId: string): void {
+    if ('sessionId' in frame && this.isForeignSessionFrame(frame.sessionId)) return
     if (frame.type === 'host/session-added') {
+      if (this.deletedSessions.has(frame.sessionId) || !sessionBelongsToWorkspace({ cwd: frame.cwd }, this.workspaceIdentity())) return
       this.store.addSession({
         sessionId: frame.sessionId,
         blank: true,
@@ -1370,6 +1471,7 @@ export class WorkbenchController implements vscode.Disposable {
     }
     if (frame.type === 'host/session-removed') this.store.removeSession(frame.sessionId)
     if (frame.type === 'host/session-status') {
+      if (this.store.session(frame.sessionId) === undefined) return this.publish()
       if (frame.running) this.store.setRunning(frame.sessionId, true)
       else this.store.markSessionStopped(frame.sessionId)
     }
@@ -1396,7 +1498,7 @@ export class WorkbenchController implements vscode.Disposable {
     }
     try {
       const sessions = await this.requireGateway().listSessions()
-      this.store.replaceSessions(sessions.items ?? [])
+      this.store.replaceSessions(this.workspaceSessions(sessions.items ?? []))
       const current = this.store.snapshot().sessions.find(session => session.id === sessionId)
       if (current !== undefined && current.running !== true) this.store.markSessionStopped(sessionId)
       const stopped = this.isCancellationSettled(sessionId)

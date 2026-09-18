@@ -33,6 +33,34 @@ export function modelRecoveryCandidate(snapshot: WorkbenchSnapshot): { readonly 
   return undefined
 }
 
+/** Delivery preference chosen by the composer. */
+export type SendDeliveryMode = 'auto' | 'queue' | 'steer'
+
+/** Concrete delivery selected for one Send click after Harness availability is known. */
+export interface SendDeliveryPlan {
+  readonly mode: 'queue' | 'steer'
+  readonly steer: boolean
+  readonly fallbackToQueue: boolean
+  readonly unavailable?: string
+}
+
+/**
+ * Pick a concrete delivery for the requested mode. Explicit Steer falls back to
+ * the queue when there is no active turn, so an armed reminder or parked
+ * autonomous continuation cannot leave the composer permanently greyed out.
+ */
+export function sendDeliveryPlan(snapshot: WorkbenchSnapshot, requested: SendDeliveryMode): SendDeliveryPlan {
+  const steer = requested !== 'queue' && steerAvailable(snapshot)
+  const mode = steer ? 'steer' : 'queue'
+  const unavailable = promptUnavailableReason(snapshot, { allowSteer: steer, allowQueue: !steer })
+  return {
+    mode,
+    steer,
+    fallbackToQueue: requested === 'steer' && !steer,
+    ...(unavailable === undefined ? {} : { unavailable }),
+  }
+}
+
 /** A running session accepts a steer prompt that the model handles immediately. */
 export function steerAvailable(snapshot: WorkbenchSnapshot): boolean {
   const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)

@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { accessSync, constants, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { patchScheduleCancelCommandAlpha2, patchScheduleCancelCommandRc1 } from './runtime-patches.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
@@ -73,14 +74,16 @@ const pnpmVersion = run(node, [pnpm, '--version'])
 if (pnpmVersion !== expectedPnpm) throw new Error(`pnpm executable mismatch: expected ${expectedPnpm}, reported ${pnpmVersion}`)
 
 // 0.1.3-alpha.2 needed local transport, stop-jobs, schedule-cancel, and
-// legacy-origin compatibility patches. Official 0.1.5-rc.1 includes those
-// fixes and ships the DeepSeek-V41-Flash model adapter, so do not apply the
-// alpha-only source rewrites to the new upstream package.
+// legacy-origin compatibility patches. Official 0.1.5-rc.1 includes the
+// transport/jobs/origin fixes, but its schedule plugin still only exposes
+// the model-facing tools. Keep the extension Pause bridge on both shapes.
 if (expectedDsh === '0.1.3-alpha.2') {
   patchDeepSeekTransport(path.join(runtimeModules, '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js'))
   patchJobStopCommand(path.join(runtimeModules, '@deepseek-ai', 'dsh-tool-jobs', 'lib', 'index.js'))
-  patchScheduleCancelCommand(path.join(runtimeModules, '@deepseek-ai', 'dsh-schedule', 'lib', 'index.js'))
+  patchScheduleCancelCommandAlpha2(path.join(runtimeModules, '@deepseek-ai', 'dsh-schedule', 'lib', 'index.js'))
   patchLegacySessionOrigin(path.join(runtimeModules, '@deepseek-ai', 'dsh-session-format-v0-to-v1', 'lib', 'index.js'))
+} else if (expectedDsh.startsWith('0.1.5-rc.')) {
+  patchScheduleCancelCommandRc1(path.join(runtimeModules, '@deepseek-ai', 'dsh-schedule', 'lib', 'index.js'))
 } else {
   console.log(`Using upstream Harness ${expectedDsh}; skipping alpha.2 compatibility patches.`)
 }
@@ -238,50 +241,6 @@ function patchJobStopCommand(file) {
     '\t\t\t};',
     '\t\t}',
     '\t});',
-  ].join('\n')
-  source = source.replace(registrationMarker, registration)
-  writeFileSync(file, source)
-}
-
-function patchScheduleCancelCommand(file) {
-  let source = readFileSync(file, 'utf8')
-  const injectMarker = 'const inject = [\n\t"agents",\n\t"sessions",\n\t"tools",\n\t"sessionPersistence"\n];'
-  if (source.split(injectMarker).length !== 2) {
-    throw new Error(`Unexpected alpha.2 schedule shape; cannot add the schedule-cancel command: ${file}`)
-  }
-  source = source.replace(injectMarker, 'const inject = [\n\t"agents",\n\t"commands",\n\t"sessions",\n\t"tools",\n\t"sessionPersistence"\n];')
-  const registrationMarker = 'function apply(ctx) {\n\tctx.inject(["sessionProjections"], (projectionCtx) => {'
-  if (source.split(registrationMarker).length !== 2) {
-    throw new Error(`Unexpected alpha.2 schedule apply shape; cannot add the schedule-cancel command: ${file}`)
-  }
-  const registration = [
-    'function apply(ctx) {',
-    '\tctx.commands.register({',
-    '\t\tname: "schedule-cancel",',
-    '\t\tdescription: "Cancel one or all active scheduled reminders in this session",',
-    '\t\tinput: { hint: "[<schedule-id>|all]" },',
-    '\t\thandler: (invocation) => runScheduleTransaction(invocation.agent, async () => {',
-    '\t\t\tconst target = invocation.rawInput.trim();',
-    '\t\t\tlet folded;',
-    '\t\t\ttry {',
-    '\t\t\t\tfolded = foldScheduleEvents(invocation.agent.session.ownEvents());',
-    '\t\t\t} catch {',
-    '\t\t\t\treturn { kind: "error", text: "The session schedule log is corrupt; no reminder was cancelled." };',
-    '\t\t\t}',
-    '\t\t\tconst active = target === "" || target === "all" ? [...folded.active] : folded.active.filter((record) => record.id === target);',
-    '\t\t\tif (target !== "" && target !== "all" && active.length === 0) return { kind: "error", text: `No active scheduled reminder matched ${JSON.stringify(target)}.` };',
-    '\t\t\tif (active.length === 0) return { kind: "success", text: "No active scheduled reminders." };',
-    '\t\t\tif (invocation.signal.aborted) return { kind: "error", text: "Scheduled reminder cancellation was interrupted." };',
-    '\t\t\ttry {',
-    '\t\t\t\tfor (const record of active) invocation.agent.session.append("schedule/change", { version: 1, operation: "delete", id: record.id });',
-    '\t\t\t\tawait flushSchedulePersistence(ctx, invocation.agent.session);',
-    '\t\t\t} catch {',
-    '\t\t\t\treturn { kind: "error", text: "Schedule persistence did not complete; retry before relying on cancellation." };',
-    '\t\t\t}',
-    '\t\t\treturn { kind: "success", text: active.length === 1 ? "Cancelled 1 scheduled reminder." : `Cancelled ${active.length} scheduled reminders.` };',
-    '\t\t}),',
-    '\t});',
-    '\tctx.inject(["sessionProjections"], (projectionCtx) => {',
   ].join('\n')
   source = source.replace(registrationMarker, registration)
   writeFileSync(file, source)
