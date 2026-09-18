@@ -226,6 +226,14 @@ describe('Gateway JSON frame parsing', () => {
     expect(() => parseMuxFrame({ type: 'question/requested', sessionId: 's-1', questions: [{ id: 1 }] })).toThrow('Unsupported Harness mux frame')
   })
 
+  it('accepts successful RPC responses without a value payload', () => {
+    expect(parseServerResponse({ type: 'server-response', rpcId: 'ack-1', result: { ok: true } })).toEqual({
+      type: 'server-response',
+      rpcId: 'ack-1',
+      result: { ok: true, value: undefined },
+    })
+  })
+
   it('parses model and agent preset catalogs', () => {
     expect(parseModelCatalog({
       current: { provider: 'deepseek-official', model: 'deepseek-v4', reasoningEffort: 'max' },

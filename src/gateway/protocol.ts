@@ -211,7 +211,11 @@ export function parseServerResponse(value: unknown): ServerResponse {
     throw new Error('Malformed Harness RPC response.')
   }
   const result = value.result
-  if (result.ok === true && 'value' in result) return { type: 'server-response', rpcId: value.rpcId, result: { ok: true, value: result.value } }
+  // The official Harness RPC schema makes `value` optional on successful
+  // responses. Interaction acknowledgements and other commands commonly
+  // return `{ ok: true }` with no payload; preserve that as undefined instead
+  // of rejecting an otherwise valid response as malformed.
+  if (result.ok === true) return { type: 'server-response', rpcId: value.rpcId, result: { ok: true, value: result.value } }
   if (result.ok === false && isRecord(result.error) && typeof result.error.code === 'string' && typeof result.error.message === 'string') {
     return {
       type: 'server-response',

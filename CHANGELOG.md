@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [0.1.85] - 2026-09-18
+
+### Fixed
+
+- Accepted official Harness success RPC responses that omit the optional `value` payload, preventing `Malformed Harness RPC result` during question, approval, and acknowledgement flows.
+- Added a regression test for payload-less successful responses.
+
 ## [0.1.84] - 2026-09-16
 
 ### Fixed
@@ -852,7 +859,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.84...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.85...HEAD
+[0.1.85]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.85
 [0.1.84]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.84
 [0.1.83]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.83
 [0.1.82]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.82
