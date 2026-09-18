@@ -71,7 +71,9 @@ export async function readExternalSession(descriptor: ExternalSessionDescriptor,
         }
         continue
       }
-      if (descriptor.platform === 'codex' ? rootType !== 'event_msg' : rootType !== 'user' && rootType !== 'assistant') continue
+      if (descriptor.platform === 'codex'
+        ? rootType !== 'event_msg' && rootType !== 'response_item'
+        : rootType !== 'user' && rootType !== 'assistant') continue
       if (Buffer.byteLength(line, 'utf8') > MAX_RECORD_BYTES) continue
       const record = parseRecord(line)
       if (record === undefined) continue
@@ -136,8 +138,12 @@ async function describeSession(
         id = stringValue(record.payload.id) ?? stringValue(record.payload.session_id) ?? id
         cwd = stringValue(record.payload.cwd) ?? cwd
       }
-      if (title === undefined && record.type === 'event_msg' && isRecord(record.payload) && record.payload.type === 'user_message') {
-        title = titleFrom(stringValue(record.payload.message))
+      if (title === undefined) {
+        if (record.type === 'event_msg' && isRecord(record.payload) && record.payload.type === 'user_message') {
+          title = titleFrom(stringValue(record.payload.message))
+        } else if (record.type === 'response_item' && isRecord(record.payload) && record.payload.type === 'message' && record.payload.role === 'user') {
+          title = titleFrom(codexVisibleUserText(contentText(record.payload.content)))
+        }
       }
     } else {
       id = stringValue(record.sessionId) ?? id
@@ -234,15 +240,27 @@ async function readHeader(filePath: string): Promise<string> {
 }
 
 function codexTurn(record: Record<string, unknown>): HandoffTurn | undefined {
-  if (record.type !== 'event_msg' || !isRecord(record.payload)) return undefined
-  const type = record.payload.type
-  const message = stringValue(record.payload.message)?.trim()
-  if (message === undefined || message === '') return undefined
-  if (type === 'user_message') return { role: 'user', text: message, ...timestamp(record) }
-  if (type === 'agent_message' && (record.payload.phase === undefined || record.payload.phase === 'final_answer')) {
-    return { role: 'assistant', text: message, ...timestamp(record) }
+  if (!isRecord(record.payload)) return undefined
+  if (record.type === 'event_msg') {
+    const type = record.payload.type
+    const message = stringValue(record.payload.message)?.trim()
+    if (message === undefined || message === '') return undefined
+    if (type === 'user_message') {
+      const text = codexVisibleUserText(message)
+      return text === '' ? undefined : { role: 'user', text, ...timestamp(record) }
+    }
+    if (type === 'agent_message' && (record.payload.phase === undefined || record.payload.phase === 'final_answer')) {
+      return { role: 'assistant', text: message, ...timestamp(record) }
+    }
+    return undefined
   }
-  return undefined
+  if (record.type !== 'response_item' || record.payload.type !== 'message') return undefined
+  const role = record.payload.role
+  if (role !== 'user' && role !== 'assistant') return undefined
+  if (role === 'assistant' && record.payload.phase !== undefined && record.payload.phase !== 'final_answer') return undefined
+  const message = contentText(record.payload.content).trim()
+  const text = role === 'user' ? codexVisibleUserText(message) : message
+  return text === '' ? undefined : { role, text, ...timestamp(record) }
 }
 
 function rootRecordType(line: string): string | undefined {
@@ -280,9 +298,17 @@ function contentText(value: unknown): string {
   if (!Array.isArray(value)) return ''
   const output: string[] = []
   for (const item of value) {
-    if (isRecord(item) && item.type === 'text' && typeof item.text === 'string') output.push(item.text)
+    if (!isRecord(item) || typeof item.text !== 'string') continue
+    if (item.type === 'text' || item.type === 'input_text' || item.type === 'output_text') output.push(item.text)
   }
   return output.join('\n')
+}
+
+function codexVisibleUserText(value: string): string {
+  return value
+    .replace(/<environment_context\b[^>]*>[\s\S]*?<\/environment_context>/giu, '')
+    .replace(/<user_instructions\b[^>]*>[\s\S]*?<\/user_instructions>/giu, '')
+    .trim()
 }
 
 function timestamp(record: Record<string, unknown>): { readonly timestamp?: string } {

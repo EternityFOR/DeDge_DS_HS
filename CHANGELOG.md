@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.1.86] - 2026-09-18
+
+### Fixed
+
+- Codex handoffs now read the current official `response_item` message transcript format (top-level user and final assistant text) in addition to the legacy `event_msg` format. Recent Codex sessions no longer fail with "no readable user/assistant text".
+- Standalone Codex `environment_context` wrapper records are ignored instead of being imported as chat turns or used as session titles.
+- Codex JSONL fallback discovery now derives session titles from `response_item` user messages when the official app-server list is unavailable.
+- Added regression coverage for the current Codex rollout format.
+
 ## [0.1.85] - 2026-09-18
 
 ### Fixed
@@ -859,7 +868,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.85...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.86...HEAD
+[0.1.86]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.86
 [0.1.85]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.85
 [0.1.84]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.84
 [0.1.83]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.83

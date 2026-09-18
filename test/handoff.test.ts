@@ -109,6 +109,29 @@ describe('read-only external session discovery', () => {
     })
   })
 
+  it('extracts current Codex response_item user and final assistant messages', async () => {
+    const home = await temporaryHome()
+    const sessionDirectory = path.join(home, 'sessions', '2026', '09', '18')
+    await mkdir(sessionDirectory, { recursive: true })
+    const id = 'aaaaaaaa-1111-4222-8333-bbbbbbbbbbbb'
+    await writeJsonl(path.join(sessionDirectory, `rollout-2026-09-18T00-00-00-${id}.jsonl`), [
+      { type: 'session_meta', payload: { id, cwd: 'D:\\work', source: 'vscode' } },
+      { type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: '<skills_instructions>hidden</skills_instructions>' }] } },
+      { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<environment_context>\n  <cwd>D:\\work</cwd>\n</environment_context>' }] } },
+      { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Fix the response_item parser' }] } },
+      { type: 'response_item', payload: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Reading files' }] } },
+      { type: 'response_item', payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'Parser fixed' }] } },
+    ])
+
+    const sessions = await listExternalSessions('codex', home)
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]).toMatchObject({ id, title: 'Fix the response_item parser', cwd: 'D:\\work' })
+    expect((await readExternalSession(sessions[0]!, 32_768)).turns).toEqual([
+      { role: 'user', text: 'Fix the response_item parser' },
+      { role: 'assistant', text: 'Parser fixed' },
+    ])
+  })
+
   it('uses the latest Codex index name and never discovers archived sessions', async () => {
     const home = await temporaryHome()
     const activeDirectory = path.join(home, 'sessions', '2026', '08', '16')

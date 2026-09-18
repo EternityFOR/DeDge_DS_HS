@@ -35,7 +35,7 @@ DeepSeek Harness unsent draft / Codex / Claude new session
 
 只提取顶层 user/assistant 文本：
 
-- Codex：优先直接启动官方原生 `codex app-server --stdio`，用与官方 VS Code 历史页一致的 `thread/list` 参数读取当前 provider、Active、交互式根会话，并采用 app-server 返回的最新名称和 `recency_at` 顺序。该查询不经过 PowerShell，也不调用 archive、resume 或写入接口。若官方二进制或协议不可用，才只读扫描 `sessions/**/*.jsonl`；回退路径明确排除 `archived_sessions/`、subagent、guardian、exec、MCP 和未知内部来源，并用 `session_index.jsonl` 的最新重命名。
+- Codex：优先直接启动官方原生 `codex app-server --stdio`，用与官方 VS Code 历史页一致的 `thread/list` 参数读取当前 provider、Active、交互式根会话，并采用 app-server 返回的最新名称和 `recency_at` 顺序。该查询不经过 PowerShell，也不调用 archive、resume 或写入接口。若官方二进制或协议不可用，才只读扫描 `sessions/**/*.jsonl`；回退路径明确排除 `archived_sessions/`、subagent、guardian、exec、MCP 和未知内部来源，并用 `session_index.jsonl` 的最新重命名。读取 transcript 时同时兼容当前 `response_item` message（`role=user`、`phase=final_answer`）和旧版 `event_msg` user/agent message；`environment_context` 等纯上下文包装记录不进入交接。
 - Claude Code：读取 `projects/**/*.jsonl` 中非 sidechain 的 user/assistant 文本块；忽略 thinking 和工具结果。
 - DeepSeek Harness：使用当前工作台已经投影出的 user/assistant 消息，不复制 reasoning 或工具记录。
 
