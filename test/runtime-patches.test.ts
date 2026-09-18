@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  patchApprovalPolicyIdleNoticeSource,
   patchPermissionSandboxTerminalCloseSource,
   patchPersistentShellCacheRecoverySource,
   patchScheduleCancelCommandAlpha2Source,
@@ -74,6 +75,22 @@ describe('bundled runtime source patches', () => {
     expect(patched).toContain('const liveId = live.get(owner);')
     expect(patched).toContain('live.delete(owner);')
     expect(patched).toContain('const existing = pending.get(owner);')
+  })
+  it('does not queue an approval switch notice on an idle agent', () => {
+    const source = [
+      'setPolicy(agent, policy) {',
+      '  const previous = this.effectivePolicy(agent.session);',
+      '  if (previous === policy) return;',
+      '  setApprovalPolicy(agent.session, policy);',
+      '  agent.inject(createUserMessage({',
+      '    content: [{ type: "text", text: "changed" }],',
+      '    source: { kind: "plugin", plugin: "user-approval" }',
+      '  }));',
+      '}',
+    ].join('\n')
+    const patched = patchApprovalPolicyIdleNoticeSource(source)
+    expect(patched).toContain('if (agent.status !== "idle") agent.inject(createUserMessage({')
+    expect(patched).toContain('setApprovalPolicy(agent.session, policy);')
   })
   it('refuses unknown compiled plugin shapes instead of emitting a half patch', () => {
     expect(() => patchScheduleCancelCommandRc1Source('export const unrelated = true\n')).toThrow('Unexpected 0.1.5-rc.1')

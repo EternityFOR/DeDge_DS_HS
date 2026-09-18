@@ -6,3 +6,5 @@ export declare function patchPermissionSandboxTerminalCloseSource(source: string
 export declare function patchPersistentShellCacheRecoverySource(source: string, label: string): string
 export declare function patchPermissionSandboxTerminalClose(file: string): void
 export declare function patchPersistentShellCacheRecovery(file: string, label: string): void
+export declare function patchApprovalPolicyIdleNoticeSource(source: string): string
+export declare function patchApprovalPolicyIdleNotice(file: string): void

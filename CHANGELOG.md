@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.1.90] - 2026-09-19
+
+### Fixed
+
+- Switching to a preset that changes the approval policy while the agent is idle no longer leaves an unconsumed `next-step` plugin notice behind. The old behavior made the workbench show a permanent "Autonomous continuation is queued" state, disabled the permission menu, and required a window restart.
+- The live approval-policy switch notice is now injected only while an agent turn is running; an idle agent reads the changed policy from the system-prompt projection on its next request.
+- Focusing a VS Code window now reconciles the authored session list, archived-session registry, active history, permissions, and schedule projection, so tabs and conversation state heal after a deletion in another window or a missed event frame.
+- Added regression coverage for the idle approval-notice runtime patch.
+
 ## [0.1.89] - 2026-09-19
 
 ### Fixed
@@ -897,7 +906,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.89...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.90...HEAD
+[0.1.90]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.90
 [0.1.89]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.89
 [0.1.88]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.88
 [0.1.87]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.87

@@ -36,7 +36,9 @@ export class WorkbenchController implements vscode.Disposable {
   private skillCatalogCache: { readonly key: string; readonly at: number; readonly items: Promise<SkillSummary[]> } | undefined
   private runtimeSubscription: vscode.Disposable
   private configurationSubscription: vscode.Disposable
+  private windowStateSubscription: vscode.Disposable
   private startTask: Promise<void> | undefined
+  private focusResyncTask: Promise<void> | undefined
   private modelRefreshTask: Promise<void> | undefined
   private lastConfiguration: HarnessConfiguration
   private readonly internalConfigurationValues = new Map<'provider' | 'model', string>()
@@ -97,6 +99,10 @@ export class WorkbenchController implements vscode.Disposable {
       this.store.setConfiguration(toStoreConfiguration(next))
       this.handleExternalModelConfigurationChange(previous, next)
       this.publish()
+    })
+    this.windowStateSubscription = vscode.window.onDidChangeWindowState(state => {
+      if (!state.focused) return
+      void this.resyncFromGateway().catch(error => this.logger.warn(`Could not resynchronize Harness state after window focus: ${errorMessage(error)}`))
     })
   }
 
@@ -1071,6 +1077,7 @@ export class WorkbenchController implements vscode.Disposable {
     this.sessionOperations.clear()
     this.runtimeSubscription.dispose()
     this.configurationSubscription.dispose()
+    this.windowStateSubscription.dispose()
     this.gateway?.dispose()
     this.gateway = undefined
     this.queueActionTasks.clear()
@@ -1115,6 +1122,61 @@ export class WorkbenchController implements vscode.Disposable {
   private requireGateway(): GatewayClient {
     if (this.gateway === undefined) throw new Error('Harness Gateway is not connected.')
     return this.gateway
+  }
+
+  /** Pull an authoritative snapshot after focus to heal missed cross-window frames. */
+  async resyncFromGateway(): Promise<void> {
+    if (this.focusResyncTask !== undefined) return this.focusResyncTask
+    const task = this.performResyncFromGateway().finally(() => {
+      if (this.focusResyncTask === task) this.focusResyncTask = undefined
+    })
+    this.focusResyncTask = task
+    return task
+  }
+
+  private async performResyncFromGateway(): Promise<void> {
+    if (this.disposed || this.store.snapshot().phase !== 'connected') return
+    const gateway = this.gateway
+    if (gateway === undefined) return
+    let sessions: SessionSummary[]
+    try {
+      sessions = this.workspaceSessions((await gateway.listSessions()).items).filter(item => !this.deletedSessions.has(item.sessionId))
+    } catch (error) {
+      this.logger.warn(`Could not resynchronize the Harness session list after window focus: ${errorMessage(error)}`)
+      return
+    }
+    if (this.disposed || this.gateway !== gateway || this.store.snapshot().phase !== 'connected') return
+    this.store.replaceSessions(sessions)
+    try {
+      const workspaces = await gateway.listWorkspaces()
+      if (!this.disposed && this.gateway === gateway) this.store.replaceArchivedSessions(workspaces.archivedSessionIds ?? [])
+    } catch (error) {
+      this.logger.warn(`Could not refresh archived Harness sessions after window focus: ${errorMessage(error)}`)
+    }
+    const activeSessionId = this.store.snapshot().activeSessionId
+    if (activeSessionId === undefined) {
+      this.publish()
+      return
+    }
+    try {
+      const history = await gateway.history(activeSessionId)
+      if (this.disposed || this.gateway !== gateway) return
+      this.store.mergeRecentHistory(activeSessionId, history.events ?? [], history.hasMore === true)
+      if (history.projections?.values !== undefined) {
+        this.store.setContextPressure(activeSessionId, parseContextPressureProjection(history.projections.values.contextPressure))
+        this.store.setPermissions(activeSessionId, parsePermissionProjection(history.projections.values.permissions))
+        this.store.setSessionSchedules(activeSessionId, parseScheduleProjection(history.projections.values.schedule) ?? [])
+        const projectedPreset = history.projections.values.agentPreset
+        if (typeof projectedPreset === 'string' && projectedPreset.trim() !== '') this.store.setAgentPreset(activeSessionId, projectedPreset)
+      }
+      const current = sessions.find(item => item.sessionId === activeSessionId)
+      if (current?.running === true) this.store.setRunning(activeSessionId, true)
+      else if (current !== undefined) this.store.markSessionStopped(activeSessionId)
+      void this.hydrateHistoryImages(activeSessionId)
+    } catch (error) {
+      this.logger.warn(`Could not refresh the active Harness session after window focus: ${errorMessage(error)}`)
+    }
+    this.publish()
   }
 
   /** Workspace bound to the live runtime, or the active editor folder before one starts. */

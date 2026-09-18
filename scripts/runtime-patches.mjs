@@ -160,3 +160,31 @@ export function patchPermissionSandboxTerminalClose(file) {
 export function patchPersistentShellCacheRecovery(file, label) {
   writeFileSync(file, patchPersistentShellCacheRecoverySource(readFileSync(file, 'utf8'), label))
 }
+/**
+ * Suppress the approval-policy switch notice when no agent turn is active.
+ * `agent.inject()` queues a next-step plugin message without waking the loop;
+ * on an idle agent that message would remain pending forever and the workbench
+ * would show a stuck "autonomous continuation is queued" state. The live
+ * system-prompt projection already carries the changed policy into the next
+ * request, so the mid-turn switch notice remains only for running agents.
+ * @param {string} source - Compiled `@deepseek-ai/dsh-user-approval` entry point.
+ * @returns {string} Patched source.
+ */
+export function patchApprovalPolicyIdleNoticeSource(source) {
+  const marker = 'setApprovalPolicy(agent.session, policy);\n\t\tagent.inject(createUserMessage({'
+  if (source.split(marker).length !== 2) {
+    throw new Error('Unexpected user-approval policy shape; cannot skip an idle switch notice.')
+  }
+  return source.replace(
+    marker,
+    'setApprovalPolicy(agent.session, policy);\n\t\tif (agent.status !== "idle") agent.inject(createUserMessage({',
+  )
+}
+
+/**
+ * Apply the idle approval-notice rewrite to a compiled plugin file.
+ * @param {string} file - Absolute plugin entry point path.
+ */
+export function patchApprovalPolicyIdleNotice(file) {
+  writeFileSync(file, patchApprovalPolicyIdleNoticeSource(readFileSync(file, 'utf8')))
+}
