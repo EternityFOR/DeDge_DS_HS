@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.1.87] - 2026-09-18
+
+### Fixed
+
+- Queue actions now retire the optimistic row immediately and clear a canceled composer receipt instead of leaving a stale delete button that no longer has an authoritative queue item behind it.
+- Edit/Steer controls now stay on an inserted prompt only while it is the latest prompt still waiting for visible model work. Once reasoning or tool output follows it, the message becomes read-only instead of keeping already-delivered actions alive.
+- Inserted/steering prompts now get their own fold summary, so reasoning and tool output produced after the insertion folds under that message while a task is running.
+- Added regression coverage for delivered-prompt action state.
+
 ## [0.1.86] - 2026-09-18
 
 ### Fixed
@@ -868,7 +877,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.86...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.87...HEAD
+[0.1.87]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.87
 [0.1.86]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.86
 [0.1.85]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.85
 [0.1.84]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.84

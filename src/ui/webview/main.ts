@@ -105,6 +105,7 @@ let pendingSendMode: 'queue' | 'steer' = 'queue'
 let pendingSendBaselineIds = new Set<string>()
 let pendingQueueBaselineIds = new Set<string>()
 let pendingQueueRemoveRequestedId: string | undefined
+let pendingQueueMatchedId: string | undefined
 let steerPendingText: string | undefined
 type DeliveryMode = 'auto' | 'queue' | 'steer'
 let deliveryMode: DeliveryMode = 'queue'
@@ -114,6 +115,7 @@ let queueEditingText = ''
 let queueSessionId: string | undefined
 let queueSignature = ''
 const queueBusyItems = new Set<string>()
+const queueRemovedItems = new Set<string>()
 let pasteFileThreshold = 4_096
 let scrollBottomButton: HTMLButtonElement | undefined
 let stickToBottom = true
@@ -534,6 +536,7 @@ window.addEventListener('message', event => {
     elements.prompt.focus()
   } else if (message.type === 'queueActionSettled') {
     queueBusyItems.delete(message.itemId)
+    if (!message.accepted) queueRemovedItems.delete(message.itemId)
     if (message.accepted && queueEditingId === message.itemId) {
       queueEditingId = undefined
       queueEditingText = ''
@@ -870,7 +873,12 @@ function renderQueueDock(snapshot: WorkbenchSnapshot): void {
 }
 
 function visibleQueueItems(snapshot: WorkbenchSnapshot): NonNullable<WorkbenchSnapshot['queueItems']>[number][] {
-  return (snapshot.queueItems ?? []).filter(item => item.sourceKind === 'user' && (item.placement === 'queued' || item.placement === 'steering'))
+  const all = snapshot.queueItems ?? []
+  const currentIds = new Set(all.map(item => item.id))
+  for (const removed of [...queueRemovedItems]) {
+    if (!currentIds.has(removed)) queueRemovedItems.delete(removed)
+  }
+  return all.filter(item => !queueRemovedItems.has(item.id) && item.sourceKind === 'user' && (item.placement === 'queued' || item.placement === 'steering'))
 }
 
 function queueDisplayItems(snapshot: WorkbenchSnapshot): NonNullable<WorkbenchSnapshot['queueItems']>[number][] {
@@ -893,8 +901,16 @@ function syncPendingQueuePreview(items: readonly NonNullable<WorkbenchSnapshot['
   const existing = pendingSendPreview.querySelector('.pending-queue-actions')
   if (match === undefined) {
     existing?.remove()
+    // A queue row that disappears without becoming a durable message was
+    // canceled. Retire the optimistic composer row instead of leaving a stale
+    // delete button with nothing behind it.
+    if (pendingQueueMatchedId !== undefined) {
+      pendingQueueMatchedId = undefined
+      clearPendingSendPreview()
+    }
     return
   }
+  pendingQueueMatchedId = match.id
   const busy = queueBusyItems.has(match.id)
   if (existing instanceof HTMLElement) {
     const button = existing.querySelector<HTMLButtonElement>('button')
@@ -922,6 +938,7 @@ function clearPendingQueuePreview(): void {
   pendingSendBaselineCount = 0
   pendingSendBaselineIds = new Set<string>()
   pendingQueueBaselineIds = new Set<string>()
+  pendingQueueMatchedId = undefined
 }
 
 function clearPendingSendPreview(): void {
@@ -932,6 +949,7 @@ function clearPendingSendPreview(): void {
   pendingSendBaselineIds = new Set<string>()
   pendingQueueBaselineIds = new Set<string>()
   pendingQueueRemoveRequestedId = undefined
+  pendingQueueMatchedId = undefined
 }
 
 function hasPendingDurableMessage(messages: readonly WorkbenchMessage[]): boolean {
@@ -1053,6 +1071,7 @@ function queueActionButton(icon: IconName, title: string, disabled: boolean, han
 
 function startQueueAction(itemId: string, message: Extract<WebviewToHostMessage, { readonly type: 'steerQueueItem' | 'removeQueueItem' | 'editQueueItem' }>): void {
   if (queueBusyItems.has(itemId)) return
+  if (message.type === 'removeQueueItem') queueRemovedItems.add(itemId)
   queueBusyItems.add(itemId)
   queueSignature = ''
   if (state !== undefined) renderQueueDock(state)
@@ -1290,6 +1309,7 @@ function renderConversation(snapshot: WorkbenchSnapshot): void {
     expandedTasks.clear()
     collapsedTasks.clear()
     collapsedDetailTasks.clear()
+    queueRemovedItems.clear()
     knownTaskIds.clear()
     taskCompletion.clear()
     taskInterruption.clear()
@@ -1569,6 +1589,7 @@ function beginPendingSend(
     pendingSendBaselineIds = new Set(baseline?.messages.map(item => item.id) ?? [])
     pendingQueueBaselineIds = new Set(baseline?.queueItems?.map(item => item.id) ?? [])
     pendingQueueRemoveRequestedId = undefined
+    pendingQueueMatchedId = undefined
     showPendingSendPreview(text, attachmentLabels, mode)
   }
   if (state !== undefined) {
@@ -1744,10 +1765,20 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
     if (visibleTailItems.length === 0) continue
     const running = !complete && !interrupted
     const collapsed = middle.length > 0 && !expandedTasks.has(taskId) && (collapsedDetailTasks.has(taskId) || (autoFoldRunningTasks && running))
+    const insertedBoundary = latestInsertedIndex >= 0 ? items[latestInsertedIndex] : undefined
+    const trailingItems = insertedBoundary === undefined ? [] : items.slice(latestInsertedIndex + 1)
+    const trailingIds = new Set(trailingItems.map(item => item.id))
+    // The original task opener already has a fold summary above the inserted
+    // prompt. Give the inserted prompt its own compact boundary too, so work
+    // produced after a steer does not stay exposed below it while the task is
+    // running.
+    const insertedCollapsed = trailingItems.length > 0
+      && !expandedTasks.has(taskId)
+      && (collapsedDetailTasks.has(taskId) || (autoFoldRunningTasks && running))
     for (const item of items) {
       const node = messageElements.get(item.id)
       const intermediate = middle.some(candidate => candidate.id === item.id)
-      node?.classList.toggle('task-middle-hidden', collapsed && intermediate)
+      node?.classList.toggle('task-middle-hidden', (collapsed && intermediate) || (insertedCollapsed && trailingIds.has(item.id)))
       node?.classList.toggle('task-intermediate', intermediate)
       node?.classList.toggle('steering', item.inputKind === 'steering')
       node?.classList.toggle('automation', item.inputKind === 'automation')
@@ -1830,11 +1861,46 @@ function renderTaskFolds(messages: readonly WorkbenchMessage[]): void {
       fold.classList.toggle('task-all-hidden', wholeCollapsed)
       const nodeById = new Map(items.map(item => [item.id, messageElements.get(item.id)] as const))
       const foldedNodes = middle.map(item => nodeById.get(item.id)).filter((node): node is HTMLElement => node !== undefined)
-      const tailNodes = visibleTailItems.map(item => nodeById.get(item.id)).filter((node): node is HTMLElement => node !== undefined)
+      const tailNodes: Node[] = []
+      for (const item of visibleTailItems) {
+        const node = nodeById.get(item.id)
+        if (node === undefined) continue
+        tailNodes.push(node)
+        if (insertedBoundary !== undefined && item.id === insertedBoundary.id && trailingItems.length > 0) {
+          tailNodes.push(insertedFoldBoundary(taskId, insertedCollapsed, trailingItems.length))
+        }
+      }
       const firstNode = firstPrompt === undefined || hasLeadingTaskWork ? undefined : nodeById.get(firstPrompt.id)
       group.replaceChildren(taskToggle, ...(firstNode === undefined ? [] : [firstNode]), fold, ...foldedNodes, ...tailNodes)
     }
   }
+}
+
+function insertedFoldBoundary(taskId: string, collapsedState: boolean, count: number): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'task-fold-summary'
+  button.append(svgIcon('chevron-down'), document.createElement('span'))
+  const label = button.querySelector('span')
+  if (label !== null) label.textContent = collapsedState
+    ? `Show ${String(count)} item${count === 1 ? '' : 's'} after inserted message`
+    : `Hide ${String(count)} item${count === 1 ? '' : 's'} after inserted message`
+  button.title = collapsedState
+    ? 'Show the work triggered by this inserted message'
+    : 'Hide the work triggered by this inserted message'
+  button.setAttribute('aria-expanded', String(!collapsedState))
+  button.querySelector('svg')?.classList.toggle('collapsed', collapsedState)
+  button.addEventListener('click', () => {
+    if (collapsedState) {
+      collapsedDetailTasks.delete(taskId)
+      expandedTasks.add(taskId)
+    } else {
+      collapsedDetailTasks.add(taskId)
+      expandedTasks.delete(taskId)
+    }
+    if (state !== undefined) renderConversation(state)
+  })
+  return button
 }
 
 function renderMessageSegments(messages: readonly WorkbenchMessage[]): void {

@@ -4,6 +4,10 @@ import type { WorkbenchMessage, WorkbenchSnapshot } from '../session/types.js'
 /** Whether a user message can be edited or steered into the active task. */
 export function shouldShowUserMessageActions(message: WorkbenchMessage, snapshot: WorkbenchSnapshot): boolean {
   if (!isEligibleUserMessage(message, snapshot)) return false
+  // Once the model has produced any visible work after the prompt, the message
+  // is no longer pending. Keep delivered insertions read-only instead of
+  // leaving live Edit/Steer actions on a turn that already consumed them.
+  if (!isWaitingForUserMessage(message, snapshot)) return false
   const activeTaskIds = new Set(snapshot.messages
     .filter(item => item.taskId !== undefined && item.taskInterrupted !== true && item.taskComplete !== true)
     .map(item => item.taskId as string))

@@ -42,7 +42,7 @@ describe('live user message actions', () => {
     expect(isWaitingForUserMessage(firstPrompt, state)).toBe(true)
   })
 
-  it('offers actions for intermediate and queued prompts, not the task opener', () => {
+  it('offers actions only for the latest pending prompt; delivered insertions are read-only', () => {
     const latest = { id: 'u-3', role: 'user' as const, text: 'Follow up', taskComplete: false, seq: 4 }
     const state = snapshot([
       firstPrompt,
@@ -51,13 +51,13 @@ describe('live user message actions', () => {
       latest,
     ])
     expect(shouldShowUserMessageActions(firstPrompt, state)).toBe(false)
-    expect(shouldShowUserMessageActions(insertedPrompt, state)).toBe(true)
+    expect(shouldShowUserMessageActions(insertedPrompt, state)).toBe(false)
     expect(shouldShowUserMessageActions(latest, state)).toBe(true)
     expect(isWaitingForUserMessage(insertedPrompt, state)).toBe(false)
     expect(isWaitingForUserMessage(latest, state)).toBe(true)
   })
 
-  it('stops the waiting indicator once output follows the latest prompt', () => {
+  it('stops waiting and live actions once output follows the latest prompt', () => {
     const latest = { id: 'u-3', role: 'user' as const, text: 'Follow up', taskComplete: false, seq: 4 }
     const state = snapshot([
       firstPrompt,
@@ -66,7 +66,7 @@ describe('live user message actions', () => {
       { id: 'a-2', role: 'assistant', text: 'Answer started', taskComplete: false, seq: 5 },
     ])
     expect(isWaitingForUserMessage(latest, state)).toBe(false)
-    expect(shouldShowUserMessageActions(latest, state)).toBe(true)
+    expect(shouldShowUserMessageActions(latest, state)).toBe(false)
   })
 
   it('keeps the latest prompt actionable during Harness turn projection lag', () => {
