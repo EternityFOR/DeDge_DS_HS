@@ -19,11 +19,13 @@ Tier 表示发布验证优先级，不表示尚未运行发布门禁的构建已
 
 | 组件 | 内置版本 | 规则 |
 | --- | --- | --- |
-| DeepSeek Harness | `0.1.5-rc.1` | 官方 RC 的 session/queue/恢复协议、原生图片附件与当前 Gateway 协议验证目标 |
+| DeepSeek Harness | `0.1.5-rc.3` | 官方 RC 的 session/queue/恢复协议、原生图片附件与当前 Gateway 协议验证目标 |
 | Node.js | `22.22.3` | VSIX 内置，不依赖系统 Node |
 | pnpm | `11.21.0` | 只供 Harness 内部工具链使用 |
 
-external JavaScript runtime 接受 Node `22.19+` 或 `24+`；Node 23 不在当前上游支持范围。bundled 和 external DSH 均要求精确的 `0.1.5-rc.1`，版本不同会阻止启动，避免 API、认证和事件格式不一致。扩展不会从 PATH 猜测版本，也不会自动升级。
+external JavaScript runtime 接受 Node `22.19+` 或 `24+`；Node 23 不在当前上游支持范围。bundled 和 external DSH 均要求精确的 `0.1.5-rc.3`，版本不同会阻止启动，避免 API、认证和事件格式不一致。扩展不会从 PATH 猜测版本，也不会自动升级。
+
+工作区 hooks 使用上游 bridge 显式挂载：扩展按顺序检测 `.claude/hooks.json`、`.claude/settings.json`、根目录 `hooks.json` 和 `.codex/hooks.json`，只在文件存在时把对应 bridge 写入生成的 overlay；配置文件和 hook 脚本留在用户工作区，不进入 VSIX。上游 hook bridge 只运行其支持的同步 command hooks，其他 handler 会记录警告并跳过。
 
 ## Windows 与 PowerShell
 

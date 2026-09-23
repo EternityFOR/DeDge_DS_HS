@@ -13,12 +13,14 @@ const dsh = path.join(runtimeModules, '@deepseek-ai', 'dsh', 'lib', 'bin.js')
 const pnpm = path.join(runtimeModules, 'pnpm', 'bin', 'pnpm.mjs')
 const overlayModule = path.join(smokeRoot, 'overlay.mjs')
 const overlayPath = path.join(smokeRoot, 'vscode.patch.yml')
+const hookConfigPath = path.join(smokeRoot, 'claude-hooks.json')
 const gatewayClientModule = path.join(smokeRoot, 'gateway-client.mjs')
 const home = path.join(smokeRoot, 'path with spaces', 'home')
 const runtimeBin = path.join(smokeRoot, 'runtime-bin')
 
 await rm(smokeRoot, { recursive: true, force: true })
 await mkdir(runtimeBin, { recursive: true })
+await writeFile(hookConfigPath, `${JSON.stringify({ SessionStart: [] })}\n`, 'utf8')
 
 let child
 try {
@@ -62,6 +64,7 @@ try {
     codexCommand: '',
     claudeCommand: '',
     handoffMaxBytes: 65_536,
+    claudeHooksConfigPath: hookConfigPath,
   }), 'utf8')
   await writePnpmWrapper(runtimeBin)
 
@@ -88,7 +91,7 @@ try {
   })
   const url = await waitForUrl(child, 90_000)
   const cookie = await bootstrapGatewayCookie(url)
-  const description = { version: '0.1.5-rc.1' }
+  const description = { version: '0.1.5-rc.3' }
   const listed = await rpc(url, 'session/list', { args: { _request: {} } }, cookie)
   if (!Array.isArray(listed?.items)) throw new Error(`session/list returned a malformed response: ${JSON.stringify(listed)}`)
   const session = await rpc(url, 'session/create', { args: { request: { cwd: root, agentPreset: 'standard' } } }, cookie)
@@ -169,9 +172,9 @@ try {
   const clientWorkspace = await client.listWorkspaces()
   if (!Array.isArray(clientWorkspace.archivedSessionIds)) throw new Error('GatewayClient did not read the workspace baseline')
   const clientCatalog = await client.models(session.sessionId)
-  if (!clientCatalog.groups.some(group => group.models.some(model => model.id === 'deepseek-v4-pro'))) throw new Error('GatewayClient did not parse the alpha.2 model catalog')
+  if (!clientCatalog.groups.some(group => group.models.some(model => model.id === 'deepseek-v4-pro'))) throw new Error('GatewayClient did not parse the RC model catalog')
   const clientPresets = await client.presets()
-  if (!clientPresets.presets.some(preset => preset.id === 'standard')) throw new Error('GatewayClient did not parse the alpha.2 preset roster')
+  if (!clientPresets.presets.some(preset => preset.id === 'standard')) throw new Error('GatewayClient did not parse the RC preset roster')
   const clientHistory = await client.history(visionSession.sessionId)
   if (!clientHistory.events.some(item => item.event.type === 'user/message')) throw new Error('GatewayClient did not open the session follow snapshot')
   if (!clientFrames.some(frame => frame.type === 'session/queue')) throw new Error('GatewayClient did not consume the session control stream')

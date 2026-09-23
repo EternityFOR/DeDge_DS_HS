@@ -34,7 +34,7 @@ describe('bundled Node compatibility', () => {
 
 describe('Harness runtime compatibility', () => {
   it('pins the bundled runtime to the current upstream release', () => {
-    expect(EXPECTED_DSH_VERSION).toBe('0.1.5-rc.1')
+    expect(EXPECTED_DSH_VERSION).toBe('0.1.5-rc.3')
   })
 
   it('accepts RC revisions on the same protocol base', () => {
@@ -248,5 +248,22 @@ describe('runtime overlay rendering', () => {
     } satisfies HarnessConfiguration
     expect(renderRuntimeOverlay(base)).not.toContain('@deepseek-ai/dsh-schedule')
     expect(renderRuntimeOverlay({ ...base, scheduleEnabled: true })).toContain("name: '@deepseek-ai/dsh-schedule'")
+  })
+
+  it('mounts detected Claude and Codex hook bridges only when a config path is supplied', () => {
+    const base = {
+      runtimeMode: 'bundled', runtimeCommand: '', runtimeNodePath: '', startTimeoutMs: 90_000,
+      provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard',
+      permissionMode: 'workspace-write', approvalPolicy: 'ask', baseUrl: 'https://api.deepseek.com/', autoStart: true,
+      scheduleEnabled: false, contextMaxBytes: 32_768, contextWindowTokens: 1_000_000, pasteFileThreshold: 4_096,
+      codexHome: '${userHome}/.codex', claudeHome: '${userHome}/.claude', codexCommand: '', claudeCommand: '',
+      handoffMaxBytes: 65_536, handoffLaunchMode: 'clipboard', skillDirectories: [],
+      visionBaseUrl: '', visionModel: '', visionReasoningEffort: '', visionMaxBytes: 4_194_304,
+    } satisfies HarnessConfiguration
+    const overlay = renderRuntimeOverlay(base, { claudeHooksConfigPath: './.claude/hooks.json', codexHooksConfigPath: './.codex/hooks.json' })
+    expect(overlay).toContain("name: '@deepseek-ai/dsh-hooks-claude-code'")
+    expect(overlay).toContain('configPath: "./.claude/hooks.json"')
+    expect(overlay).toContain("name: '@deepseek-ai/dsh-hooks-codex'")
+    expect(renderRuntimeOverlay(base)).not.toContain('dsh-hooks-claude-code')
   })
 })

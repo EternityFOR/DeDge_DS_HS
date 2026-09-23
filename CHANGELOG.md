@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [0.1.91] - 2026-09-23
+
+### Changed
+
+- Bundled official DeepSeek Harness upgraded from `0.1.5-rc.1` to `0.1.5-rc.3` using the existing lockfile/staging pipeline; the extension's local runtime patches remain applied after every upstream refresh.
+- Workspace hook configuration is now auto-detected and explicitly mounted through the official hook bridges: `.claude/hooks.json`, `.claude/settings.json`, root `hooks.json`, and `.codex/hooks.json` are supported without copying them into the VSIX.
+
+### Fixed
+
+- Added regression coverage for hook bridge overlay composition and kept the RC schedule-cancel, permission, approval, and persistent-shell compatibility patches in the rc.3 preparation path.
+
 ## [0.1.90] - 2026-09-19
 
 ### Fixed
@@ -906,7 +917,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.90...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.91...HEAD
+[0.1.91]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.91
 [0.1.90]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.90
 [0.1.89]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.89
 [0.1.88]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.88

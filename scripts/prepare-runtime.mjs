@@ -80,8 +80,8 @@ const pnpmVersion = run(node, [pnpm, '--version'])
 if (pnpmVersion !== expectedPnpm) throw new Error(`pnpm executable mismatch: expected ${expectedPnpm}, reported ${pnpmVersion}`)
 
 // 0.1.3-alpha.2 needed local transport, stop-jobs, schedule-cancel, and
-// legacy-origin compatibility patches. Official 0.1.5-rc.1 includes the
-// transport/jobs/origin fixes, but its schedule plugin still only exposes
+// legacy-origin compatibility patches. Official 0.1.5 RC includes the
+// transport/jobs/origin fixes, but the RC schedule plugin still only exposes
 // the model-facing tools. Keep the extension Pause bridge on both shapes.
 if (expectedDsh === '0.1.3-alpha.2') {
   patchDeepSeekTransport(path.join(runtimeModules, '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js'))

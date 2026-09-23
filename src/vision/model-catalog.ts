@@ -1,7 +1,7 @@
 const MAX_VISION_MODELS = 1_000
 export const DEEPSEEK_VISION_EXP_MODEL = 'deepseek-v4-flash-vision-exp'
 export const LEGACY_DEEPSEEK_V41_FLASH_MODEL = 'deepseek-v4.1-flash-expires-0901'
-// Stable RC model id published by DeepSeek Harness 0.1.5-rc.1. It is native
+// Stable RC model id published by DeepSeek Harness 0.1.5-rc.3. It is native
 // multimodal and replaces the time-boxed 0910 preview route.
 export const DEEPSEEK_V41_FLASH_MODEL = 'deepseek-flash'
 

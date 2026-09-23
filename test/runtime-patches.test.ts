@@ -22,7 +22,7 @@ const RC1_SHAPE = [
 ].join('\n')
 
 describe('bundled runtime source patches', () => {
-  it('adds the schedule-cancel command to the 0.1.5-rc.1 plugin shape', () => {
+  it('adds the schedule-cancel command to the current 0.1.5 RC plugin shape', () => {
     const patched = patchScheduleCancelCommandRc1Source(RC1_SHAPE)
     expect(patched).toContain('"commands",')
     expect(patched).toContain('name: "schedule-cancel"')
@@ -93,7 +93,7 @@ describe('bundled runtime source patches', () => {
     expect(patched).toContain('setApprovalPolicy(agent.session, policy);')
   })
   it('refuses unknown compiled plugin shapes instead of emitting a half patch', () => {
-    expect(() => patchScheduleCancelCommandRc1Source('export const unrelated = true\n')).toThrow('Unexpected 0.1.5-rc.1')
+    expect(() => patchScheduleCancelCommandRc1Source('export const unrelated = true\n')).toThrow('Unexpected 0.1.5 RC')
     expect(() => patchScheduleCancelCommandAlpha2Source('export const unrelated = true\n')).toThrow('Unexpected alpha.2')
   })
 })

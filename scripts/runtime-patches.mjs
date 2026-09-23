@@ -20,8 +20,8 @@ export function patchScheduleCancelCommandAlpha2Source(source) {
 }
 
 /**
- * Add the `/schedule-cancel` command to the 0.1.5-rc.1 compiled schedule plugin.
- * Upstream RC.1 ships the three model tools but no direct cancellation command,
+ * Add the `/schedule-cancel` command to the current 0.1.5 RC compiled schedule plugin.
+ * Upstream RC builds ship the three model tools but no direct cancellation command,
  * so the VS Code Pause button needs this bridge to release its scheduled work.
  * @param {string} source - Compiled `@deepseek-ai/dsh-schedule` entry point.
  * @returns {string} Patched source.
@@ -29,7 +29,7 @@ export function patchScheduleCancelCommandAlpha2Source(source) {
 export function patchScheduleCancelCommandRc1Source(source) {
   return patchScheduleCancelSource(
     source,
-    '0.1.5-rc.1',
+    '0.1.5 RC',
     RC1_INJECT,
     RC1_APPLY_MARKER,
     { lengthText: '"Cancelled " + active.length + " scheduled reminder" + (active.length === 1 ? "" : "s") + "."' },
@@ -171,8 +171,8 @@ export function patchPersistentShellCacheRecovery(file, label) {
  * @returns {string} Patched source.
  */
 export function patchApprovalPolicyIdleNoticeSource(source) {
-  const marker = 'setApprovalPolicy(agent.session, policy);\n\t\tagent.inject(createUserMessage({'
-  if (source.split(marker).length !== 2) {
+  const marker = /setApprovalPolicy\(agent\.session, policy\);\s+agent\.inject\(createUserMessage\(\{/u
+  if (!marker.test(source)) {
     throw new Error('Unexpected user-approval policy shape; cannot skip an idle switch notice.')
   }
   return source.replace(

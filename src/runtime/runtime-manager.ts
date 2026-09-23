@@ -176,7 +176,14 @@ export class RuntimeManager implements vscode.Disposable {
       const generatedDir = path.join(this.layout.generated, launch.version)
       const overlay = path.join(generatedDir, 'vscode.patch.yml')
       await Promise.all([mkdir(home, { recursive: true }), mkdir(generatedDir, { recursive: true })])
-      await writeAtomic(overlay, renderRuntimeOverlay(configuration))
+      const [claudeHooksConfigPath, codexHooksConfigPath] = await Promise.all([
+        findWorkspaceHookConfig(workspace, ['.claude/hooks.json', '.claude/settings.json', 'hooks.json']),
+        findWorkspaceHookConfig(workspace, ['.codex/hooks.json']),
+      ])
+      await writeAtomic(overlay, renderRuntimeOverlay(configuration, {
+        ...(claudeHooksConfigPath === undefined ? {} : { claudeHooksConfigPath }),
+        ...(codexHooksConfigPath === undefined ? {} : { codexHooksConfigPath }),
+      }))
 
       const args = [...launch.args, 'web', '--patch', overlay, '--host', '127.0.0.1', '--port', '0', '--no-open']
       const env: NodeJS.ProcessEnv = {
@@ -468,6 +475,18 @@ function workspaceDirectory(): string {
     if (folder !== undefined) return folder.uri.fsPath
   }
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd()
+}
+
+async function findWorkspaceHookConfig(workspace: string, candidates: readonly string[]): Promise<string | undefined> {
+  for (const candidate of candidates) {
+    try {
+      const value = await stat(path.join(workspace, candidate))
+      if (value.isFile()) return `./${candidate.replaceAll('\\', '/')}`
+    } catch {
+      // An absent hook config is normal; try the next supported location.
+    }
+  }
+  return undefined
 }
 
 async function probeGateway(baseUrl: string): Promise<boolean> {
