@@ -3,6 +3,7 @@ import * as vscode from 'vscode'
 import { errorMessage, type Logger } from '../platform/logger.js'
 import { EventStream } from './event-stream.js'
 import { bootstrapGatewayCookie, withGatewayCookie } from './auth.js'
+import { requestLoopbackGateway } from './local-http.js'
 import {
   expandHistoryRecords,
   isRecord,
@@ -251,9 +252,9 @@ export class GatewayClient implements vscode.Disposable {
 
   private async request<T>(endpoint: string, args: unknown, signal?: AbortSignal): Promise<T> {
     const rpcId = randomUUID()
-    let response: Response
+    let response
     try {
-      response = await fetch(new URL(`/api/${endpoint}`, this.baseUrl), {
+      response = await requestLoopbackGateway(new URL(`/api/${endpoint}`, this.baseUrl), {
         method: 'POST',
         headers: withGatewayCookie({ 'content-type': 'application/json' }, this.cookie),
         body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload: { args } }),
@@ -262,8 +263,17 @@ export class GatewayClient implements vscode.Disposable {
     } catch (error) {
       throw new Error(`Harness RPC ${endpoint} transport failed: ${errorMessage(error)}`)
     }
-    if (!response.ok) throw new Error(`Harness RPC ${endpoint} returned HTTP ${response.status}.`)
-    const parsed = parseServerResponse(await response.json())
+    if (response.statusCode >= 300 && response.statusCode < 400) {
+      throw new Error(`Harness RPC ${endpoint} attempted a redirect; refusing to forward local authentication.`)
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) throw new Error(`Harness RPC ${endpoint} returned HTTP ${response.statusCode}.`)
+    let body: unknown
+    try {
+      body = JSON.parse(response.body)
+    } catch {
+      throw new Error(`Harness RPC ${endpoint} returned invalid JSON.`)
+    }
+    const parsed = parseServerResponse(body)
     if (parsed.rpcId !== rpcId) throw new Error(`Harness RPC ${endpoint} response id mismatch.`)
     if (!parsed.result.ok) throw new Error(`Harness RPC ${endpoint} failed: ${parsed.result.error.code}: ${parsed.result.error.message}`)
     return parsed.result.value as T

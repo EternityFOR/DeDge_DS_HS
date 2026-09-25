@@ -4,6 +4,7 @@ import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   patchApprovalPolicyIdleNotice,
+  patchCredentialEnvironmentScrub,
   patchPermissionSandboxTerminalClose,
   patchPersistentShellCacheRecovery,
   patchScheduleCancelCommandAlpha2,
@@ -89,6 +90,7 @@ if (expectedDsh === '0.1.3-alpha.2') {
   patchScheduleCancelCommandAlpha2(path.join(runtimeModules, '@deepseek-ai', 'dsh-schedule', 'lib', 'index.js'))
   patchLegacySessionOrigin(path.join(runtimeModules, '@deepseek-ai', 'dsh-session-format-v0-to-v1', 'lib', 'index.js'))
 } else if (expectedDsh.startsWith('0.1.5-rc.')) {
+  patchCredentialEnvironmentScrub(path.join(runtimeModules, '@deepseek-ai', 'dsh-subprocess', 'lib', 'index.js'))
   patchScheduleCancelCommandRc1(path.join(runtimeModules, '@deepseek-ai', 'dsh-schedule', 'lib', 'index.js'))
   patchApprovalPolicyIdleNotice(path.join(runtimeModules, '@deepseek-ai', 'dsh-user-approval', 'lib', 'index.js'))
   patchPermissionSandboxTerminalClose(path.join(runtimeModules, '@deepseek-ai', 'dsh-permission-presets', 'lib', 'index.js'))

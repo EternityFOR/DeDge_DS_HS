@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
+import { assertLoopbackGatewayUrl, directLoopbackAgent } from './local-http.js'
 import { expandHistoryRecords, isRecord, type HostFrame, type MuxFrame } from './protocol.js'
 import type { Logger } from '../platform/logger.js'
 
@@ -182,9 +183,10 @@ export class EventStream implements Disposable {
 
   private open(spec: StreamSpec): void {
     if (this.stopped || spec.closed) return
-    const url = new URL('/api/remote.mux', this.baseUrl)
-    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+    const url = new URL('/api/remote.mux', assertLoopbackGatewayUrl(this.baseUrl))
+    url.protocol = 'ws:'
     const socket = new WebSocket(url.toString(), {
+      agent: directLoopbackAgent,
       handshakeTimeout: 5_000,
       ...(this.cookie === undefined ? {} : { headers: { cookie: this.cookie } }),
     })

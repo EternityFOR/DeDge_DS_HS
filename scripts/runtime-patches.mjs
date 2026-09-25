@@ -188,3 +188,22 @@ export function patchApprovalPolicyIdleNoticeSource(source) {
 export function patchApprovalPolicyIdleNotice(file) {
   writeFileSync(file, patchApprovalPolicyIdleNoticeSource(readFileSync(file, 'utf8')))
 }
+
+/**
+ * Extend the bundled Harness child-process environment scrub for common
+ * credential names missed by the upstream KEY/PASSWORD/SECRET/TOKEN heuristic.
+ * @param {string} source - Compiled `@deepseek-ai/dsh-subprocess` entry point.
+ * @returns {string} Patched source.
+ */
+export function patchCredentialEnvironmentScrubSource(source) {
+  const marker = 'const SENSITIVE_ENV_PATTERN = /KEY|PASSWORD|SECRET|TOKEN/i;'
+  if (source.split(marker).length !== 2) {
+    throw new Error('Unexpected dsh-subprocess credential scrub shape; cannot protect passphrase/credential variables.')
+  }
+  return source.replace(marker, 'const SENSITIVE_ENV_PATTERN = /KEY|PASSWORD|SECRET|TOKEN|PASSPHRASE|CREDENTIAL/i;')
+}
+
+/** Apply the bundled child-process credential scrub patch. */
+export function patchCredentialEnvironmentScrub(file) {
+  writeFileSync(file, patchCredentialEnvironmentScrubSource(readFileSync(file, 'utf8')))
+}

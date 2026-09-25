@@ -16,10 +16,12 @@ const overlayPath = path.join(smokeRoot, 'vscode.patch.yml')
 const hookConfigPath = path.join(smokeRoot, 'claude-hooks.json')
 const gatewayClientModule = path.join(smokeRoot, 'gateway-client.mjs')
 const home = path.join(smokeRoot, 'path with spaces', 'home')
+const smokeWorkspace = path.join(smokeRoot, 'workspace with spaces')
 const runtimeBin = path.join(smokeRoot, 'runtime-bin')
 
 await rm(smokeRoot, { recursive: true, force: true })
 await mkdir(runtimeBin, { recursive: true })
+await mkdir(smokeWorkspace, { recursive: true })
 await writeFile(hookConfigPath, `${JSON.stringify({ SessionStart: [] })}\n`, 'utf8')
 
 let child
@@ -73,7 +75,7 @@ try {
   delete env.DEEPSEEK_BASE_URL
   Object.assign(env, {
     DSH_HOME: home,
-    DSH_CWD: root,
+    DSH_CWD: smokeWorkspace,
     DSH_PERMISSION_MODE: 'read-only',
     DSH_TELEMETRY_DISABLED: '1',
     DSH_BUNDLED_NODE: node,
@@ -83,7 +85,8 @@ try {
   })
 
   child = spawn(node, [dsh, 'web', '--patch', overlayPath, '--host', '127.0.0.1', '--port', '0', '--no-open'], {
-    cwd: root,
+    // Keep the smoke isolated from the developer's checkout `.env` and workspace data.
+    cwd: smokeWorkspace,
     env,
     shell: false,
     windowsHide: true,
@@ -94,7 +97,7 @@ try {
   const description = { version: '0.1.5-rc.3' }
   const listed = await rpc(url, 'session/list', { args: { _request: {} } }, cookie)
   if (!Array.isArray(listed?.items)) throw new Error(`session/list returned a malformed response: ${JSON.stringify(listed)}`)
-  const session = await rpc(url, 'session/create', { args: { request: { cwd: root, agentPreset: 'standard' } } }, cookie)
+  const session = await rpc(url, 'session/create', { args: { request: { cwd: smokeWorkspace, agentPreset: 'standard' } } }, cookie)
   if (typeof session?.sessionId !== 'string' || session.sessionId === '') {
     throw new Error(`session.create returned a malformed response: ${JSON.stringify(session)}`)
   }
@@ -139,7 +142,7 @@ try {
       throw new Error(`schedule-cancel command returned an unexpected result: ${JSON.stringify(cancelSchedules)}`)
     }
   }
-  const visionSession = await rpc(url, 'session/create', { args: { request: { cwd: root, agentPreset: 'standard' } } }, cookie)
+  const visionSession = await rpc(url, 'session/create', { args: { request: { cwd: smokeWorkspace, agentPreset: 'standard' } } }, cookie)
   await rpc(url, 'session/selectModel', { args: { request: { sessionId: visionSession.sessionId, provider: 'deepseek-official', model: 'deepseek-v4-flash-vision-exp', reasoningEffort: 'off' } } }, cookie)
   const imagePrompt = await rpc(url, 'session/prompt', { args: { request: {
     requestId: 'runtime-smoke-image',

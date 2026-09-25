@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   patchApprovalPolicyIdleNoticeSource,
+  patchCredentialEnvironmentScrubSource,
   patchPermissionSandboxTerminalCloseSource,
   patchPersistentShellCacheRecoverySource,
   patchScheduleCancelCommandAlpha2Source,
@@ -91,6 +92,13 @@ describe('bundled runtime source patches', () => {
     const patched = patchApprovalPolicyIdleNoticeSource(source)
     expect(patched).toContain('if (agent.status !== "idle") agent.inject(createUserMessage({')
     expect(patched).toContain('setApprovalPolicy(agent.session, policy);')
+  })
+
+  it('scrubs passphrases and credential-named variables before spawning tools', () => {
+    const source = 'const SENSITIVE_ENV_PATTERN = /KEY|PASSWORD|SECRET|TOKEN/i;\nfunction scrubbedParentEnv() {}'
+    const patched = patchCredentialEnvironmentScrubSource(source)
+    expect(patched).toContain('/KEY|PASSWORD|SECRET|TOKEN|PASSPHRASE|CREDENTIAL/i')
+    expect(() => patchCredentialEnvironmentScrubSource('const unrelated = true')).toThrow('Unexpected dsh-subprocess credential scrub shape')
   })
   it('refuses unknown compiled plugin shapes instead of emitting a half patch', () => {
     expect(() => patchScheduleCancelCommandRc1Source('export const unrelated = true\n')).toThrow('Unexpected 0.1.5 RC')

@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { once } from 'node:events'
+import * as http from 'node:http'
+import { describe, expect, it } from 'vitest'
 import { GatewayClient } from '../src/gateway/gateway-client.js'
 import { bootstrapGatewayCookie, withGatewayCookie } from '../src/gateway/auth.js'
+import { assertLoopbackGatewayUrl, directLoopbackAgent } from '../src/gateway/local-http.js'
 import {
   parseContextPressureProjection,
   expandHistoryRecords,
@@ -14,22 +17,65 @@ import {
   parseServerResponse,
 } from '../src/gateway/protocol.js'
 
+async function withLoopbackServer(
+  handler: (request: http.IncomingMessage, response: http.ServerResponse) => void | Promise<void>,
+  action: (baseUrl: string) => Promise<void>,
+): Promise<void> {
+  const server = http.createServer((request, response) => {
+    void Promise.resolve(handler(request, response)).catch(() => {
+      response.statusCode = 500
+      response.end()
+    })
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address()
+  if (address === null || typeof address === 'string') throw new Error('Test server did not bind a TCP port.')
+  try {
+    await action(`http://127.0.0.1:${String(address.port)}/`)
+  } finally {
+    server.close()
+    await once(server, 'close')
+  }
+}
+
+async function readJsonBody(request: http.IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = []
+  for await (const chunk of request) chunks.push(Buffer.from(chunk))
+  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
+}
+
+function writeJson(response: http.ServerResponse, value: unknown): void {
+  response.writeHead(200, { 'content-type': 'application/json' })
+  response.end(JSON.stringify(value))
+}
+
 describe('Gateway JSON frame parsing', () => {
   it('exchanges an alpha.3 launch token for a cookie without retaining query credentials in API headers', async () => {
-    const originalFetch = globalThis.fetch
-    try {
-      let requested = ''
-      globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
-        requested = String(input)
-        return new Response('', { status: 303, headers: { 'set-cookie': 'dsh-auth-test=opaque; Path=/; HttpOnly' } })
-      })
-      const cookie = await bootstrapGatewayCookie('http://127.0.0.1:3210/?token=launch-token')
-      expect(requested).toBe('http://127.0.0.1:3210/?token=launch-token')
+    let requestedPath = ''
+    let requestCookie: string | undefined
+    await withLoopbackServer((request, response) => {
+      requestedPath = request.url ?? ''
+      requestCookie = request.headers.cookie
+      response.writeHead(303, { 'set-cookie': 'dsh-auth-test=opaque; Path=/; HttpOnly' })
+      response.end()
+    }, async baseUrl => {
+      const cookie = await bootstrapGatewayCookie(`${baseUrl}?token=launch-token`)
+      expect(requestedPath).toBe('/?token=launch-token')
+      expect(requestCookie).toBeUndefined()
       expect(cookie).toBe('dsh-auth-test=opaque')
       expect(withGatewayCookie({ 'content-type': 'application/json' }, cookie)).toEqual({ 'content-type': 'application/json', cookie: 'dsh-auth-test=opaque' })
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
+  })
+
+  it('rejects non-loopback Gateway URLs and uses an explicit direct HTTP agent', () => {
+    expect(() => assertLoopbackGatewayUrl('http://example.com:3210')).toThrow('127.0.0.1')
+    const urlWithCredentials = new URL('http://127.0.0.1:3210')
+    urlWithCredentials.username = 'test-user'
+    urlWithCredentials.password = 'test-pass'
+    expect(() => assertLoopbackGatewayUrl(urlWithCredentials)).toThrow('URL')
+    expect(directLoopbackAgent).not.toBe(http.globalAgent)
+    expect((directLoopbackAgent as unknown as { readonly options: { readonly proxyEnv?: unknown } }).options.proxyEnv).toBeUndefined()
   })
 
   it('parses an authenticated durable session image attachment', () => {
@@ -66,37 +112,31 @@ describe('Gateway JSON frame parsing', () => {
   })
 
   it('requires the native cancel acknowledgement', async () => {
-    const originalFetch = globalThis.fetch
-    try {
-      globalThis.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-        const request = JSON.parse(String(init?.body)) as { rpcId: string }
-        return new Response(JSON.stringify({
+    await withLoopbackServer(async (incoming, response) => {
+      const request = await readJsonBody(incoming)
+      writeJson(response, {
           type: 'server-response',
           rpcId: request.rpcId,
           result: { ok: true, value: { accepted: false } },
-        }), { status: 200, headers: { 'content-type': 'application/json' } })
-      })
-      const client = new GatewayClient('http://127.0.0.1:1/', {} as never)
+        })
+    }, async baseUrl => {
+      const client = new GatewayClient(baseUrl, {} as never)
       await expect(client.cancel('session-1')).rejects.toThrow('did not acknowledge')
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 
   it('sends native queue edit, steer, and remove mutations', async () => {
-    const originalFetch = globalThis.fetch
     const payloads: unknown[] = []
-    try {
-      globalThis.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body)) as { rpcId: string; payload?: unknown }
-        payloads.push(body.payload)
-        return new Response(JSON.stringify({
+    await withLoopbackServer(async (incoming, response) => {
+      const body = await readJsonBody(incoming)
+      payloads.push(body.payload)
+      writeJson(response, {
           type: 'server-response',
           rpcId: body.rpcId,
           result: { ok: true, value: { accepted: true } },
-        }), { status: 200, headers: { 'content-type': 'application/json' } })
-      })
-      const client = new GatewayClient('http://127.0.0.1:1/', {} as never)
+        })
+    }, async baseUrl => {
+      const client = new GatewayClient(baseUrl, {} as never)
       await client.updateQueueItem('session-1', 'message-1', { kind: 'edit', content: [{ type: 'text', text: 'Revised prompt' }] })
       await client.updateQueueItem('session-1', 'message-1', { kind: 'steer' })
       await client.removeQueueItem('session-1', 'message-1')
@@ -105,51 +145,41 @@ describe('Gateway JSON frame parsing', () => {
         { args: { request: { sessionId: 'session-1', itemId: 'message-1', action: { kind: 'steer' } } } },
         { args: { request: { sessionId: 'session-1', itemId: 'message-1', action: { kind: 'remove' } } } },
       ])
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 
   it('uses the persistent projected title from session.list before history is opened', async () => {
-    const originalFetch = globalThis.fetch
-    try {
-      globalThis.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-        const request = JSON.parse(String(init?.body)) as { rpcId: string }
-        return new Response(JSON.stringify({
+    await withLoopbackServer(async (incoming, response) => {
+      const request = await readJsonBody(incoming)
+      writeJson(response, {
           type: 'server-response',
           rpcId: request.rpcId,
           result: { ok: true, value: { items: [{ sessionId: 'session-1', updatedAt: 1, running: false, blank: false, projections: { asOfSeq: 8, values: { title: 'Vision capability test', agentPreset: 'minimal' } } }] } },
-        }), { status: 200, headers: { 'content-type': 'application/json' } })
-      })
-      const client = new GatewayClient('http://127.0.0.1:1/', {} as never)
+        })
+    }, async baseUrl => {
+      const client = new GatewayClient(baseUrl, {} as never)
       await expect(client.listSessions()).resolves.toMatchObject({ items: [{ sessionId: 'session-1', title: 'Vision capability test', agentPreset: 'minimal' }] })
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 
   it('uses the generated commands/execute route and parses its command result', async () => {
-    const originalFetch = globalThis.fetch
-    try {
       let requestedUrl = ''
       let requestedBody: unknown
-      globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-        requestedUrl = String(input)
-        requestedBody = JSON.parse(String(init?.body)) as unknown
-        const rpcId = (requestedBody as { rpcId: string }).rpcId
-        return new Response(JSON.stringify({
+    await withLoopbackServer(async (incoming, response) => {
+      requestedUrl = `http://${incoming.headers.host}${incoming.url}`
+      requestedBody = await readJsonBody(incoming)
+      const rpcId = (requestedBody as { rpcId: string }).rpcId
+      writeJson(response, {
           type: 'server-response',
           rpcId,
           result: { ok: true, value: { commandId: 'cmd-1', result: { kind: 'success', text: 'Compacted 12 history items.' } } },
-        }), { status: 200, headers: { 'content-type': 'application/json' } })
-      })
-      const client = new GatewayClient('http://127.0.0.1:1/', {} as never)
+        })
+    }, async baseUrl => {
+      const client = new GatewayClient(baseUrl, {} as never)
       await expect(client.executeCommand('session-1', '/compact')).resolves.toEqual({ result: { kind: 'success', text: 'Compacted 12 history items.' } })
-      expect(requestedUrl).toBe('http://127.0.0.1:1/api/commands/execute')
+      expect(requestedUrl).toBe(`${baseUrl.slice(0, -1)}/api/commands/execute`)
       expect(requestedBody).toMatchObject({ method: 'commands/execute', payload: { args: { agentId: 'session-1', line: '/compact', submittedAttachments: [] } } })
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 
   it('parses server requests and preserves arbitrary payloads', () => {

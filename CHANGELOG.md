@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.1.92] - 2026-09-25
+
+### Security
+
+- Gateway bootstrap, REST RPC, readiness checks, and WebSocket streaming now use explicit direct loopback transports. Authenticated local requests no longer inherit Node environment-proxy routing, and REST redirects are rejected instead of followed.
+- The bundled Harness subprocess environment scrub now also catches `PASSPHRASE` and `CREDENTIAL` names that the upstream key/password/secret/token heuristic missed.
+- Documented the bundled Harness workspace `.env` credential fallback and clarified that workspace environment files are not isolated from same-user Agent tools.
+
+### Tests
+
+- Added loopback transport tests for direct-agent use, non-loopback rejection, redirect handling, and Gateway bootstrap.
+- Added a runtime source-patch regression test for the stronger credential environment scrub.
+
 ## [0.1.91] - 2026-09-23
 
 ### Changed
@@ -917,7 +930,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.91...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.92...HEAD
+[0.1.92]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.92
 [0.1.91]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.91
 [0.1.90]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.90
 [0.1.89]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.89

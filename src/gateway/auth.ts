@@ -1,3 +1,5 @@
+import { requestLoopbackGateway } from './local-http.js'
+
 /**
  * Exchange the alpha.2 process launch token for the browser-session cookie
  * required by the local Gateway. Older Harness runtimes did not print a
@@ -13,15 +15,14 @@ export async function bootstrapGatewayCookie(baseUrl: string): Promise<string | 
   endpoint.search = ''
   endpoint.hash = ''
   endpoint.searchParams.set('token', token)
-  const response = await fetch(endpoint, {
+  const response = await requestLoopbackGateway(endpoint, {
     method: 'GET',
-    redirect: 'manual',
     headers: { accept: 'text/html' },
+    timeoutMs: 10_000,
   })
-  if (response.status !== 303) throw new Error(`Harness gateway authentication bootstrap returned HTTP ${response.status}.`)
+  if (response.statusCode !== 303) throw new Error(`Harness gateway authentication bootstrap returned HTTP ${response.statusCode}.`)
 
-  const headers = response.headers as Headers & { readonly getSetCookie?: () => string[] }
-  const raw = headers.getSetCookie?.()[0] ?? headers.get('set-cookie')
+  const raw = response.headers['set-cookie']?.[0]
   const cookie = raw?.split(';', 1)[0]?.trim()
   if (cookie === undefined || cookie === '' || !cookie.includes('=')) {
     throw new Error('Harness gateway authentication bootstrap did not return a session cookie.')

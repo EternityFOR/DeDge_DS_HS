@@ -6,7 +6,7 @@ A self-contained DeepSeek Harness workbench for VS Code. Platform-specific VSIX 
 
 [Marketplace](https://marketplace.visualstudio.com/items?itemName=diractive-edge.dedge-deepseek-harness-vscode) | [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) | [Changelog](CHANGELOG.md) | [Privacy](PRIVACY.md) | [Security](SECURITY.md) | [Support](SUPPORT.md)
 
-> The current version is `0.1.91`. Release artifacts are primarily verified on Windows 10/11 x64. DeepSeek Harness remains a developer preview, so review the changelog and known limitations before upgrading.
+> The current version is `0.1.92`. Release artifacts are primarily verified on Windows 10/11 x64. DeepSeek Harness remains a developer preview, so review the changelog and known limitations before upgrading.
 
 ## Highlights
 
@@ -17,6 +17,7 @@ A self-contained DeepSeek Harness workbench for VS Code. Platform-specific VSIX 
 - Read-only Codex and Claude Code session discovery with isolated text handoffs between all three tools.
 - Windows-safe process spawning with argument arrays and `shell: false`, avoiding a second PowerShell or cmd parsing pass.
 - API keys stored only in VS Code SecretStorage. The local gateway listens on a random `127.0.0.1` port.
+- The bundled Harness also follows its upstream credential fallback and may read `.env` from the trusted workspace and isolated `DSH_HOME`. Tool subprocesses scrub common sensitive variable names, but that is not a boundary against arbitrary workspace secrets; do not put a value in workspace `.env` if the agent must not access it.
 - The official `dsh-schedule` plugin is enabled by default and exposes `schedule_create`, `schedule_list`, and `schedule_delete`; reminders are session-local and do not require PowerShell `Start-Sleep` loops.
 - If the workspace contains `.claude/hooks.json`, `.claude/settings.json`, a root `hooks.json`, or `.codex/hooks.json`, the runtime mounts the official hook bridge automatically. These local configs are read in place and never copied into the VSIX.
 - DeepSeek image history uses the upstream alpha.2 normalization and Files API reuse path when supported by the endpoint, while the extension keeps credentials and private session data local.
@@ -28,7 +29,7 @@ Search for **DeDge DeepSeek Harness** in VS Code Extensions and verify the publi
 For a pinned build, download the package matching the extension host platform from [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases), then choose **Extensions: Install from VSIX...**.
 
 ```powershell
-code --install-extension .\dedge-deepseek-harness-vscode-0.1.91-win32-x64.vsix
+code --install-extension .\dedge-deepseek-harness-vscode-0.1.92-win32-x64.vsix
 ```
 
 Remote SSH, WSL, and Dev Containers use the remote extension host platform and architecture, not the local UI platform. Platform VSIX packages are not interchangeable.
@@ -69,7 +70,7 @@ See [Session handoff](docs/session-handoff.md) for the full boundary.
 | Node.js | `22.22.3` |
 | pnpm | `11.21.0` |
 
-`0.1.5-rc.3` is the bundled upstream DeepSeek Harness version; it is separate from the extension version `0.1.91`.
+`0.1.5-rc.3` is the bundled upstream DeepSeek Harness version; it is separate from the extension version `0.1.92`.
 
 The source and CI support native Windows x64, Linux x64, and macOS runners. Only packages explicitly attached to a GitHub Release or published to Marketplace are release artifacts.
 

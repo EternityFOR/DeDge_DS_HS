@@ -1,5 +1,9 @@
 # Privacy
 
+## Bundled Harness credential fallback
+
+The extension-managed API key is stored in VS Code `SecretStorage` and injected into the local Harness process. The bundled upstream Harness also reads `.env` from the trusted workspace and its version-isolated `DSH_HOME` as documented credential/environment fallbacks. Tool subprocesses remove common sensitive variable names (`KEY`, `PASSWORD`, `SECRET`, `TOKEN`, `CREDENTIAL`, `PASSPHRASE`), but this is not an isolation boundary against arbitrary secrets or against tools that can read trusted workspace files. Do not store a secret in a workspace `.env` if the agent must not be able to access it.
+
 本说明适用于 DeDge DeepSeek Harness VS Code 扩展本身。VS Code、DeepSeek Harness、用户选择的模型 endpoint、Codex、Claude Code 以及代理调用的外部工具有各自的隐私政策和数据处理边界。
 
 ## 数据流

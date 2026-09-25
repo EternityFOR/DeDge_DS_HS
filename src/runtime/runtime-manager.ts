@@ -31,6 +31,7 @@ import {
   gatewayLeaseMatchesVersion,
 } from './gateway-lease.js'
 import { checkWindowsCompatibility, describeWindowsExitCode } from './windows-compat.js'
+import { requestLoopbackGateway } from '../gateway/local-http.js'
 
 // alpha.2 prints an authenticated root URL (`/?token=...`); keep the token
 // because the Gateway exchanges it for the API session cookie.
@@ -494,14 +495,13 @@ async function probeGateway(baseUrl: string): Promise<boolean> {
     const endpoint = new URL(baseUrl)
     endpoint.pathname = '/'
     endpoint.hash = ''
-    const response = await fetch(endpoint, {
+    const response = await requestLoopbackGateway(endpoint, {
       method: 'GET',
-      redirect: 'manual',
-      signal: AbortSignal.timeout(2_000),
+      timeoutMs: 2_000,
     })
     // alpha.2 returns 303 after accepting the process token. Older compatible
     // external runtimes may serve the index directly with a 2xx response.
-    return response.status === 303 || response.ok
+    return response.statusCode === 303 || (response.statusCode >= 200 && response.statusCode < 300)
   } catch {
     return false
   }
