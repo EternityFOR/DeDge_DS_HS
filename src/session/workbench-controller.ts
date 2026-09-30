@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer'
+import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { readdir, rm, stat } from 'node:fs/promises'
 import * as path from 'node:path'
@@ -284,7 +285,7 @@ export class WorkbenchController implements vscode.Disposable {
     this.publish()
   }
 
-  async send(text: string, attachments: readonly ContextAttachment[] = [], mode: 'queue' | 'steer' = 'queue', onProgress?: (progress: WorkbenchSendProgress) => void): Promise<void> {
+  async send(text: string, attachments: readonly ContextAttachment[] = [], mode: 'queue' | 'steer' = 'queue', onProgress?: (progress: WorkbenchSendProgress) => void, requestId: string = randomUUID()): Promise<void> {
     const normalized = text.trim()
     if (normalized === '' && attachments.length === 0) return
     await this.ensureStarted()
@@ -314,7 +315,7 @@ export class WorkbenchController implements vscode.Disposable {
       : undefined
     const resolved = await this.resolveAttachments(normalized, scheduleGuidance === undefined ? attachments : [scheduleGuidance, ...attachments], onProgress)
     const prompt = nativePromptContent(normalized, resolved)
-    const result = await this.promptWithOwnershipRecovery(sessionId, prompt, mode)
+    const result = await this.promptWithOwnershipRecovery(sessionId, prompt, mode, requestId)
     if (result.accepted === false) throw new Error('Harness rejected the prompt.')
     if (scheduleGuidance !== undefined) this.scheduleGuidanceSessions.add(sessionId)
   }
@@ -1221,15 +1222,16 @@ export class WorkbenchController implements vscode.Disposable {
     sessionId: string,
     prompt: string | readonly PromptContentPart[],
     mode: 'queue' | 'steer',
+    requestId: string = randomUUID(),
   ): Promise<{ readonly accepted?: boolean }> {
     try {
-      return await this.requireGateway().prompt(sessionId, prompt, mode)
+      return await this.requireGateway().prompt(sessionId, prompt, mode, requestId)
     } catch (error) {
       if (!isSessionOwnershipConflict(error)) throw error
       this.logger.warn('The active Harness session is owned by another runtime; restarting this host and retrying once: ' + errorMessage(error))
       await this.restart()
       try {
-        return await this.requireGateway().prompt(sessionId, prompt, mode)
+        return await this.requireGateway().prompt(sessionId, prompt, mode, requestId)
       } catch (retryError) {
         if (isSessionOwnershipConflict(retryError)) {
           throw new Error('This Harness session is owned by another DeepSeek Harness window. The message was not sent. Finish or close the window that owns this session, then try again.')

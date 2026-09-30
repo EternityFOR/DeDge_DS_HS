@@ -160,6 +160,20 @@ describe('Gateway JSON frame parsing', () => {
       ])
     })
   })
+  it('retains the same caller prompt id for native image/attachment admission and retries', async () => {
+    const calls: unknown[] = []
+    await withLoopbackServer(async (incoming, response) => {
+      const body = await readJsonBody(incoming)
+      calls.push(body.payload)
+      writeJson(response, { type: 'server-response', rpcId: body.rpcId, result: { ok: true, value: { accepted: true } } })
+    }, async baseUrl => {
+      const client = new GatewayClient(baseUrl, {} as never)
+      const content = [{ type: 'image' as const, mediaType: 'image/png', data: 'synthetic-image', name: 'image.png' }]
+      await client.prompt('session-1', content, 'queue', 'same-send-id')
+      await client.prompt('session-1', content, 'queue', 'same-send-id')
+      expect(calls).toEqual(Array.from({ length: 2 }, () => ({ args: { request: { sessionId: 'session-1', mode: 'queue', requestId: 'same-send-id', content } } })))
+    })
+  })
 
   it('uses the official session-scoped Schedule and Job management RPCs', async () => {
     const calls: unknown[] = []

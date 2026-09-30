@@ -44,10 +44,14 @@ function isEligibleUserMessage(message: WorkbenchMessage, snapshot: WorkbenchSna
 }
 
 function isRunningUserMessage(message: WorkbenchMessage, snapshot: WorkbenchSnapshot): boolean {
-  if (message.role !== 'user' || message.inputKind === 'automation' || message.text.trim() === '' || message.taskInterrupted === true) return false
+  if (message.role !== 'user' || message.inputKind === 'automation' || !hasUserContent(message) || message.taskInterrupted === true) return false
   const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
   return active?.running === true
     && active.operation === undefined
+}
+
+function hasUserContent(message: WorkbenchMessage): boolean {
+  return message.text.trim() !== '' || (message.attachments?.length ?? 0) > 0
 }
 
 function latestUser(snapshot: WorkbenchSnapshot): WorkbenchMessage | undefined {

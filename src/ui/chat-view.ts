@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import * as vscode from 'vscode'
 import type { ContextAttachment } from '../context/context-collector.js'
 import type { ChangeReviewService } from '../diff/change-review.js'
@@ -319,6 +319,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         return
       }
       this.sendInFlight = true
+      const requestId = message.requestId ?? randomUUID()
       try {
       const attachments = [...this.attachments]
       const sentIds = new Set(attachments.map(item => item.id))
@@ -326,7 +327,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       // Release the composer before any settings/model-list lookup.  getSettings()
       // can perform a provider network request (and an unreachable endpoint must
       // never make a normal text message look as if it was not sent).
-      await this.post({ type: 'sendStarted', text: message.text, attachments: attachments.map(item => ({ label: item.label })), mode: message.mode ?? 'queue' })
+      await this.post({ type: 'sendStarted', text: message.text, attachments: attachments.map(item => ({ label: item.label })), mode: message.mode ?? 'queue', requestId })
       await this.postState()
       try {
         // Only image sends need the vision settings lookup/confirmation.  Keep
@@ -342,22 +343,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
             )
             if (confirmed !== 'Use Auxiliary Vision') {
               this.attachments = [...attachments, ...this.attachments.filter(item => !sentIds.has(item.id))]
-              await this.post({ type: 'sendSettled', accepted: false, text: message.text })
+              await this.post({ type: 'sendSettled', accepted: false, text: message.text, requestId })
               await this.postState()
               return
             }
           }
         }
-        await this.controller.send(message.text, attachments, message.mode ?? 'queue', progress => { void this.post({ type: 'sendProgress', progress }) })
+        await this.controller.send(message.text, attachments, message.mode ?? 'queue', progress => { void this.post({ type: 'sendProgress', progress }) }, requestId)
         if (this.pendingHandoff?.sessionId === this.controller.snapshot().activeSessionId) await this.clearPendingHandoff()
-        await this.post({ type: 'sendSettled', accepted: true, text: message.text })
+        await this.post({ type: 'sendSettled', accepted: true, text: message.text, requestId })
         await this.postState()
       } catch (error) {
         const detail = errorMessage(error)
         this.attachments = [...attachments, ...this.attachments.filter(item => !sentIds.has(item.id))]
         this.logger.error('Workbench send failed', error)
         await this.post({ type: 'notice', level: 'error', message: conciseNotice(detail) })
-        await this.post({ type: 'sendSettled', accepted: false, text: message.text })
+        await this.post({ type: 'sendSettled', accepted: false, text: message.text, requestId })
         await this.postState()
       }
       return
@@ -596,7 +597,7 @@ function parseWebviewMessage(value: unknown): WebviewToHostMessage {
     || type === 'setApiKey' || type === 'openSettings' || type === 'attachFile' || type === 'attachExternalFile'
     || type === 'compact' || type === 'configureContextWindow' || type === 'handoff' || type === 'showLogs' || type === 'reviewChanges' || type === 'diagnose') return { type }
   if (type === 'saveSettings' && isRecord(value.settings)) return { type, settings: parseSettings(value.settings) }
-  if (type === 'send' && typeof value.text === 'string') return { type, text: value.text, ...(value.mode === 'queue' || value.mode === 'steer' ? { mode: value.mode } : {}) }
+  if (type === 'send' && typeof value.text === 'string') return { type, text: value.text, ...(value.mode === 'queue' || value.mode === 'steer' ? { mode: value.mode } : {}), ...(typeof value.requestId === 'string' && /^[a-zA-Z0-9-]{1,128}$/u.test(value.requestId) ? { requestId: value.requestId } : {}) }
   if ((type === 'steerQueueItem' || type === 'removeQueueItem') && typeof value.itemId === 'string' && value.itemId.length <= 256) return { type, itemId: value.itemId }
   if (type === 'editQueueItem' && typeof value.itemId === 'string' && value.itemId.length <= 256 && typeof value.text === 'string' && value.text.length <= 1_048_576) return { type, itemId: value.itemId, text: value.text }
   if (type === 'selectSession' && typeof value.sessionId === 'string' && value.sessionId.length <= 256) return { type, sessionId: value.sessionId }

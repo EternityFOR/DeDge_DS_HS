@@ -44,6 +44,7 @@ import type { SkillSummary } from '../../skills/skill-catalog.js'
 import type { WorkbenchMessage, WorkbenchSnapshot } from '../../session/types.js'
 import { autonomousQueueItems, hasActiveTurn, hasAgentActivity, hasAutonomousActivity, hasAutonomousAgentActivity, modelControlsUnavailableReason, modelRecoveryCandidate, sendDeliveryPlan } from '../../session/interaction-readiness.js'
 import { isWaitingForUserMessage, shouldShowUserMessageActions } from '../message-actions.js'
+import { hasDurableSendReceipt } from '../send-receipt.js'
 import type { HostToWebviewMessage, WebviewToHostMessage, WorkbenchSettings } from '../webview-protocol.js'
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewToHostMessage): void; setState(value: unknown): void; getState(): unknown }
@@ -102,7 +103,10 @@ let noticeTimer: number | undefined
 let sendPending = false
 let pendingSendPreview: HTMLElement | undefined
 let pendingSendText: string | undefined
-let pendingSendBaselineCount = 0
+let pendingSendRequestId: string | undefined
+let pendingSendAttachmentLabels: readonly string[] = []
+let pendingSendBaselineSeq: number | undefined
+const acknowledgedSendIds = new Set<string>()
 let pendingSendMode: 'queue' | 'steer' = 'queue'
 let pendingSendBaselineIds = new Set<string>()
 let pendingQueueBaselineIds = new Set<string>()
@@ -498,10 +502,11 @@ window.addEventListener('message', event => {
       // The durable event is the authoritative acknowledgement. Harness may
       // normalize whitespace or project attachment/context blocks, so exact
       // text equality is not reliable enough to retire the optimistic row.
-      clearPendingSendPreview()
+      acknowledgePendingSend()
     }
     scheduleRender()
   } else if (message.type === 'sendStarted') {
+    if (message.requestId !== undefined && acknowledgedSendIds.has(message.requestId)) return
     if (elements.prompt.value === message.text) {
       elements.prompt.value = ''
       vscode.setState({ draft: '' })
@@ -511,12 +516,16 @@ window.addEventListener('message', event => {
     // The composer creates this preview optimistically on click.  Keep the
     // host receipt idempotent so a slow settings/vision lookup cannot delay the
     // user's message or replace an already visible waiting row.
-    beginPendingSend(message.text, message.attachments.map(item => item.label), message.mode ?? 'queue')
+    beginPendingSend(message.text, message.attachments.map(item => item.label), message.mode ?? 'queue', false, message.requestId)
   } else if (message.type === 'sendProgress') {
     renderPendingVisionProgress(message.progress)
   } else if (message.type === 'sendSettled') {
+    // A stale host receipt must not settle a newer send (notably image/vision
+    // admission). The durable row may have arrived before this RPC settles.
+    if (pendingSendRequestId !== undefined && message.requestId !== undefined && message.requestId !== pendingSendRequestId) return
     sendPending = false
-    if (!message.accepted) {
+    const durablyAccepted = message.requestId !== undefined && acknowledgedSendIds.has(message.requestId)
+    if (!message.accepted && !durablyAccepted) {
       clearPendingSendPreview()
       steerPendingText = undefined
       elements.steerNotice.classList.add('hidden')
@@ -526,7 +535,7 @@ window.addEventListener('message', event => {
         resizePrompt()
       }
     } else {
-      if (state !== undefined && hasPendingDurableMessage(state.messages)) clearPendingSendPreview()
+      if (state !== undefined && hasPendingDurableMessage(state.messages)) acknowledgePendingSend()
       else {
         const status = pendingSendPreview?.querySelector('.message-send-status')
         if (status !== null && status !== undefined) {
@@ -945,7 +954,9 @@ function clearPendingQueuePreview(): void {
   pendingSendPreview?.remove()
   pendingSendPreview = undefined
   pendingSendText = undefined
-  pendingSendBaselineCount = 0
+  pendingSendRequestId = undefined
+  pendingSendAttachmentLabels = []
+  pendingSendBaselineSeq = undefined
   pendingSendBaselineIds = new Set<string>()
   pendingQueueBaselineIds = new Set<string>()
   pendingQueueMatchedId = undefined
@@ -955,20 +966,29 @@ function clearPendingSendPreview(): void {
   pendingSendPreview?.remove()
   pendingSendPreview = undefined
   pendingSendText = undefined
-  pendingSendBaselineCount = 0
+  pendingSendRequestId = undefined
+  pendingSendAttachmentLabels = []
+  pendingSendBaselineSeq = undefined
   pendingSendBaselineIds = new Set<string>()
   pendingQueueBaselineIds = new Set<string>()
   pendingQueueRemoveRequestedId = undefined
   pendingQueueMatchedId = undefined
 }
 
+function acknowledgePendingSend(): void {
+  if (pendingSendRequestId !== undefined) {
+    acknowledgedSendIds.add(pendingSendRequestId)
+    if (acknowledgedSendIds.size > 32) {
+      const oldest = acknowledgedSendIds.values().next().value
+      if (oldest !== undefined) acknowledgedSendIds.delete(oldest)
+    }
+  }
+  clearPendingSendPreview()
+}
+
 function hasPendingDurableMessage(messages: readonly WorkbenchMessage[]): boolean {
   if (pendingSendText === undefined) return false
-  const expected = normalizePendingText(pendingSendText)
-  if (expected === '') return false
-  const matching = messages.filter(message => message.role === 'user' && normalizePendingText(message.text) === expected)
-  if (matching.length > pendingSendBaselineCount) return true
-  return matching.some(message => !pendingSendBaselineIds.has(message.id))
+  return hasDurableSendReceipt({ text: pendingSendText, attachmentLabels: pendingSendAttachmentLabels, baselineIds: pendingSendBaselineIds, ...(pendingSendBaselineSeq === undefined ? {} : { baselineSeq: pendingSendBaselineSeq }), ...(pendingSendRequestId === undefined ? {} : { requestId: pendingSendRequestId }) }, messages)
 }
 
 function normalizePendingText(value: string): string {
@@ -1666,6 +1686,7 @@ function beginPendingSend(
   attachmentLabels: readonly string[],
   mode: 'queue' | 'steer',
   force = false,
+  requestId?: string,
 ): void {
   const reuse = !force
     && sendPending
@@ -1677,13 +1698,18 @@ function beginPendingSend(
   if (!reuse) {
     const baseline = pendingState ?? state
     pendingSendText = text
-    pendingSendBaselineCount = baseline?.messages.filter(item => item.role === 'user' && normalizePendingText(item.text) === normalizePendingText(text)).length ?? 0
+    pendingSendRequestId = requestId
+    pendingSendAttachmentLabels = attachmentLabels
+    pendingSendBaselineSeq = undefined
+    for (const message of baseline?.messages ?? []) {
+      if (message.seq !== undefined && (pendingSendBaselineSeq === undefined || message.seq > pendingSendBaselineSeq)) pendingSendBaselineSeq = message.seq
+    }
     pendingSendBaselineIds = new Set(baseline?.messages.map(item => item.id) ?? [])
     pendingQueueBaselineIds = new Set(baseline?.queueItems?.map(item => item.id) ?? [])
     pendingQueueRemoveRequestedId = undefined
     pendingQueueMatchedId = undefined
     showPendingSendPreview(text, attachmentLabels, mode)
-  }
+  } else if (requestId !== undefined) pendingSendRequestId = requestId
   if (state !== undefined) {
     placePendingSendPreview(state.messages)
     renderStatus(state)
@@ -2733,7 +2759,8 @@ function send(): void {
   historyIndex = -1
   const mode = delivery.mode
   const steer = mode === 'steer'
-  beginPendingSend(value, attachments.map(item => item.label), mode, true)
+  const requestId = crypto.randomUUID()
+  beginPendingSend(value, attachments.map(item => item.label), mode, true, requestId)
   // Clear the composer locally as soon as the click is accepted.  The host
   // receipt repeats this for older Webview versions, but must not be the first
   // visible acknowledgement when settings/model discovery is slow.
@@ -2748,7 +2775,7 @@ function send(): void {
     elements.steerNoticeText.textContent = 'Steer message sent to the active turn.'
     elements.steerNotice.classList.remove('hidden')
   }
-  post({ type: 'send', text: value, ...(steer ? { mode: 'steer' } : {}) })
+  post({ type: 'send', text: value, requestId, ...(steer ? { mode: 'steer' } : {}) })
   elements.prompt.focus()
 }
 

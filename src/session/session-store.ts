@@ -510,6 +510,7 @@ export function projectMessages(entries: readonly HistoryEntry[], options: { rea
           id: `user:${event.seq}`,
           role: 'user',
           text: projected.text,
+          ...(typeof source?.rpcId === 'string' ? { requestId: source.rpcId } : {}),
           ...(automated
             ? { inputKind: 'automation' as const, automationKind }
             : messageIdFromData(data) !== undefined && steeringMessageIds.has(messageIdFromData(data) as string)

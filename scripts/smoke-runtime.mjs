@@ -162,7 +162,6 @@ try {
     mode: 'queue',
     content: [
       { type: 'image', mediaType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', name: 'smoke.png' },
-      { type: 'text', text: 'Describe this image.' },
     ],
   } } }, cookie)
   if (imagePrompt?.accepted !== true) throw new Error(`session.prompt did not accept native image content: ${JSON.stringify(imagePrompt)}`)
@@ -171,6 +170,7 @@ try {
   // smoke check verifies the durable attachment contract instead of a race.
   const { history: imageHistory, entry: imageEntry } = await waitForImageHistory(url, visionSession.sessionId, 15_000, cookie)
   const imageBlock = imageEntry?.event?.data?.content?.find(block => block?.type === 'image')
+  if (imageEntry?.event?.data?.source?.rpcId !== 'runtime-smoke-image') throw new Error('Image-only durable history lost the prompt request identity.')
   const attachmentId = imageBlock?.attachment?.attachmentId
   if (typeof attachmentId !== 'string' || attachmentId === '') throw new Error(`session.history did not retain a durable image attachment reference: ${JSON.stringify(imageHistory)}`)
   const imageAttachment = await rpc(url, 'session/attachment', { args: { request: { sessionId: visionSession.sessionId, attachmentId } } }, cookie)

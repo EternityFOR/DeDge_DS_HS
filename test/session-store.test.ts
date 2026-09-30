@@ -232,7 +232,7 @@ describe('session event projection', () => {
   it('keeps durable image references on historical user messages without exposing image bytes', () => {
     const messages = projectMessages([
       entry('user/message', 1, {
-        source: { kind: 'user' },
+        source: { kind: 'user', rpcId: 'image-request-1' },
         content: [
           { type: 'image', attachment: { attachmentId: 'att-1', mediaType: 'image/png', bytes: 3, width: 2, height: 2, name: 'reminder.png' } },
           { type: 'text', text: 'Continue from this reminder.' },
@@ -242,6 +242,7 @@ describe('session event projection', () => {
 
     expect(messages).toEqual([{
       id: 'user:1',
+      requestId: 'image-request-1',
       role: 'user',
       text: 'Continue from this reminder.',
       attachments: [{
