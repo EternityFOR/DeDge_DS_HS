@@ -36,6 +36,13 @@ const firstPrompt: WorkbenchMessage = { id: 'u-1', role: 'user', text: 'Start', 
 const insertedPrompt: WorkbenchMessage = { id: 'u-2', role: 'user', text: 'Also do this', taskId: 'turn:1', taskComplete: false, seq: 3 }
 
 describe('live user message actions', () => {
+  it('shows real waiting for attachment-only input then retires it after model output', () => {
+    const image: WorkbenchMessage = { ...firstPrompt, text: '', attachments: [{ kind: 'image', label: 'Image: image.png' }] }
+    expect(isWaitingForUserMessage(image, snapshot([image]))).toBe(true)
+    expect(shouldShowUserMessageActions(image, snapshot([image]))).toBe(false)
+    expect(isWaitingForUserMessage(image, snapshot([image, { id: 'r', role: 'reasoning', text: 'Looking at the image', seq: 2 }]))).toBe(false)
+    expect(isWaitingForUserMessage(image, snapshot([image], { sessions: [{ id: 's-1', title: 'Session', running: false, blank: false }] }))).toBe(false)
+  })
   it('shows waiting for the task opener even though it has no steer action', () => {
     const state = snapshot([firstPrompt])
     expect(shouldShowUserMessageActions(firstPrompt, state)).toBe(false)

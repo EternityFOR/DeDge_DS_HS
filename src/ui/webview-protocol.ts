@@ -30,9 +30,9 @@ export interface WorkbenchSettings {
 
 export type HostToWebviewMessage =
   | { readonly type: 'state'; readonly state: WorkbenchSnapshot; readonly attachments: readonly ContextAttachment[] }
-  | { readonly type: 'sendStarted'; readonly text: string; readonly attachments: readonly { readonly label: string }[]; readonly mode?: 'queue' | 'steer' }
+  | { readonly type: 'sendStarted'; readonly text: string; readonly attachments: readonly { readonly label: string }[]; readonly mode?: 'queue' | 'steer'; readonly requestId?: string }
   | { readonly type: 'sendProgress'; readonly progress: WorkbenchSendProgress }
-  | { readonly type: 'sendSettled'; readonly accepted: boolean; readonly text: string }
+  | { readonly type: 'sendSettled'; readonly accepted: boolean; readonly text: string; readonly requestId?: string }
   | { readonly type: 'queueActionSettled'; readonly itemId: string; readonly accepted: boolean }
   | { readonly type: 'setDraft'; readonly text: string }
   | { readonly type: 'notice'; readonly level: 'info' | 'warning' | 'error'; readonly message: string }
@@ -43,7 +43,7 @@ export type HostToWebviewMessage =
 
 export type WebviewToHostMessage =
   | { readonly type: 'ready' }
-  | { readonly type: 'send'; readonly text: string; readonly mode?: 'queue' | 'steer' }
+  | { readonly type: 'send'; readonly text: string; readonly mode?: 'queue' | 'steer'; readonly requestId?: string }
   | { readonly type: 'steerQueueItem'; readonly itemId: string }
   | { readonly type: 'removeQueueItem'; readonly itemId: string }
   | { readonly type: 'editQueueItem'; readonly itemId: string; readonly text: string }

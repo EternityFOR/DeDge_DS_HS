@@ -165,9 +165,9 @@ export class GatewayClient implements vscode.Disposable {
     return { events: expandHistoryRecords(page.records ?? []), hasMore: page.hasMore === true }
   }
 
-  prompt(sessionId: string, content: string | readonly PromptContentPart[], mode: 'queue' | 'steer' = 'queue'): Promise<{ readonly accepted?: boolean }> {
+  prompt(sessionId: string, content: string | readonly PromptContentPart[], mode: 'queue' | 'steer' = 'queue', requestId: string = randomUUID()): Promise<{ readonly accepted?: boolean }> {
     const parts = typeof content === 'string' ? [{ type: 'text' as const, text: content }] : content
-    return this.request('session/prompt', { request: { requestId: randomUUID(), sessionId, mode, content: parts } })
+    return this.request('session/prompt', { request: { requestId, sessionId, mode, content: parts } })
   }
 
   async cancel(sessionId: string): Promise<{ readonly accepted: true }> {

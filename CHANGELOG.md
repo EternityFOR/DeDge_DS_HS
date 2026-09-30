@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.1.95] - 2026-09-30
+
+### 修复
+
+- 图片、长文本转文件、文件片段等仅附件输入不再因为正文为空而残留重复的 Waiting 卡片与假等待转圈。发送回执通过官方 `source.rpcId` 确认，模型响应状态仍由实际运行/输出事件决定。
+- 消息从输入框到 Gateway 使用同一个请求 ID，所有权恢复重试继续使用该 ID。旧运行时没有请求 ID 时，使用新消息、正文、附件标签和历史序号共同匹配，不误认旧历史或计划触发消息。
+- 仅附件消息在真正等待模型时显示 Waiting；收到后续推理/工具/回答或会话停止后清除。迟到的发送回执不会重新创建已确认的预览卡片。
+
+### 验证
+
+- 新增仅图片、仅长文本附件、文件片段、重复历史、异步回执和请求 ID 回归测试；runtime smoke 使用不带正文的原生图片并验证持久记录保留请求 ID。
+- 本地权限诊断与恢复材料不属于扩展源码或发布内容；不自动重置用户的 Windows ACL、不切换全开放权限、不重启桌面或 VS Code。
+
 ## [0.1.94] - 2026-09-30
 
 ### 发布门禁
@@ -961,7 +974,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.94...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.95...HEAD
+[0.1.95]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.95
 [0.1.94]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.94
 [0.1.93]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.93
 [0.1.92]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.92

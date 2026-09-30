@@ -31,6 +31,8 @@ export type WorkbenchSendProgress =
 
 export interface WorkbenchMessage {
   readonly id: string
+  /** Human prompt identity echoed by Harness as user/message source.rpcId. */
+  readonly requestId?: string
   readonly role: 'user' | 'assistant' | 'reasoning' | 'tool' | 'system'
   readonly text: string
   /** Durable input classification. Absent means an ordinary user prompt. */
