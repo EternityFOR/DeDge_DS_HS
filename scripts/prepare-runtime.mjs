@@ -96,6 +96,14 @@ if (expectedDsh === '0.1.3-alpha.2') {
   patchPermissionSandboxTerminalClose(path.join(runtimeModules, '@deepseek-ai', 'dsh-permission-presets', 'lib', 'index.js'))
   patchPersistentShellCacheRecovery(path.join(runtimeModules, '@deepseek-ai', 'dsh-tool-pwsh-persistent', 'lib', 'index.js'), 'pwsh')
   patchPersistentShellCacheRecovery(path.join(runtimeModules, '@deepseek-ai', 'dsh-tool-bash-persistent', 'lib', 'index.js'), 'bash')
+} else if (expectedDsh.startsWith('0.2.0-rc.')) {
+  // Schedule now owns public Host list/delete RPCs, so the old source rewrite
+  // is unnecessary. Retain only fixes still absent from this upstream family.
+  patchCredentialEnvironmentScrub(path.join(runtimeModules, '@deepseek-ai', 'dsh-subprocess', 'lib', 'index.js'))
+  patchApprovalPolicyIdleNotice(path.join(runtimeModules, '@deepseek-ai', 'dsh-user-approval', 'lib', 'index.js'))
+  patchPermissionSandboxTerminalClose(path.join(runtimeModules, '@deepseek-ai', 'dsh-permission-presets', 'lib', 'index.js'))
+  patchPersistentShellCacheRecovery(path.join(runtimeModules, '@deepseek-ai', 'dsh-tool-pwsh-persistent', 'lib', 'index.js'), 'pwsh')
+  patchPersistentShellCacheRecovery(path.join(runtimeModules, '@deepseek-ai', 'dsh-tool-bash-persistent', 'lib', 'index.js'), 'bash')
 } else {
   console.log(`Using upstream Harness ${expectedDsh}; skipping alpha.2 compatibility patches.`)
 }
@@ -104,6 +112,7 @@ for (const metadata of ['.modules.yaml', '.package-map.json', '.pnpm-workspace-s
   rmSync(path.join(runtimeModules, metadata), { recursive: true, force: true })
 }
 removeCommandShimDirectories(runtimeModules)
+removeOptionalOfficePreviewPayload(runtimeModules)
 copyFileSync(nodeLicense, path.join(runtimeModules, 'node', 'LICENSE'))
 const nodePtyPrebuilds = path.join(runtimeModules, 'node-pty', 'prebuilds')
 const nodePtyTarget = process.platform === 'win32' || process.platform === 'darwin'
@@ -153,6 +162,7 @@ writeFileSync(path.join(root, 'dist', 'runtime-manifest.json'), `${JSON.stringif
   node: nodeVersion,
   pnpm: pnpmVersion,
   runtimeRoot: 'dist/runtime',
+  officePreview: false,
 }, null, 2)}\n`)
 console.log(`Validated bundled runtime ${dshVersion} / ${nodeVersion} / pnpm ${pnpmVersion} for ${platformKey}`)
 
@@ -165,6 +175,19 @@ function removeCommandShimDirectories(directory) {
       continue
     }
     if (entry.isDirectory()) removeCommandShimDirectories(candidate)
+  }
+}
+
+function removeOptionalOfficePreviewPayload(modules) {
+  const scope = path.join(modules, '@deepseek-ai')
+  const boundary = `${path.resolve(modules)}${path.sep}`
+  for (const entry of readdirSync(scope, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith('libreoffice-kit-')) continue
+    const target = path.resolve(scope, entry.name)
+    if (!target.startsWith(boundary)) throw new Error(`Refusing to trim Office preview outside the runtime stage: ${target}`)
+    // The VS Code overlay disables Office conversion/document preview. Keep
+    // the thin package metadata but omit the dormant native/WASM engine.
+    rmSync(target, { recursive: true, force: true })
   }
 }
 function cleanupStage(directory) {

@@ -2,7 +2,7 @@
   "name": "dedge-deepseek-harness-vscode",
   "displayName": "DeDge DeepSeek Harness",
   "description": "Self-contained DeepSeek Harness coding agent for VS Code with a Windows-safe runtime and isolated Codex/Claude handoffs.",
-  "version": "0.1.92",
+  "version": "0.1.93",
   "publisher": "diractive-edge",
   "private": true,
   "packageManager": "pnpm@11.21.0",
@@ -350,7 +350,7 @@
         "dedgeDeepSeekHarness.schedule.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Mount the official DeepSeek Harness dsh-schedule plugin by default. It adds session-local scheduled follow-ups; disable it if reminder tools should not be exposed to the model. Requires a Harness restart when changed.",
+          "description": "Mount the official DeepSeek Harness Host Schedule service by default. It adds durable session-bound reminders that survive Host restart; disable it if reminder tools should not be exposed to the model. Legacy session-log reminders need explicit recreation after upgrading. Requires a Harness restart when changed.",
           "scope": "machine"
         },
         "dedgeDeepSeekHarness.context.maxBytes": {
@@ -497,11 +497,14 @@
     "vscode:prepublish": "pnpm run typecheck && pnpm run build && pnpm run prepare:runtime"
   },
   "dependencies": {
-    "@deepseek-ai/dsh": "0.1.5-rc.3",
+    "@deepseek-ai/dsh": "0.2.0-rc.2",
     "node": "22.22.3",
     "pnpm": "11.21.0"
   },
   "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
     "@types/node": "22.15.3",
     "@types/vscode": "1.96.0",
     "@types/ws": "8.5.13",

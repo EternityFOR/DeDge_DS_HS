@@ -17,6 +17,8 @@ out/
 *.jsonl
 auth.json
 credentials.json
+.credentials.yaml
+.credentials.yml
 secrets.json
 .DS_Store
 Thumbs.db

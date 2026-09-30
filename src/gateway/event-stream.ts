@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
 import { assertLoopbackGatewayUrl, directLoopbackAgent } from './local-http.js'
 import { expandHistoryRecords, isRecord, type HostFrame, type MuxFrame } from './protocol.js'
+import { AssistantStreamProjection, type LiveAssistantSnapshot } from './assistant-stream.js'
 import type { Logger } from '../platform/logger.js'
 
 export interface EventHandlers {
@@ -17,6 +18,7 @@ export interface SessionFollowSnapshot {
   readonly records: readonly unknown[]
   readonly hasMore: boolean
   readonly projections?: { readonly values?: Record<string, unknown> }
+  readonly liveAssistant?: LiveAssistantSnapshot
 }
 
 interface WorkspaceSnapshot {
@@ -95,7 +97,25 @@ export class EventStream implements Disposable {
   async openSession(sessionId: string, maxMessages = 40): Promise<SessionFollowSnapshot> {
     if (!this.started) this.start()
     this.removeStream('session')
+    this.removeStream('jobs')
+    this.ensureStream({
+      key: 'jobs',
+      endpoint: 'job/list',
+      payload: { args: { request: { sessionId } } },
+      socket: undefined,
+      retryTimer: undefined,
+      retryDelay: 1_000,
+      closed: false,
+      onItem: value => {
+        if (!isRecord(value) || value.type !== 'rows' || !Array.isArray(value.jobs)) return
+        // Unowned/global jobs are visible in the upstream roster but must not
+        // make this Session's Pause stop another producer's background work.
+        const jobs = value.jobs.filter(job => isRecord(job) && job.owner === sessionId)
+        this.handlers.onMux({ type: 'session/jobs', sessionId, jobs }, `jobs:${sessionId}`)
+      },
+    })
     let initial = true
+    const assistant = new AssistantStreamProjection()
     let settled = false
     let resolveInitial!: (value: SessionFollowSnapshot) => void
     let rejectInitial!: (error: Error) => void
@@ -119,6 +139,7 @@ export class EventStream implements Disposable {
           request: {
             address: { kind: 'session', sessionId },
             maxMessages,
+            assistantStream: true,
           },
         },
       },
@@ -131,7 +152,7 @@ export class EventStream implements Disposable {
         if (isSessionSnapshot(value)) {
           let snapshot: SessionFollowSnapshot
           try {
-            snapshot = normalizeSessionSnapshot(value)
+            snapshot = { ...normalizeSessionSnapshot(value), liveAssistant: assistant.replace(value.assistantStream) }
           } catch (error) {
             fail(error instanceof Error ? error : new Error(String(error)))
             return
@@ -143,11 +164,21 @@ export class EventStream implements Disposable {
             return
           }
           this.handlers.onMux({ type: 'session/subscribed', sessionId, lastSeq: snapshot.cursor }, `session:${sessionId}`)
+          this.handlers.onMux({ type: 'session/assistant-stream', sessionId, value: snapshot.liveAssistant as LiveAssistantSnapshot }, `assistant:${sessionId}`)
           for (const event of expandHistoryRecords(snapshot.records)) this.emitSessionEvent(sessionId, event.event)
           return
         }
+        if (isRecord(value) && value.type === 'assistant-stream') {
+          const presentation = assistant.accept(value.frame)
+          if (presentation !== undefined) this.handlers.onMux({ type: 'session/assistant-stream', sessionId, value: presentation }, `assistant:${sessionId}`)
+          return
+        }
         const event = expandHistoryRecords([value])[0]?.event
-        if (event !== undefined) this.emitSessionEvent(sessionId, event)
+        if (event !== undefined) {
+          const presentation = assistant.retire(event)
+          if (presentation !== undefined) this.handlers.onMux({ type: 'session/assistant-stream', sessionId, value: presentation }, `assistant:${sessionId}`)
+          this.emitSessionEvent(sessionId, event)
+        }
       },
     }
     this.streams.set(spec.key, spec)
@@ -278,6 +309,7 @@ export class EventStream implements Disposable {
       return
     }
     if (value.type === 'projection' && typeof value.sessionId === 'string' && typeof value.key === 'string') {
+      if (value.key === 'inbox') this.emitInbox(value.sessionId, value.value)
       this.handlers.onMux({
         type: 'session/projection',
         sessionId: value.sessionId,
@@ -292,8 +324,15 @@ export class EventStream implements Disposable {
     if (!isRecord(projection) || !isRecord(projection.values)) return
     const seq = Number.isSafeInteger(projection.asOfSeq) ? Number(projection.asOfSeq) : 0
     for (const [key, value] of Object.entries(projection.values)) {
+      if (key === 'inbox') this.emitInbox(sessionId, value)
       this.handlers.onMux({ type: 'session/projection', sessionId, key, value, seq }, 'control')
     }
+  }
+
+  private emitInbox(sessionId: string, value: unknown): void {
+    const items = queueItemsFromInbox(value)
+    if (items === undefined) return
+    this.handlers.onMux({ type: 'session/queue', sessionId, items }, `inbox:${sessionId}`)
   }
 
   private handleWorkspace(value: unknown): void {
@@ -348,7 +387,9 @@ export class EventStream implements Disposable {
   }
 
   private handleEmittedEvent(event: string, args: readonly unknown[]): void {
-    if (event === 'api-session/added' && isRecord(args[0]) && typeof args[0].sessionId === 'string') {
+    if (event === 'schedule/changed') {
+      this.handlers.onHost({ type: 'host/remote-event', event, args: [...args] }, 'events')
+    } else if (event === 'api-session/added' && isRecord(args[0]) && typeof args[0].sessionId === 'string') {
       const summary = args[0]
       this.handlers.onHost({
         type: 'host/session-added',
@@ -378,6 +419,28 @@ export class EventStream implements Disposable {
     spec.onError?.(error)
     this.handlers.onError?.(error)
   }
+}
+
+/** Adapt the authoritative 0.2 Inbox projection without inventing delivery ids. */
+export function queueItemsFromInbox(value: unknown): readonly unknown[] | undefined {
+  if (!isRecord(value) || !Array.isArray(value['next-turn']) || !Array.isArray(value['next-step'])) return undefined
+  const items: unknown[] = []
+  const ids = new Set<string>()
+  for (const target of ['next-turn', 'next-step'] as const) {
+    for (const message of value[target] as unknown[]) {
+      if (!isRecord(message) || typeof message.id !== 'string' || message.id === '' || ids.has(message.id)) return undefined
+      ids.add(message.id)
+      const source = isRecord(message.source) ? message.source : undefined
+      const user = source?.kind === 'user'
+      items.push({
+        id: message.id,
+        placement: target === 'next-turn' ? 'queued' : user ? 'steering' : 'context',
+        message,
+        ...(user && typeof source.rpcId === 'string' ? { rpcId: source.rpcId } : {}),
+      })
+    }
+  }
+  return items
 }
 
 function isSessionSnapshot(value: unknown): value is Record<string, unknown> {

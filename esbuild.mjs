@@ -12,6 +12,8 @@ await Promise.all([
   'extension.cjs.map',
   'webview.js',
   'webview.js.map',
+  'steering-interrupt.mjs',
+  'steering-interrupt.mjs.map',
 ].map(file => rm(join(dist, file), { force: true })))
 
 const extension = {
@@ -44,13 +46,28 @@ const webview = {
   logLevel: 'info',
 }
 
+const steering = {
+  absWorkingDir: root,
+  entryPoints: ['src/runtime/steering-interrupt.ts'],
+  outfile: 'dist/steering-interrupt.mjs',
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node22',
+  minify: !watch,
+  sourcemap: watch,
+  sourcesContent: false,
+  logLevel: 'info',
+}
+
 if (watch) {
-  const [extensionContext, webviewContext] = await Promise.all([
+  const [extensionContext, webviewContext, steeringContext] = await Promise.all([
     esbuild.context(extension),
     esbuild.context(webview),
+    esbuild.context(steering),
   ])
-  await Promise.all([extensionContext.watch(), webviewContext.watch()])
+  await Promise.all([extensionContext.watch(), webviewContext.watch(), steeringContext.watch()])
   console.log('Watching extension and webview bundles')
 } else {
-  await Promise.all([esbuild.build(extension), esbuild.build(webview)])
+  await Promise.all([esbuild.build(extension), esbuild.build(webview), esbuild.build(steering)])
 }

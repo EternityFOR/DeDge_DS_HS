@@ -71,9 +71,10 @@ export interface WorkbenchJob {
   readonly kind: string
   readonly label: string
   readonly status: WorkbenchJobStatus
+  readonly owner?: string
 }
 
-/** Active session-local reminder records from Harness's official schedule plugin. */
+/** Active Host reminders bound to the selected Session. */
 export type WorkbenchSchedule = ScheduleProjectionRecord
 
 export interface WorkbenchSession {
@@ -123,7 +124,7 @@ export interface WorkbenchSnapshot {
   readonly queueItems?: readonly WorkbenchQueueItem[]
   /** Background jobs visible to the active agent, when Harness exposes them. */
   readonly jobs?: readonly WorkbenchJob[]
-  /** Active session-local reminders exposed by the official `schedule` projection. */
+  /** Active Host reminders read through the official Schedule API. */
   readonly schedules?: readonly WorkbenchSchedule[]
   readonly hasMoreHistory: boolean
   readonly historyExpanded?: boolean

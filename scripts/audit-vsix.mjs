@@ -45,6 +45,7 @@ export function auditVsix(file, target) {
     'extension/licenses/NODEJS-LICENSE.txt',
     'extension/dist/extension.cjs',
     'extension/dist/webview.js',
+    'extension/dist/steering-interrupt.mjs',
     'extension/dist/runtime-manifest.json',
     `extension/dist/runtime/node_modules/node/bin/${executable}`,
     'extension/dist/runtime/node_modules/node/LICENSE',
@@ -98,7 +99,8 @@ export function auditVsix(file, target) {
   ])
   for (const name of names) {
     if (forbiddenFiles.has(name) || forbiddenPrefixes.some(prefix => name.startsWith(prefix))
-      || name.includes('/node_modules/.bin/')) {
+      || name.includes('/node_modules/.bin/')
+      || name.startsWith('extension/dist/runtime/node_modules/@deepseek-ai/libreoffice-kit-')) {
       throw new Error(`VSIX contains a development-only file: ${name}`)
     }
     const match = /node-pty\/prebuilds\/(win32|darwin)-[^/]+\//u.exec(name)
@@ -128,6 +130,7 @@ export function auditVsix(file, target) {
   auditExtensionText(archive, entries)
   const [platform, arch] = target.split('-')
   if (runtimeManifest.extension !== packageManifest.version
+    || runtimeManifest.officePreview !== false
     || runtimeManifest.platform !== platform
     || runtimeManifest.arch !== arch
     || runtimeManifest.dsh !== packageManifest.dependencies?.['@deepseek-ai/dsh']
@@ -170,7 +173,7 @@ function auditExtensionText(archive, entries) {
   for (const entry of entries) {
     if (!entry.name.startsWith('extension/')) continue
     if (entry.name.includes('/node_modules/')) continue
-    if (!/\.(?:cjs|js|json|md|svg|txt|yml|yaml)$/iu.test(entry.name)) continue
+    if (!/\.(?:cjs|mjs|js|json|md|svg|txt|yml|yaml)$/iu.test(entry.name)) continue
     const value = readEntry(archive, entry)
     if (value.includes(0)) continue
     const text = value.toString('utf8')

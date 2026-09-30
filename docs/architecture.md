@@ -4,7 +4,7 @@
 
 本扩展选择原生 VS Code UI 加 DeepSeek Harness HTTP/WebSocket Gateway，而不是嵌入 Harness Web 页面或把 ACP 当成完整后端。Gateway 能提供会话历史、流式事件、工具状态、审批、问题、取消和模型控制；当前 ACP 接口不足以还原这些工作台能力。
 
-终端用户路径采用平台专用 VSIX。`@deepseek-ai/dsh@0.1.5-rc.3`、Node.js `22.22.3` 和 pnpm `11.21.0` 在发布时固定并打包，激活阶段禁止包管理器、克隆和全局安装。external runtime 只是明确配置后的兼容入口，不承担自动发现或修复。
+终端用户路径采用平台专用 VSIX。`@deepseek-ai/dsh@0.2.0-rc.2`、Node.js `22.22.3` 和 pnpm `11.21.0` 在发布时固定并打包，激活阶段禁止包管理器、克隆和全局安装。external runtime 只是明确配置后的兼容入口，不承担自动发现或修复。
 
 ## 模块边界
 
@@ -42,6 +42,10 @@ Webview 只发送定义在 `webview-protocol.ts` 的消息。Extension host 对 
 上下文占用不按字符数猜测。Controller 只接受 `contextPressure` session projection 中的非负整数 `pressureTokens/projectedTokens` 和正整数 `contextWindow`；Webview 用 `projectedTokens` 优先显示下一次请求的近似占用。固定的 Standard、Code 和 Cordis preset 中，`compaction-basic` 在容量的 80% 触发自动压缩；Minimal 不安装压缩插件，自定义 preset 的策略未知。齿轮设置容量并更新可确认的阈值说明；收缩按钮只在支持压缩且 agent 空闲时发送 `/compact`。没有 provider usage 时不渲染占用环。
 
 ## 运行时生命周期
+
+`0.2.0` 的 `inbox` projection 是队列权威值；`job/list` 独立镜像当前会话拥有的后台工作；`schedule/list` / `schedule/delete` 读取和取消原会话绑定的 Host reminders，`schedule/changed` 驱动刷新。实时 assistant stream 使用独立 revision 和 attempt/index，不进入 durable event map，也不推进分页游标。
+
+`dist/steering-interrupt.mjs` 是一个仅使用官方公开 `tools/execute` 和 `agent/inbox/inserted` 接口的本地插件。它为前台 Shell dispatch 融合一个额外的 abort signal，并在当前 Agent 的用户 next-step 插入时取消该 signal；不取消 Agent turn、不变动 Inbox，也不包裹文件写入或 job/schedule 工具。新版适配器与协议兼容代码放在 `src/runtime/provider-endpoint.ts` 和 `src/gateway/assistant-stream.ts`，不将临时参考克隆引入构建。
 
 1. 激活时创建 `globalStorage` 布局并注册命令，不下载依赖。
 2. 用户首次打开工作台或显式启动时，读取设置和 `SecretStorage`。

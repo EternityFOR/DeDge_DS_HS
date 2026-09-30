@@ -34,7 +34,7 @@ describe('bundled Node compatibility', () => {
 
 describe('Harness runtime compatibility', () => {
   it('pins the bundled runtime to the current upstream release', () => {
-    expect(EXPECTED_DSH_VERSION).toBe('0.1.5-rc.3')
+    expect(EXPECTED_DSH_VERSION).toBe('0.2.0-rc.2')
   })
 
   it('accepts RC revisions on the same protocol base', () => {
@@ -47,8 +47,9 @@ describe('Harness runtime compatibility', () => {
     expect(supportsHarnessVersion('0.1.0-rc.7', 'unknown')).toBe(false)
   })
 
-  it('removes only trailing provider slashes for alpha.3 URL composition', () => {
-    expect(normalizeProviderBaseUrl('https://api.deepseek.com/')).toBe('https://api.deepseek.com')
+  it('adapts the official root to Messages while preserving custom gateway URLs', () => {
+    expect(normalizeProviderBaseUrl('https://api.deepseek.com/')).toBe('https://api.deepseek.com/anthropic')
+    expect(normalizeProviderBaseUrl('https://api.deepseek.com/v1')).toBe('https://api.deepseek.com/anthropic')
     expect(normalizeProviderBaseUrl('https://gateway.example/v1///')).toBe('https://gateway.example/v1')
     expect(normalizeProviderBaseUrl('https://gateway.example/v1')).toBe('https://gateway.example/v1')
   })
@@ -212,7 +213,9 @@ describe('runtime overlay rendering', () => {
     expect(overlay).toContain('id: "deepseek-v4-flash-vision-exp"')
     expect(overlay).toContain('id: "private-reasoner"')
     expect(overlay).toContain('apiKeyEnv: "DEEPSEEK_API_KEY"')
-    expect(overlay).toContain('baseURL: "https://api.deepseek.com"')
+    expect(overlay).toContain('baseURL: "https://api.deepseek.com/anthropic"')
+    expect(overlay).toContain('id: office-to-pdf\n  disabled: true')
+    expect(overlay).toContain('id: ui-sidebar-documentpreview\n  disabled: true')
   })
 
   it('mounts the generic pi-ai route for non-DeepSeek providers', () => {
@@ -231,7 +234,7 @@ describe('runtime overlay rendering', () => {
     expect(overlay).toContain('"openai":')
     expect(overlay).toContain('api: "openai-completions"')
     expect(overlay).toContain('baseURL: "https://gateway.example/v1/"')
-    expect(overlay).not.toContain('id: llm-deepseek')
+    expect(overlay).toContain('id: llm-deepseek\n  disabled: true')
     expect(overlay.match(/id: llm-pi-ai/gu)?.length).toBe(1)
   })
 

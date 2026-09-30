@@ -32,6 +32,8 @@ import {
 } from './gateway-lease.js'
 import { checkWindowsCompatibility, describeWindowsExitCode } from './windows-compat.js'
 import { requestLoopbackGateway } from '../gateway/local-http.js'
+import { normalizeProviderBaseUrl } from './provider-endpoint.js'
+export { normalizeProviderBaseUrl } from './provider-endpoint.js'
 
 // alpha.2 prints an authenticated root URL (`/?token=...`); keep the token
 // because the Gateway exchanges it for the API session cookie.
@@ -182,6 +184,7 @@ export class RuntimeManager implements vscode.Disposable {
         findWorkspaceHookConfig(workspace, ['.codex/hooks.json']),
       ])
       await writeAtomic(overlay, renderRuntimeOverlay(configuration, {
+        steeringPluginUrl: this.resolver.steeringPluginUrl,
         ...(claudeHooksConfigPath === undefined ? {} : { claudeHooksConfigPath }),
         ...(codexHooksConfigPath === undefined ? {} : { codexHooksConfigPath }),
       }))
@@ -194,9 +197,8 @@ export class RuntimeManager implements vscode.Disposable {
         DSH_PERMISSION_MODE: configuration.permissionMode,
         DSH_TELEMETRY_DISABLED: '1',
         ...apiKey === undefined || apiKey === '' ? {} : { DEEPSEEK_API_KEY: apiKey },
-        // alpha.2 appends `/chat/completions` directly. Keep the configured
-        // URL stable in VS Code, but give the provider a slash-free namespace
-        // so official and OpenAI-compatible endpoints never receive `//...`.
+        // Keep existing endpoint/key slots stable; only the native official
+        // DeepSeek root is adapted to the upstream 0.2 Messages namespace.
         DEEPSEEK_BASE_URL: normalizeProviderBaseUrl(configuration.baseUrl),
       }
       this.logger.info(`Starting ${launch.source} Harness ${launch.version} in ${workspace}`)
@@ -462,11 +464,6 @@ async function repairSharedRuntimeAttachments(layout: StorageLayout, version: st
   const candidates = entries.filter(name => name !== targetName).sort()
   const copied = await recoverMissingAttachments(layout.harnessHomes, candidates, target)
   if (copied > 0) logger.info(`Recovered ${String(copied)} missing Harness attachment object${copied === 1 ? '' : 's'} before attaching to shared runtime`)
-}
-
-/** alpha.2 joins its provider namespace with `/chat/completions` itself. */
-export function normalizeProviderBaseUrl(value: string): string {
-  return value.replace(/\/+$/u, '')
 }
 
 function workspaceDirectory(): string {

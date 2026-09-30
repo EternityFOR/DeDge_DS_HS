@@ -1,3 +1,5 @@
+import type { LiveAssistantSnapshot } from './assistant-stream.js'
+
 export interface RpcError {
   readonly code: string
   readonly message: string
@@ -54,6 +56,7 @@ export interface SessionHistory {
   readonly events: HistoryEntry[]
   readonly hasMore?: boolean
   readonly projections?: { readonly values?: Record<string, unknown> }
+  readonly liveAssistant?: LiveAssistantSnapshot
 }
 
 /**
@@ -134,7 +137,7 @@ export interface ModelCatalog {
 
 export interface PresetCatalogEntry {
   readonly id: string
-  readonly trust: 'system' | 'user'
+  readonly trust?: 'system' | 'user'
   readonly isDefault: boolean
   readonly name?: string
   readonly description?: string
@@ -158,14 +161,19 @@ export interface PermissionProjection {
   readonly currentValue: string
 }
 
-/** The active reminder records exposed by alpha.2's official `schedule` projection. */
+/** Active Host reminders, plus legacy session-local projection records. */
 export interface ScheduleProjectionRecord {
   readonly id: string
-  readonly kind: 'after' | 'at' | 'every'
+  readonly kind: 'after' | 'at' | 'every' | 'daily' | 'weekly' | 'cron'
+  readonly title?: string
   readonly prompt: string
   readonly scheduledAt: string
   readonly afterSeconds?: number
   readonly everySeconds?: number
+  readonly time?: string
+  readonly timeZone?: string
+  readonly weekdays?: readonly number[]
+  readonly expression?: string
 }
 
 export interface WorkspaceRegistry {
@@ -173,6 +181,7 @@ export interface WorkspaceRegistry {
 }
 
 export type MuxFrame =
+  | { readonly type: 'session/assistant-stream'; readonly sessionId: string; readonly value: LiveAssistantSnapshot }
   | { readonly type: 'session/event'; readonly sessionId: string; readonly event: SessionEvent; readonly view?: unknown }
   | { readonly type: 'session/subscribed'; readonly sessionId: string; readonly lastSeq: number }
   | { readonly type: 'approval/requested'; readonly sessionId: string; readonly approvalId: string; readonly toolName: string; readonly callId?: string; readonly reason?: string }
@@ -427,12 +436,13 @@ export function parseModelSelectionResult(value: unknown): { readonly selected: 
 }
 
 export function parsePresetCatalog(value: unknown): PresetCatalog {
-  if (!isRecord(value) || !Array.isArray(value.presets) || typeof value.authorable !== 'boolean') {
+  if (!isRecord(value) || !Array.isArray(value.presets)
+    || (value.authorable !== undefined && typeof value.authorable !== 'boolean')) {
     throw new Error('Malformed Harness agent preset catalog.')
   }
   return {
     presets: value.presets.map(parsePresetCatalogEntry),
-    authorable: value.authorable,
+    authorable: value.authorable === true,
     // alpha.2 moved document authoring to a separate API and omits this
     // legacy capability bit from the roster response.
     hasDocument: value.hasDocument === true,
@@ -475,6 +485,7 @@ function positiveSafeInteger(value: unknown): number | undefined {
 }
 
 export function parsePresetSelectionResult(value: unknown): { readonly agentPreset: string } {
+  if (nonEmptyString(value)) return { agentPreset: value }
   if (!isRecord(value) || typeof value.agentPreset !== 'string') throw new Error('Malformed Harness agent preset selection.')
   return { agentPreset: value.agentPreset }
 }
@@ -503,18 +514,37 @@ export function parseScheduleProjection(value: unknown): ScheduleProjectionRecor
   for (const item of value) {
     if (!isRecord(item) || !nonEmptyString(item.id) || !nonEmptyString(item.prompt)
       || !nonEmptyString(item.scheduledAt)
-      || (item.kind !== 'after' && item.kind !== 'at' && item.kind !== 'every')) return undefined
+      || !['after', 'at', 'every', 'daily', 'weekly', 'cron'].includes(String(item.kind))) return undefined
+    const title = typeof item.title === 'string' && item.title.trim() !== '' ? item.title : undefined
+    const common = { id: item.id, prompt: item.prompt, scheduledAt: item.scheduledAt, ...(title === undefined ? {} : { title }) }
     if (item.kind === 'after') {
       if (!positiveSafeInteger(item.afterSeconds)) return undefined
-      records.push({ id: item.id, kind: item.kind, prompt: item.prompt, scheduledAt: item.scheduledAt, afterSeconds: item.afterSeconds as number })
+      records.push({ ...common, kind: item.kind, afterSeconds: item.afterSeconds as number })
       continue
     }
     if (item.kind === 'every') {
-      if (!Number.isSafeInteger(item.everySeconds) || (item.everySeconds as number) < 300) return undefined
-      records.push({ id: item.id, kind: item.kind, prompt: item.prompt, scheduledAt: item.scheduledAt, everySeconds: item.everySeconds as number })
+      if (!Number.isSafeInteger(item.everySeconds) || (item.everySeconds as number) < 60) return undefined
+      records.push({ ...common, kind: item.kind, everySeconds: item.everySeconds as number })
       continue
     }
-    records.push({ id: item.id, kind: item.kind, prompt: item.prompt, scheduledAt: item.scheduledAt })
+    if (item.kind === 'at') {
+      records.push({ ...common, kind: item.kind })
+      continue
+    }
+    if (!nonEmptyString(item.timeZone)) return undefined
+    if (item.kind === 'cron') {
+      if (!nonEmptyString(item.expression)) return undefined
+      records.push({ ...common, kind: item.kind, timeZone: item.timeZone, expression: item.expression })
+      continue
+    }
+    if (!nonEmptyString(item.time)) return undefined
+    if (item.kind === 'weekly') {
+      if (!Array.isArray(item.weekdays) || item.weekdays.length === 0
+        || !item.weekdays.every(day => Number.isInteger(day) && day >= 1 && day <= 7)) return undefined
+      records.push({ ...common, kind: item.kind, time: item.time, timeZone: item.timeZone, weekdays: item.weekdays as number[] })
+    } else {
+      records.push({ ...common, kind: 'daily', time: item.time, timeZone: item.timeZone })
+    }
   }
   return records
 }
@@ -573,7 +603,7 @@ function parseModelCatalogFailure(value: unknown): ModelCatalog['failures'][numb
 function parsePresetCatalogEntry(value: unknown): PresetCatalogEntry {
   if (!isRecord(value)
     || !nonEmptyString(value.id)
-    || (value.trust !== 'system' && value.trust !== 'user')
+    || (value.trust !== undefined && value.trust !== 'system' && value.trust !== 'user')
     || typeof value.isDefault !== 'boolean') {
     throw new Error('Malformed Harness agent preset entry.')
   }
@@ -582,7 +612,7 @@ function parsePresetCatalogEntry(value: unknown): PresetCatalogEntry {
   const broken = nonEmptyString(value.broken) ? value.broken : undefined
   return {
     id: value.id,
-    trust: value.trust,
+    ...(value.trust === undefined ? {} : { trust: value.trust }),
     isDefault: value.isDefault,
     ...(name === undefined ? {} : { name }),
     ...(description === undefined ? {} : { description }),
