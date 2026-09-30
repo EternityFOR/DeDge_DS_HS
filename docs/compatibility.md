@@ -79,6 +79,8 @@ Windows 探针检查：
 
 ## 发布门禁
 
+发布包的预算按原生载荷平台划分：Windows 为 90 MiB 压缩/256 MiB 解包，Linux/macOS 为 110 MiB/320 MiB。分平台预算只覆盖官方 Node/native binary 的大小差异；平台文件排除、秘密/私人路径、必需文件、许可证、重复文件与文件数量门禁仍统一检查。
+
 每个目标 VSIX 至少需要：
 
 ```text

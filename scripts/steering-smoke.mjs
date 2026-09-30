@@ -94,6 +94,7 @@ function sendMessages(response, model, block) {
 export async function verifyForegroundSteering(client, frames, workspace, mock) {
   const latencies = []
   for (const kind of ['queue', 'direct']) {
+    const observedStart = mock.observed.length
     const session = await client.createSession(workspace, 'standard')
     await client.selectModel(session.sessionId, 'deepseek-official', 'deepseek-v4-flash', 'off')
     await client.history(session.sessionId, 100)
@@ -127,6 +128,11 @@ export async function verifyForegroundSteering(client, frames, workspace, mock) 
     else await client.prompt(session.sessionId, marker, 'steer')
     const request = await waitUntil(async () => mock.observed.find(row => row.marker === marker && row.at >= start), 10_000, `${kind} steering remained blocked behind the 30-second sleep`)
     latencies.push(`${kind}=${request.at - start}ms`)
+    if (kind === 'queue') {
+      // Exercise the claimed-first/pending-rest boundary deliberately rather
+      // than depending on whether a fast runner reaches the next turn first.
+      await waitUntil(async () => mock.observed.slice(observedStart).some(row => row.marker === 'SMOKE_BACKLOG_1'), 5_000, 'The ordinary backlog did not resume after the steered step')
+    }
     try {
       await access(path.join(workspace, `steer-late-${kind}.txt`))
       throw new Error(`${kind} steering did not interrupt the actual foreground sleep`)
@@ -142,8 +148,11 @@ export async function verifyForegroundSteering(client, frames, workspace, mock) 
         + queue.filter(item => JSON.stringify(item).includes(`\"text\":\"${text}\"`)).length
       if (copies !== 1) throw new Error(`Steering lost or duplicated ${text}: ${copies} occurrences`)
     }
-    if (mock.observed.findIndex(row => row.marker === marker) > mock.observed.findIndex(row => row.marker === 'SMOKE_BACKLOG_1')
-      && mock.observed.some(row => row.marker === 'SMOKE_BACKLOG_1')) throw new Error('Queue promotion delivered older queued input before the steered message')
+    const scenarioRequests = mock.observed.slice(observedStart)
+    const firstBacklog = scenarioRequests.findIndex(row => row.marker === 'SMOKE_BACKLOG_1')
+    if (kind === 'queue' && firstBacklog >= 0 && scenarioRequests.findIndex(row => row.marker === marker) > firstBacklog) {
+      throw new Error('Queue promotion delivered older queued input before the steered message')
+    }
   }
   return latencies.join(', ')
 }
