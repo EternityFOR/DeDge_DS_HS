@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.1.94] - 2026-09-30
+
+### 发布门禁
+
+- 修正插队 runtime smoke 的请求记录隔离：直接 Steer 场景不再与上一个队列场景的旧 backlog 比较；仍保留真实 Shell 中断、消息保留和顺序断言。
+- 根据已观察的官方原生载荷设置平台预算。Windows 仍为 90 MiB 压缩/256 MiB 解包；Linux/macOS 为 110 MiB/320 MiB，覆盖不同 Node 与 native library 大小。私密内容、跨平台 native 文件、必需文件和重复大文件检查不变。
+- 本版保留 0.1.93 的前台 Steer 修复、官方 Harness 0.2.0-rc.2 升级和本地计划触发时间/倒计时提示；不复用已发布的版本号。
+
 ## [0.1.93] - 2026-09-30
 
 ### 修复
@@ -953,7 +961,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.93...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.94...HEAD
+[0.1.94]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.94
 [0.1.93]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.93
 [0.1.92]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.92
 [0.1.91]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.91

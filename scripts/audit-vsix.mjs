@@ -9,8 +9,14 @@ const EOCD_SIGNATURE = 0x06054b50
 const CENTRAL_SIGNATURE = 0x02014b50
 const LOCAL_SIGNATURE = 0x04034b50
 const NODE_LICENSE_SHA256 = 'c738ae413cf561f174e34f6961f8ca458aae2369a73640dda6234c629b98bcc4'
-const MAX_ARCHIVE_BYTES = 90 * 1024 ** 2
-const MAX_UNPACKED_BYTES = 256 * 1024 ** 2
+// Native Node and runtime libraries have materially different carrier sizes.
+// CI observed the pinned linux-x64 payload at 100.4 MiB/296.7 MiB; do not
+// apply Windows' smaller executable budget to a different platform.
+const PLATFORM_BUDGETS = {
+  win32: { compressed: 90 * 1024 ** 2, unpacked: 256 * 1024 ** 2 },
+  linux: { compressed: 110 * 1024 ** 2, unpacked: 320 * 1024 ** 2 },
+  darwin: { compressed: 110 * 1024 ** 2, unpacked: 320 * 1024 ** 2 },
+}
 const MAX_FILES = 15_000
 
 export function auditVsix(file, target) {
@@ -121,8 +127,10 @@ export function auditVsix(file, target) {
   }
 
   const unpackedBytes = entries.reduce((total, entry) => total + entry.unpackedBytes, 0)
-  if (archive.length > MAX_ARCHIVE_BYTES) throw new Error(`VSIX exceeds the ${formatBytes(MAX_ARCHIVE_BYTES)} compressed budget: ${formatBytes(archive.length)}`)
-  if (unpackedBytes > MAX_UNPACKED_BYTES) throw new Error(`VSIX exceeds the ${formatBytes(MAX_UNPACKED_BYTES)} unpacked budget: ${formatBytes(unpackedBytes)}`)
+  const budget = PLATFORM_BUDGETS[target.split('-')[0]]
+  if (budget === undefined) throw new Error(`No package budget declared for ${target}.`)
+  if (archive.length > budget.compressed) throw new Error(`VSIX exceeds the ${formatBytes(budget.compressed)} compressed budget: ${formatBytes(archive.length)}`)
+  if (unpackedBytes > budget.unpacked) throw new Error(`VSIX exceeds the ${formatBytes(budget.unpacked)} unpacked budget: ${formatBytes(unpackedBytes)}`)
   if (entries.length > MAX_FILES) throw new Error(`VSIX exceeds the ${MAX_FILES} file budget: ${entries.length}`)
 
   const packageManifest = JSON.parse(readText(archive, requiredEntry(entryByName, 'extension/package.json')))
