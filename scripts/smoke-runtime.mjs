@@ -1,16 +1,20 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 import WebSocket from 'ws'
+import { startMockModelServer, verifyForegroundSteering, verifyHostSchedules, waitUntil } from './steering-smoke.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const artifactArgument = process.argv.indexOf('--extension-root')
+const artifactRoot = artifactArgument < 0 ? root : path.resolve(root, process.argv[artifactArgument + 1] ?? '')
 const smokeRoot = path.join(root, '.tmp', 'runtime-smoke')
-const runtimeModules = path.join(root, 'dist', 'runtime', 'node_modules')
+const runtimeModules = path.join(artifactRoot, 'dist', 'runtime', 'node_modules')
 const node = path.join(runtimeModules, 'node', 'bin', process.platform === 'win32' ? 'node.exe' : 'node')
 const dsh = path.join(runtimeModules, '@deepseek-ai', 'dsh', 'lib', 'bin.js')
 const pnpm = path.join(runtimeModules, 'pnpm', 'bin', 'pnpm.mjs')
+const runtimeVersion = JSON.parse(await readFile(path.join(runtimeModules, '@deepseek-ai', 'dsh', 'package.json'), 'utf8')).version
 const overlayModule = path.join(smokeRoot, 'overlay.mjs')
 const overlayPath = path.join(smokeRoot, 'vscode.patch.yml')
 const hookConfigPath = path.join(smokeRoot, 'claude-hooks.json')
@@ -25,7 +29,9 @@ await mkdir(smokeWorkspace, { recursive: true })
 await writeFile(hookConfigPath, `${JSON.stringify({ SessionStart: [] })}\n`, 'utf8')
 
 let child
+let mock
 try {
+  mock = await startMockModelServer()
   await build({
     entryPoints: [path.join(root, 'src', 'runtime', 'overlay.ts')],
     outfile: overlayModule,
@@ -46,17 +52,17 @@ try {
     logLevel: 'silent',
   })
   const { renderRuntimeOverlay } = await import(`${pathToFileURL(overlayModule).href}?smoke=${Date.now()}`)
-  await writeFile(overlayPath, renderRuntimeOverlay({
+  const configuration = {
     runtimeMode: 'bundled',
     runtimeCommand: '',
     runtimeNodePath: '',
     startTimeoutMs: 90_000,
     provider: 'deepseek-official',
     model: 'deepseek-v4-flash',
-    reasoningEffort: 'high',
+    reasoningEffort: 'off',
     agentPreset: 'standard',
-    permissionMode: 'read-only',
-    baseUrl: 'https://api.deepseek.com/',
+    permissionMode: 'danger-full-access',
+    baseUrl: mock.baseUrl,
     scheduleEnabled: true,
     autoStart: false,
     contextMaxBytes: 32_768,
@@ -66,8 +72,12 @@ try {
     codexCommand: '',
     claudeCommand: '',
     handoffMaxBytes: 65_536,
+  }
+  const overlayOptions = {
     claudeHooksConfigPath: hookConfigPath,
-  }), 'utf8')
+    steeringPluginUrl: pathToFileURL(path.join(artifactRoot, 'dist', 'steering-interrupt.mjs')).href,
+  }
+  await writeFile(overlayPath, renderRuntimeOverlay(configuration, overlayOptions), 'utf8')
   await writePnpmWrapper(runtimeBin)
 
   const env = { ...process.env }
@@ -76,7 +86,9 @@ try {
   Object.assign(env, {
     DSH_HOME: home,
     DSH_CWD: smokeWorkspace,
-    DSH_PERMISSION_MODE: 'read-only',
+    DSH_PERMISSION_MODE: 'danger-full-access',
+    DEEPSEEK_API_KEY: 'runtime-smoke-placeholder',
+    DEEPSEEK_BASE_URL: mock.baseUrl,
     DSH_TELEMETRY_DISABLED: '1',
     DSH_BUNDLED_NODE: node,
     DSH_BUNDLED_PNPM: pnpm,
@@ -94,7 +106,7 @@ try {
   })
   const url = await waitForUrl(child, 90_000)
   const cookie = await bootstrapGatewayCookie(url)
-  const description = { version: '0.1.5-rc.3' }
+  const description = { version: runtimeVersion }
   const listed = await rpc(url, 'session/list', { args: { _request: {} } }, cookie)
   if (!Array.isArray(listed?.items)) throw new Error(`session/list returned a malformed response: ${JSON.stringify(listed)}`)
   const session = await rpc(url, 'session/create', { args: { request: { cwd: smokeWorkspace, agentPreset: 'standard' } } }, cookie)
@@ -110,7 +122,7 @@ try {
   // mounted. The extension treats both as best-effort cancellation helpers.
   const optionalCommands = new Set(commands.map(command => command.name))
   const control = await readRemoteStreamItem(url, 'session/control', { args: {} }, cookie)
-  if (control?.type !== 'baseline' || typeof control.value?.queues !== 'object' || typeof control.value?.jobs !== 'object') {
+  if (control?.type !== 'baseline' || typeof control.value?.projections !== 'object') {
     throw new Error(`session/control returned a malformed baseline: ${JSON.stringify(control)}`)
   }
   const workspace = await readRemoteStreamItem(url, 'workspace/follow', { args: {} }, cookie)
@@ -168,8 +180,9 @@ try {
   await rpc(url, 'session/cancel', { args: { request: { sessionId: visionSession.sessionId } } }, cookie)
   const { GatewayClient } = await import(`${pathToFileURL(gatewayClientModule).href}?smoke=${Date.now()}`)
   const clientFrames = []
+  const clientHostFrames = []
   const client = new GatewayClient(url, { info() {}, warn() {}, error() {}, raw() {} })
-  await client.connect({ onMux: frame => { clientFrames.push(frame) }, onHost: () => {}, onError: error => { throw error } })
+  await client.connect({ onMux: frame => { clientFrames.push(frame) }, onHost: frame => { clientHostFrames.push(frame) }, onError: error => { throw error } })
   const clientSessions = await client.listSessions()
   if (!clientSessions.items.some(item => item.sessionId === session.sessionId)) throw new Error('GatewayClient did not list the created session')
   const clientWorkspace = await client.listWorkspaces()
@@ -181,12 +194,43 @@ try {
   const clientHistory = await client.history(visionSession.sessionId)
   if (!clientHistory.events.some(item => item.event.type === 'user/message')) throw new Error('GatewayClient did not open the session follow snapshot')
   if (!clientFrames.some(frame => frame.type === 'session/queue')) throw new Error('GatewayClient did not consume the session control stream')
+  if ((await client.listSchedules(session.sessionId)).length !== 0) throw new Error('Fresh smoke session unexpectedly contained a reminder')
+  const steeringTiming = await verifyForegroundSteering(client, clientFrames, smokeWorkspace, mock)
+  if (!clientFrames.some(frame => frame.type === 'session/assistant-stream' && frame.value.messages.length > 0)) throw new Error('Cursorless live assistant text never reached the client')
+  await verifyHostSchedules(client, smokeWorkspace)
+  if (!clientHostFrames.some(frame => frame.type === 'host/remote-event' && frame.event === 'schedule/changed')) throw new Error('Host schedule changes were not broadcast to the Gateway client')
   client.dispose()
+  await terminate(child)
+  child = undefined
+
+  // Start a fresh synthetic Host through the legacy custom-gateway route.
+  // The explicit overlay disables the native Messages adapter for this URL.
+  const compatBase = `${mock.origin}/v1`
+  await writeFile(overlayPath, renderRuntimeOverlay({ ...configuration, baseUrl: compatBase }, overlayOptions), 'utf8')
+  child = spawn(node, [dsh, 'web', '--patch', overlayPath, '--host', '127.0.0.1', '--port', '0', '--no-open'], {
+    cwd: smokeWorkspace,
+    env: { ...env, DSH_HOME: path.join(smokeRoot, 'compat-home'), DEEPSEEK_BASE_URL: compatBase },
+    shell: false,
+    windowsHide: true,
+    detached: process.platform !== 'win32',
+  })
+  const compatUrl = await waitForUrl(child, 90_000)
+  const compatClient = new GatewayClient(compatUrl, { info() {}, warn() {}, error() {}, raw() {} })
+  await compatClient.connect({ onMux() {}, onHost() {}, onError: error => { throw error } })
+  const compatSession = await compatClient.createSession(smokeWorkspace, 'standard')
+  await compatClient.prompt(compatSession.sessionId, 'SMOKE_COMPAT')
+  await waitUntil(async () => {
+    const history = await compatClient.history(compatSession.sessionId)
+    return history.events.some(row => row.event.type === 'assistant/message' && JSON.stringify(row.event.data).includes('SMOKE_COMPAT_ACK'))
+  }, 15_000, 'Custom OpenAI-compatible gateway did not complete its synthetic request')
+  compatClient.dispose()
+  if (!mock.paths.some(endpoint => endpoint.endsWith('/chat/completions'))) throw new Error('Custom endpoint was not kept on Chat Completions')
   const displayUrl = new URL(url)
   displayUrl.search = ''
-  console.log(`Runtime smoke passed at ${displayUrl} with Gateway ${String(description?.version ?? 'unknown')}, authenticated Client RPC/streams, schedule tools, /compact, native image prompt, history image references, session.attachment support, and optional commands: ${[...optionalCommands].filter(name => name === 'stop-jobs' || name === 'schedule-cancel').join(', ') || 'none'}`)
+  console.log(`Runtime smoke passed at ${displayUrl} with Gateway ${String(description?.version ?? 'unknown')}, authenticated RPC/streams, native images, scoped Host schedules, custom Chat Completions compatibility, and real foreground sleep interruption (${steeringTiming}) without losing the other ten queued prompts.`)
 } finally {
   if (child !== undefined) await terminate(child)
+  await mock?.close()
   await rm(smokeRoot, { recursive: true, force: true })
 }
 

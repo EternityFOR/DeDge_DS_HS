@@ -38,4 +38,11 @@ Codex 和 Claude Code 的公开仓库不包含其完整 VS Code 前端，因此�
 
 ## 更新规则
 
+### 2026-09-30：Harness 0.2.0-rc.2
+
+- 官方 release tag：`dsh-v0.2.0-rc.2`；固定 commit：`639ed015397290b3745d163aafe02ffee4aa3f84`。npm `latest` / `next` 均核对为 `0.2.0-rc.2`。
+- 参考克隆：`.tmp/upstream-source-0.2.0-rc.2/`，仅用于审查，可清理，不参与发布产物。
+- 核对重点：`agent-loop` Steer 的 next-step 语义；`tools/execute` 的协作式 signal 替换；Session Inbox projection 与 cursorless assistant frames；独立 job controller；Host Schedule API；DeepSeek Messages 与 pi-ai Chat Completions 路由；v3→v4 Session reader。
+- 保留必要的现有本地 runtime patches，不再向新 ScheduleService 套用旧 session-log Schedule 源码补丁。扩展自有的前台插队桥使用公开中间件，不修改 Agent loop。
+
 升级上游前先新增一条带日期的记录，保留旧提交和结论；然后分别审查 CLI 参数、Gateway 方法、WebSocket frame、数据目录格式和许可证。仅查看最新分支而不记录 commit 的结论不可用于发布决策。

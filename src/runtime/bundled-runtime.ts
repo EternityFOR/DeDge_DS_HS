@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { constants as fsConstants } from 'node:fs'
 import { access, chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import type * as vscode from 'vscode'
 import type { HarnessConfiguration } from '../config/configuration.js'
@@ -10,7 +11,7 @@ import type { StorageLayout } from '../platform/storage.js'
 import type { RuntimeLaunch } from './types.js'
 
 const execFileAsync = promisify(execFile)
-export const EXPECTED_DSH_VERSION = '0.1.5-rc.3'
+export const EXPECTED_DSH_VERSION = '0.2.0-rc.2'
 
 export class RuntimeResolver {
   constructor(
@@ -20,9 +21,14 @@ export class RuntimeResolver {
   ) {}
 
   async resolve(configuration: HarnessConfiguration): Promise<RuntimeLaunch> {
+    await requireAccess(this.context.asAbsolutePath('dist/steering-interrupt.mjs'), fsConstants.R_OK, 'foreground steering bridge')
     return configuration.runtimeMode === 'bundled'
       ? this.resolveBundled()
       : this.resolveExternal(configuration)
+  }
+
+  get steeringPluginUrl(): string {
+    return pathToFileURL(this.context.asAbsolutePath('dist/steering-interrupt.mjs')).href
   }
 
   private async resolveBundled(): Promise<RuntimeLaunch> {

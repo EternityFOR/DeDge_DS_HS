@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { GatewayClient } from '../src/gateway/gateway-client.js'
 import { bootstrapGatewayCookie, withGatewayCookie } from '../src/gateway/auth.js'
 import { assertLoopbackGatewayUrl, directLoopbackAgent } from '../src/gateway/local-http.js'
+import { queueItemsFromInbox } from '../src/gateway/event-stream.js'
 import {
   parseContextPressureProjection,
   expandHistoryRecords,
@@ -51,6 +52,18 @@ function writeJson(response: http.ServerResponse, value: unknown): void {
 }
 
 describe('Gateway JSON frame parsing', () => {
+  it('maps 0.2 Inbox projections to stable user queue/steer and plugin context rows', () => {
+    const queued = { id: 'q-1', source: { kind: 'user', rpcId: 'prompt-1' }, content: [{ type: 'text', text: 'Later' }] }
+    const steered = { id: 's-1', source: { kind: 'user', rpcId: 'prompt-2' }, content: [{ type: 'text', text: 'Now' }] }
+    const plugin = { id: 'p-1', source: { kind: 'schedule' }, content: [{ type: 'text', text: 'Reminder' }] }
+    expect(queueItemsFromInbox({ 'next-turn': [queued], 'next-step': [steered, plugin] })).toEqual([
+      { id: 'q-1', placement: 'queued', message: queued, rpcId: 'prompt-1' },
+      { id: 's-1', placement: 'steering', message: steered, rpcId: 'prompt-2' },
+      { id: 'p-1', placement: 'context', message: plugin },
+    ])
+    expect(queueItemsFromInbox({ 'next-turn': [queued], 'next-step': [queued] })).toBeUndefined()
+    expect(queueItemsFromInbox({ 'next-turn': [], 'next-step': [] })).toEqual([])
+  })
   it('exchanges an alpha.3 launch token for a cookie without retaining query credentials in API headers', async () => {
     let requestedPath = ''
     let requestCookie: string | undefined
@@ -144,6 +157,29 @@ describe('Gateway JSON frame parsing', () => {
         { args: { request: { sessionId: 'session-1', itemId: 'message-1', action: { kind: 'edit', content: [{ type: 'text', text: 'Revised prompt' }] } } } },
         { args: { request: { sessionId: 'session-1', itemId: 'message-1', action: { kind: 'steer' } } } },
         { args: { request: { sessionId: 'session-1', itemId: 'message-1', action: { kind: 'remove' } } } },
+      ])
+    })
+  })
+
+  it('uses the official session-scoped Schedule and Job management RPCs', async () => {
+    const calls: unknown[] = []
+    await withLoopbackServer(async (incoming, response) => {
+      const body = await readJsonBody(incoming)
+      calls.push({ method: body.method, payload: body.payload })
+      const value = body.method === 'schedule/list'
+        ? [{ id: 'reminder-1', kind: 'at', title: 'Review', prompt: 'Check', scheduledAt: '2099-01-01T00:00:00.000Z' }]
+        : body.method === 'schedule/delete' ? { id: 'reminder-1', deleted: true }
+          : { outcome: 'requested' }
+      writeJson(response, { type: 'server-response', rpcId: body.rpcId, result: { ok: true, value } })
+    }, async baseUrl => {
+      const client = new GatewayClient(baseUrl, {} as never)
+      expect((await client.listSchedules('session-1'))[0]?.title).toBe('Review')
+      await client.deleteSchedule('session-1', 'reminder-1')
+      await client.killJob('session-1', 'pwsh-1')
+      expect(calls).toEqual([
+        { method: 'schedule/list', payload: { args: { request: { sessionId: 'session-1' } } } },
+        { method: 'schedule/delete', payload: { args: { request: { sessionId: 'session-1', id: 'reminder-1' } } } },
+        { method: 'job/kill', payload: { args: { request: { sessionId: 'session-1', jobId: 'pwsh-1' } } } },
       ])
     })
   })
@@ -300,6 +336,7 @@ describe('Gateway JSON frame parsing', () => {
       hasDocument: true,
     }).presets.map(preset => preset.id)).toEqual(['standard', 'cordis'])
     expect(parsePresetCatalog({ presets: [{ id: 'standard', trust: 'system', isDefault: true }], authorable: false })).toMatchObject({ hasDocument: false })
+    expect(parsePresetCatalog({ presets: [{ id: 'standard', isDefault: true }] })).toEqual({ presets: [{ id: 'standard', isDefault: true }], authorable: false, hasDocument: false })
   })
 
   it('parses the official active schedule projection and rejects malformed records', () => {
@@ -310,8 +347,13 @@ describe('Gateway JSON frame parsing', () => {
       { id: 'schedule-1', kind: 'at', prompt: 'Check the market', scheduledAt: '2099-09-04T13:24:00.000Z' },
       { id: 'schedule-2', kind: 'every', prompt: 'Refresh quotes', scheduledAt: '2099-09-04T13:30:00.000Z', everySeconds: 3_600 },
     ])
-    expect(parseScheduleProjection([{ id: 'schedule-1', kind: 'every', prompt: 'Too frequent', scheduledAt: '2099-09-04T13:24:00.000Z', everySeconds: 60 }])).toBeUndefined()
+    expect(parseScheduleProjection([{ id: 'schedule-1', kind: 'every', prompt: 'Too frequent', scheduledAt: '2099-09-04T13:24:00.000Z', everySeconds: 59 }])).toBeUndefined()
     expect(parseScheduleProjection([{ id: 'schedule-1', kind: 'at', prompt: '', scheduledAt: '2099-09-04T13:24:00.000Z' }])).toBeUndefined()
+    expect(parseScheduleProjection([
+      { id: 'daily', kind: 'daily', title: 'Daily reminder', prompt: 'Check', scheduledAt: '2099-09-04T13:24:00.000Z', time: '09:00:00', timeZone: 'Asia/Shanghai' },
+      { id: 'weekly', kind: 'weekly', title: 'Weekly reminder', prompt: 'Check', scheduledAt: '2099-09-04T13:24:00.000Z', time: '09:00:00', timeZone: 'Asia/Shanghai', weekdays: [1, 3] },
+      { id: 'cron', kind: 'cron', title: 'Cron reminder', prompt: 'Check', scheduledAt: '2099-09-04T13:24:00.000Z', expression: '*/15 * * * *', timeZone: 'Asia/Shanghai' },
+    ])?.map(record => record.kind)).toEqual(['daily', 'weekly', 'cron'])
   })
 
   it('parses host lifecycle frames and rejects malformed envelopes', () => {

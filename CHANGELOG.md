@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+## [0.1.93] - 2026-09-30
+
+### 修复
+
+- Steer 通过官方 `tools/execute` 中间件打断本会话正在运行的前台 Shell 操作，解决 `Start-Sleep` / `sleep` 持续执行时插队消息一直等到命令结束的问题；不会中断 Agent 的 turn signal、清空其他排队消息或取消后台任务、定时器。
+- 已进入 Steering 状态的消息仍保留编辑和取消按钮，并补充插队行为说明。
+- Schedule 等待转圈提示显示最近计划的本地触发时间、时区和剩余倒计时；本地每秒更新小范围标签，隐藏界面时停表，不发送模型/RPC 请求或重绘历史。
+- 适配新版 `inbox` 队列投影、独立的 `job/list` / `job/kill` API、Host Schedule API 和 Agent Preset roster；取消后台工作只针对当前会话拥有的 job。
+- 适配新版无日志游标的 assistant stream，实时文字/思考与持久历史分离，避免直播片段污染历史顺序、重连重复和游标。
+
+### 上游更新
+
+- 内置 DeepSeek Harness 从 `0.1.5-rc.3` 更新到 npm `latest` 的 `0.2.0-rc.2`；Node 和 pnpm 版本保持不变。
+- 官方 DeepSeek endpoint 在运行时适配到 Messages namespace；已有自定义 OpenAI-compatible / Sub2 URL 保留 Chat Completions 路由，URL 和 SecretStorage key slots 不重写。
+- 定时任务读取/删除使用新版官方 Host API，新增 daily/weekly/cron 状态识别；旧 session-log reminder 不会被上游自动迁移成 Host reminder，升级后需要手动重新创建。
+- 保留仍有必要的凭据环境过滤、空闲审批通知、权限切换关闭终端和持久 Shell 缓存恢复补丁；新版不再使用旧 Schedule 源码补丁。
+- 自有 VS Code UI 不启用上游浏览器 Office 转 PDF/文档预览，发布包排除可选 LibreOffice native/WASM 引擎，并由包审计强制检查这项组件边界；Agent 工具和图片输入不受影响。
+
+### 验证
+
+- 增加前台插队、跨会话隔离、Inbox、游标无关直播和 endpoint 协议回归测试。
+- 无真实 API/key 的 runtime smoke 使用真实前台 30 秒睡眠，验证直接 Steer 和第 11 条队列消息插队；其余 10 条消息无丢失、无重复，并验证 Host reminders 隔离删除与自定义 Chat Completions 完整请求。
+
 ## [0.1.92] - 2026-09-25
 
 ### Security
@@ -930,7 +953,8 @@
 [0.1.33]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.33
 [0.1.34]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.34
 [0.1.35]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.35
-[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.92...HEAD
+[Unreleased]: https://github.com/EternityFOR/DeDge_DS_HS/compare/v0.1.93...HEAD
+[0.1.93]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.93
 [0.1.92]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.92
 [0.1.91]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.91
 [0.1.90]: https://github.com/EternityFOR/DeDge_DS_HS/releases/tag/v0.1.90

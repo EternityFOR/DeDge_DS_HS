@@ -19,11 +19,15 @@ Tier 表示发布验证优先级，不表示尚未运行发布门禁的构建已
 
 | 组件 | 内置版本 | 规则 |
 | --- | --- | --- |
-| DeepSeek Harness | `0.1.5-rc.3` | 官方 RC 的 session/queue/恢复协议、原生图片附件与当前 Gateway 协议验证目标 |
+| DeepSeek Harness | `0.2.0-rc.2` | 当前官方 Inbox、无游标 assistant stream、Host Schedule、job RPC 与图片协议验证目标 |
 | Node.js | `22.22.3` | VSIX 内置，不依赖系统 Node |
 | pnpm | `11.21.0` | 只供 Harness 内部工具链使用 |
 
-external JavaScript runtime 接受 Node `22.19+` 或 `24+`；Node 23 不在当前上游支持范围。bundled 和 external DSH 均要求精确的 `0.1.5-rc.3`，版本不同会阻止启动，避免 API、认证和事件格式不一致。扩展不会从 PATH 猜测版本，也不会自动升级。
+external JavaScript runtime 接受 Node `22.19+` 或 `24+`；Node 23 不在当前上游支持范围。bundled 精确固定 `0.2.0-rc.2`；external 只接受相同 `0.2.0` RC 协议基线，并会对其他 RC revision 记录兼容性警告。旧 `0.1.x` Host 不会被新客户端附着。扩展不会从 PATH 猜测版本，也不会在激活时自动升级。
+
+官方 DeepSeek root 和显式 `/anthropic` namespace 使用新 Messages adapter；已有自定义 OpenAI-compatible / Sub2 root 使用 pi-ai Chat Completions 兼容路由。配置值和 endpoint 绑定的 SecretStorage 槽保留，运行时才适配官方 root。
+
+新 Schedule 使用 Host 级持久存储。旧 session-log reminders 仍可出现在历史文本中，但上游不会自动将它们转换为 active Host tasks；需要明确重新创建。Pause 只删除当前会话的 Host reminders 并停止当前会话拥有的 jobs，Steer 不执行这些操作。
 
 工作区 hooks 使用上游 bridge 显式挂载：扩展按顺序检测 `.claude/hooks.json`、`.claude/settings.json`、根目录 `hooks.json` 和 `.codex/hooks.json`，只在文件存在时把对应 bridge 写入生成的 overlay；配置文件和 hook 脚本留在用户工作区，不进入 VSIX。上游 hook bridge 只运行其支持的同步 command hooks，其他 handler 会记录警告并跳过。
 
@@ -64,6 +68,7 @@ Windows 探针检查：
 
 ## 已知限制
 
+- VS Code 的自有工作台不启用上游浏览器 Office 转 PDF/文档预览服务；VSIX 排除它们的可选 LibreOffice native/WASM 引擎。此项不提供 Agent 工具，文件生成和原生图片输入不受影响。
 - DeepSeek Harness 是 developer preview，Gateway 事件可能在后续 RC 中变化。
 - 上下文占用依赖可选的 `contextPressure` projection；不提供 token-meter 的自定义 preset 会隐藏占用环，而不是显示伪造估算。
 - Codex 历史优先使用官方 app-server 的当前 provider、Active 交互式根会话列表；不可用时才扫描 Codex `sessions/`。Claude 只扫描 `projects/` 的 Active 顶层会话；Codex `archived_sessions/` 永不进入回退扫描。Codex rollout 文本读取限制为末尾 32 MiB，避免超大 JSONL 在 Windows 上阻塞 extension host。

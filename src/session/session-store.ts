@@ -2,6 +2,7 @@ import { isRecord, type ContextPressureProjection, type HistoryEntry, type Model
 import type { RuntimeState } from '../runtime/types.js'
 import type { PendingApproval, PendingQuestion, SessionOperation, WorkbenchImageAttachment, WorkbenchJob, WorkbenchMessage, WorkbenchMessageAttachment, WorkbenchPhase, WorkbenchQueueItem, WorkbenchSchedule, WorkbenchSession, WorkbenchSnapshot } from './types.js'
 import { projectUserPrompt } from './prompt-projection.js'
+import type { LiveAssistantSnapshot } from '../gateway/assistant-stream.js'
 
 export interface StoreConfiguration {
   readonly provider: string
@@ -44,6 +45,7 @@ export class SessionStore {
   private readonly queueItems = new Map<string, WorkbenchQueueItem[]>()
   private readonly jobs = new Map<string, WorkbenchJob[]>()
   private readonly schedules = new Map<string, WorkbenchSchedule[]>()
+  private readonly liveAssistant = new Map<string, LiveAssistantSnapshot>()
   /** Hydrated image bytes keyed by session and the opaque Harness attachment id. */
   private readonly imageData = new Map<string, { readonly mimeType: WorkbenchImageAttachment['mimeType']; readonly dataBase64: string }>()
   private permissionChanging = false
@@ -75,6 +77,7 @@ export class SessionStore {
     this.queueItems.clear()
     this.jobs.clear()
     this.schedules.clear()
+    this.liveAssistant.clear()
     this.forcedSettledSessions.clear()
   }
 
@@ -146,6 +149,7 @@ export class SessionStore {
     this.queueItems.delete(sessionId)
     this.jobs.delete(sessionId)
     this.schedules.delete(sessionId)
+    this.liveAssistant.delete(sessionId)
     this.forcedSettledSessions.delete(sessionId)
     for (const key of this.imageData.keys()) if (key.startsWith(`${sessionId}\u0000`)) this.imageData.delete(key)
     this.sessionOperations.delete(sessionId)
@@ -160,8 +164,15 @@ export class SessionStore {
 
   /** Apply an authoritative idle projection after a Gateway reconnect. */
   markSessionStopped(sessionId: string): void {
+    this.liveAssistant.delete(sessionId)
     this.forcedSettledSessions.add(sessionId)
     this.setRunning(sessionId, false)
+  }
+
+  setLiveAssistant(sessionId: string, value: LiveAssistantSnapshot | undefined): void {
+    if (value === undefined) return
+    if ((this.liveAssistant.get(sessionId)?.revision ?? -1) > value.revision) return
+    this.liveAssistant.set(sessionId, value)
   }
 
   setSessionOperation(sessionId: string, operation: SessionOperation | undefined): void {
@@ -357,6 +368,7 @@ export class SessionStore {
       : [...(this.events.get(this.activeSessionId)?.values() ?? [])].sort((left, right) => left.event.seq - right.event.seq)
     const messages = this.hydrateImages(this.activeSessionId, projectMessages(activeEvents, {
       forceInterruptIncomplete: this.activeSessionId !== undefined && this.forcedSettledSessions.has(this.activeSessionId),
+      liveMessages: this.activeSessionId === undefined ? [] : this.liveAssistant.get(this.activeSessionId)?.messages.map(message => ({ ...message, status: 'streaming' as const })) ?? [],
     }))
     const modelCatalog = this.modelCatalog
     const activeModelCatalog = modelCatalog !== undefined && modelCatalog.sessionId === this.activeSessionId ? modelCatalog.value : undefined
@@ -462,7 +474,7 @@ function conversationUnitCount(messages: readonly WorkbenchMessage[]): number {
   return units.size
 }
 
-export function projectMessages(entries: readonly HistoryEntry[], options: { readonly forceInterruptIncomplete?: boolean } = {}): WorkbenchMessage[] {
+export function projectMessages(entries: readonly HistoryEntry[], options: { readonly forceInterruptIncomplete?: boolean; readonly liveMessages?: readonly WorkbenchMessage[] } = {}): WorkbenchMessage[] {
   const output: WorkbenchMessage[] = []
   const interruptedTurns = new Set<string>()
   const steeringMessageIds = collectSteeringMessageIds(entries)
@@ -485,7 +497,7 @@ export function projectMessages(entries: readonly HistoryEntry[], options: { rea
       const source = isRecord(data.source) ? data.source : undefined
       const automationKind = source?.kind === 'goal'
         ? 'goal' as const
-        : source?.kind === 'plugin' && source.plugin === 'schedule'
+        : source?.kind === 'schedule' || (source?.kind === 'plugin' && source.plugin === 'schedule')
           ? 'schedule' as const
           : undefined
       const automated = automationKind !== undefined
@@ -614,7 +626,7 @@ export function projectMessages(entries: readonly HistoryEntry[], options: { rea
       time: stream.time,
     }
   }))
-  const sorted = output.sort((left, right) => (left.seq ?? Number.MAX_SAFE_INTEGER) - (right.seq ?? Number.MAX_SAFE_INTEGER))
+  const sorted = [...output, ...(options.liveMessages ?? [])].sort((left, right) => (left.seq ?? Number.MAX_SAFE_INTEGER) - (right.seq ?? Number.MAX_SAFE_INTEGER))
   return annotateTaskGroups(sorted, entries, options.forceInterruptIncomplete === true)
 }
 
@@ -982,5 +994,5 @@ function projectJob(value: unknown, index: number): WorkbenchJob {
   const label = typeof value.label === 'string' && value.label !== '' ? value.label : 'Background agent task'
   const knownStatuses = new Set(['running', 'stopping', 'completed', 'killed', 'failed'])
   const status = typeof value.status === 'string' && knownStatuses.has(value.status) ? value.status : 'running'
-  return { id, kind, label, status }
+  return { id, kind, label, status, ...(typeof value.owner === 'string' ? { owner: value.owner } : {}) }
 }

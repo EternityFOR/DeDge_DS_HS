@@ -14,6 +14,7 @@ import {
   parseRenameResult,
   parseServerResponse,
   parseSessionAttachment,
+  parseScheduleProjection,
   type HostDescription,
   type HostFrame,
   type ModelCatalog,
@@ -23,6 +24,7 @@ import {
   type SessionAttachment,
   type SessionHistory,
   type SessionSummary,
+  type ScheduleProjectionRecord,
   type WorkspaceRegistry,
 } from './protocol.js'
 
@@ -145,6 +147,7 @@ export class GatewayClient implements vscode.Disposable {
         events: expandHistoryRecords(snapshot.records),
         hasMore: snapshot.hasMore,
         ...(snapshot.projections === undefined ? {} : { projections: snapshot.projections }),
+        ...(snapshot.liveAssistant === undefined ? {} : { liveAssistant: snapshot.liveAssistant }),
       }
     }
     if (this.sessionCursors.get(sessionId) === undefined) {
@@ -182,6 +185,26 @@ export class GatewayClient implements vscode.Disposable {
 
   removeQueueItem(sessionId: string, itemId: string): Promise<{ readonly accepted: true }> {
     return this.updateQueueItem(sessionId, itemId, { kind: 'remove' })
+  }
+
+  async listSchedules(sessionId: string): Promise<ScheduleProjectionRecord[]> {
+    const records = parseScheduleProjection(await this.request('schedule/list', { request: { sessionId } }))
+    if (records === undefined) throw new Error('Malformed Harness active schedule list.')
+    return records
+  }
+
+  async deleteSchedule(sessionId: string, id: string): Promise<void> {
+    const value: unknown = await this.request('schedule/delete', { request: { sessionId, id } })
+    if (!isRecord(value) || value.id !== id || (value.deleted !== true && value.code !== 'schedule_not_found')) {
+      throw new Error('Harness did not acknowledge scheduled reminder deletion.')
+    }
+  }
+
+  async killJob(sessionId: string, jobId: string): Promise<void> {
+    const value: unknown = await this.request('job/kill', { request: { sessionId, jobId } })
+    if (!isRecord(value) || (value.outcome !== 'requested' && value.outcome !== 'already-finished')) {
+      throw new Error('Harness did not acknowledge background job cancellation.')
+    }
   }
 
   async models(_sessionId: string): Promise<ModelCatalog> {

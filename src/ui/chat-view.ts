@@ -825,6 +825,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     .response-waiting.hidden { display: none !important; }
     .response-waiting svg { flex: 0 0 12px; width: 12px; height: 12px; color: var(--vscode-progressBar-background); animation: response-waiting-spin 900ms linear infinite; }
     .response-waiting span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .response-waiting.scheduled span { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
     .response-waiting span::after { content: ' ···'; display: inline-block; width: 18px; text-align: left; animation: sending-dots 1s steps(4,end) infinite; }
     @keyframes response-waiting-spin { to { transform: rotate(360deg); } }
     .attachment-openable { cursor: pointer; }

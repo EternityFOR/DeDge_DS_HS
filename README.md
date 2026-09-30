@@ -6,7 +6,7 @@
 
 [Marketplace](https://marketplace.visualstudio.com/items?itemName=diractive-edge.dedge-deepseek-harness-vscode) · [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) · [Changelog](CHANGELOG.md) · [隐私](PRIVACY.md) · [安全](SECURITY.md) · [支持](SUPPORT.md)
 
-> 当前版本为 `0.1.92`。发布产物优先验证 Windows 10/11 x64；DeepSeek Harness 上游仍处于 developer preview，升级前请阅读变更日志和已知限制。
+> 当前版本为 `0.1.93`。发布产物优先验证 Windows 10/11 x64；DeepSeek Harness 上游仍处于 developer preview，升级前请阅读变更日志和已知限制。
 
 ## 主要能力
 
@@ -17,9 +17,10 @@
 - 上下文占用由 Harness 的 `contextPressure` 数据驱动；支持查看 token 压力、调整上下文容量和在空闲时手动压缩。
 - 只读载入本机 Codex、Claude Code 会话，并通过隔离文本交接在三个平台之间继续工作。
 - Windows 进程使用参数数组和 `shell: false` 启动，避免把路径、参数或提示词交给 PowerShell/cmd 二次解析。
+- Steer 可打断本会话正在执行的前台 PowerShell/Bash 等 Shell 操作，让插队消息在下一步进入模型；不会清空其他排队消息或取消后台任务、定时器。
 - API Key 只保存在 VS Code `SecretStorage`；Gateway 只监听随机的 `127.0.0.1` 端口。
 - 捆绑 Harness 也会按上游规则读取受信任工作区 `.env` 和隔离的 `DSH_HOME/.env` 作为凭据/环境回退；工具子进程会过滤常见敏感变量名，但这不是对工作区 secret 的安全隔离。若不希望 Agent 有机会读到某个值，不要把它放进工作区 `.env`。
-- 内置官方 `dsh-schedule` 默认提供 `schedule_create`、`schedule_list` 和 `schedule_delete`；定时任务使用 session-local reminder，不需要用 PowerShell `Start-Sleep` 保持进程。
+- 内置官方 `dsh-schedule` 默认提供 `schedule_create`、`schedule_list`、`schedule_delete` 和 `schedule_update`；Host reminder 可在 Host 重启后恢复，不需要用 PowerShell `Start-Sleep` 保持进程。旧 session-log reminders 升级后需要明确重新创建。
 - 工作区存在 `.claude/hooks.json`、`.claude/settings.json`、根目录 `hooks.json` 或 `.codex/hooks.json` 时，运行时会自动挂载官方 hooks bridge；配置文件只从本机工作区读取，不会进入 VSIX。
 - `deepseek-official` 使用 Harness 原生 DeepSeek 适配器；将 `provider` 改为其他路由时，扩展会挂载 Harness 内置的多提供方 `pi-ai` 适配器，可接 OpenAI-compatible 网关，provider 名包含 `anthropic` 或 `claude` 时使用 Anthropic Messages 协议。
 - Runtime 就绪时发布不含凭据的本机 lease，供 DeDge Orbit 复用同一个 Gateway；退出时只清理属于当前进程的 lease。
@@ -32,14 +33,14 @@
 
 ### 从 VSIX 安装
 
-1. 从 [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) 下载与 extension host 匹配的文件，例如 `dedge-deepseek-harness-vscode-0.1.92-win32-x64.vsix`。
+1. 从 [GitHub Releases](https://github.com/EternityFOR/DeDge_DS_HS/releases) 下载与 extension host 匹配的文件，例如 `dedge-deepseek-harness-vscode-0.1.93-win32-x64.vsix`。
 2. 在 VS Code 扩展视图右上角菜单选择 **Install from VSIX...**。
 3. 安装完成后按 VS Code 提示重新加载窗口。
 
 也可以显式安装：
 
 ```powershell
-code --install-extension .\dedge-deepseek-harness-vscode-0.1.92-win32-x64.vsix
+code --install-extension .\dedge-deepseek-harness-vscode-0.1.93-win32-x64.vsix
 ```
 
 Remote SSH、WSL 和 Dev Container 使用远端 extension host 的操作系统与架构，不是本地 UI 的平台。平台 VSIX 不能混用。
@@ -106,7 +107,7 @@ Codex / Claude / DeepSeek source session (read-only)
 
 | Extension host | VSIX target | 当前状态 |
 | --- | --- | --- |
-| Windows 10/11 x64 | `win32-x64` | `0.1.92` 完整验证目标 |
+| Windows 10/11 x64 | `win32-x64` | `0.1.93` 完整验证目标 |
 | Linux x64 | `linux-x64` | 源码支持；发布前需要原生 runner 验证 |
 | macOS Apple Silicon | `darwin-arm64` | 源码支持；发布前需要原生 runner 验证 |
 | Windows ARM64 / Linux ARM64 / macOS Intel | 对应 target | 需要对应原生 runner 或设备验证 |
@@ -115,7 +116,7 @@ Codex / Claude / DeepSeek source session (read-only)
 
 | 组件 | 版本 |
 | --- | --- |
-| DeepSeek Harness | `0.1.5-rc.3` |
+| DeepSeek Harness | `0.2.0-rc.2` |
 | Node.js | `22.22.3` |
 | pnpm | `11.21.0` |
 
@@ -132,7 +133,7 @@ Codex / Claude / DeepSeek source session (read-only)
 | `dedgeDeepSeekHarness.model` | `deepseek-flash` | 新会话默认模型 |
 | `dedgeDeepSeekHarness.reasoningEffort` | `high` | 新会话默认 reasoning；实际选项由模型 adapter 返回 |
 | `dedgeDeepSeekHarness.agentPreset` | `standard` | 新会话默认 Agent Preset |
-| `dedgeDeepSeekHarness.schedule.enabled` | `true` | 默认提供官方 session-local `schedule_*` 定时工具；可关闭，修改后需重启 Harness |
+| `dedgeDeepSeekHarness.schedule.enabled` | `true` | 默认提供官方持久 Host `schedule_*` 定时工具；可关闭，修改后需重启 Harness |
 | `dedgeDeepSeekHarness.permissionMode` | `workspace-write` | 初始文件系统权限 |
 | `dedgeDeepSeekHarness.context.maxBytes` | `32768` | 单次编辑器上下文 UTF-8 字节预算 |
 | `dedgeDeepSeekHarness.context.windowTokens` | `1000000` | 上下文容量，也是自动压缩百分比的计算基数 |

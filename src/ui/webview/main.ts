@@ -1,4 +1,5 @@
 import DOMPurify from 'dompurify'
+import { scheduleTimingHint } from '../../session/schedule-timing.js'
 import {
   ArrowLeftRight,
   CalendarClock,
@@ -146,6 +147,8 @@ let searchDebounceTimer: number | undefined
 
 // Rendering state: state messages are coalesced into at most one full render per animation frame.
 let renderScheduled = false
+let scheduleCountdownTimer: number | undefined
+let scheduleWaitingOnly = false
 let pendingState: WorkbenchSnapshot | undefined
 let pendingAttachments: readonly ContextAttachment[] = []
 let renderedSessionKey: string | undefined
@@ -648,6 +651,7 @@ function render(): void {
   const loading = isHarnessLoading(state)
   elements.app.classList.toggle('is-loading', loading)
   elements.loadingScreen.classList.toggle('hidden', !loading)
+  updateScheduleCountdown(state)
   if (loading) return
   renderSessionTabs(state)
   renderControls(state)
@@ -1027,14 +1031,14 @@ function renderQueueRow(item: NonNullable<WorkbenchSnapshot['queueItems']>[numbe
   if (item.placement === 'steering') {
     const status = document.createElement('span')
     status.className = 'queue-steering-label'
-    status.textContent = busy ? 'Steering...' : 'Steering'
+    status.textContent = 'Steering...'
+    status.title = 'Waiting for the next step. Active foreground shell commands are interrupted; background jobs and other queued messages are preserved.'
     row.append(status)
-    return row
   }
 
   const actions = document.createElement('span')
   actions.className = 'queue-actions'
-  if (busy) {
+  if (busy && item.placement !== 'steering') {
     const status = document.createElement('span')
     status.className = 'queue-steering-label'
     status.textContent = 'Working...'
@@ -1050,9 +1054,11 @@ function renderQueueRow(item: NonNullable<WorkbenchSnapshot['queueItems']>[numbe
   }))
   const running = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)?.running === true
   const steerAllowed = running || (editable && !item.hasNonText)
-  actions.append(queueActionButton('corner-down-right', steerAllowed ? 'Steer this queued message into the active turn' : 'Resume the session before steering an image or attachment', busy || !steerAllowed, () => {
-    if (steerAllowed && !busy) startQueueAction(item.id, { type: 'steerQueueItem', itemId: item.id })
-  }))
+  if (item.placement !== 'steering') {
+    actions.append(queueActionButton('corner-down-right', steerAllowed ? 'Steer now: interrupt active foreground shell commands and deliver this message at the next step; preserve other queued messages and background jobs' : 'Resume the session before steering an image or attachment', busy || !steerAllowed, () => {
+      if (steerAllowed && !busy) startQueueAction(item.id, { type: 'steerQueueItem', itemId: item.id })
+    }))
+  }
   actions.append(queueActionButton('trash-2', 'Remove queued message', busy, () => {
     if (!busy) startQueueAction(item.id, { type: 'removeQueueItem', itemId: item.id })
   }))
@@ -1525,6 +1531,10 @@ function renderResponseWaiting(snapshot: WorkbenchSnapshot, messages: readonly W
   const visible = runtimeReady && (running || receiptWaiting || (autonomous && !streaming))
   waiting.classList.toggle('hidden', !visible)
   if (!visible) return
+  const scheduledWaiting = scheduleWaitingOnly && !receiptWaiting && !sendPending
+  waiting.setAttribute('aria-live', scheduledWaiting ? 'off' : 'polite')
+  waiting.classList.toggle('scheduled', scheduledWaiting)
+  waiting.title = scheduledWaiting ? currentScheduleTiming(snapshot)?.details ?? '' : ''
   const label = waiting.querySelector('span')
   if (label !== null) label.textContent = userInteractionWaiting
     ? 'Waiting for your input...'
@@ -1549,9 +1559,63 @@ function autonomousActivityLabel(snapshot: WorkbenchSnapshot): string {
   if (snapshot.jobs?.some(job => job.status === 'running' || job.status === 'stopping')) return 'Autonomous background task is still running'
   if (queued.length > 0) return 'Autonomous continuation is queued'
   const schedules = snapshot.schedules?.length ?? 0
-  if (schedules > 0) return schedules === 1 ? 'Scheduled reminder is armed' : `${String(schedules)} scheduled reminders are armed`
+  if (schedules > 0) return currentScheduleTiming(snapshot)?.label ?? (schedules === 1 ? 'Scheduled reminder is armed' : `${String(schedules)} scheduled reminders are armed`)
   return 'Harness is finalizing the autonomous task'
 }
+
+function currentScheduleTiming(snapshot: WorkbenchSnapshot) {
+  return scheduleTimingHint(snapshot.schedules ?? [], Date.now(), { locale: navigator.language })
+}
+
+function scheduleFooterStatus(snapshot: WorkbenchSnapshot): string {
+  const timing = currentScheduleTiming(snapshot)
+  if (timing === undefined) return `${autonomousActivityLabel(snapshot)} - Pause available`
+  return navigator.language.toLowerCase().startsWith('zh')
+    ? `${timing.activeCount} 项计划 · 剩余 ${timing.countdown} · 可取消`
+    : `${timing.activeCount} reminders · ${timing.countdown} left · Pause available`
+}
+
+function updateScheduleCountdown(snapshot: WorkbenchSnapshot): void {
+  const active = snapshot.sessions.find(session => session.id === snapshot.activeSessionId)
+  const timing = currentScheduleTiming(snapshot)
+  const ready = snapshot.phase === 'connected' && snapshot.runtime.phase === 'ready'
+  scheduleWaitingOnly = ready && timing !== undefined && active?.running !== true && active?.operation === undefined && !hasAutonomousAgentActivity(snapshot)
+  elements.statusText.title = timing?.details ?? ''
+  const visible = ready && document.visibilityState !== 'hidden' && timing !== undefined
+  if (!visible) {
+    if (scheduleCountdownTimer !== undefined) window.clearInterval(scheduleCountdownTimer)
+    scheduleCountdownTimer = undefined
+    return
+  }
+  if (scheduleCountdownTimer !== undefined) return
+  scheduleCountdownTimer = window.setInterval(() => {
+    const snapshot = state
+    if (snapshot === undefined) return
+    if (snapshot.phase !== 'connected' || snapshot.runtime.phase !== 'ready' || document.visibilityState === 'hidden') {
+      updateScheduleCountdown(snapshot)
+      return
+    }
+    const timing = currentScheduleTiming(snapshot)
+    if (timing === undefined) { updateScheduleCountdown(snapshot); return }
+    // Update only the small presentation labels. Never re-project history,
+    // post to the Host, or request model work for a countdown tick.
+    if (scheduleWaitingOnly && !sendPending && pendingSendText === undefined) {
+      const label = responseWaiting?.querySelector('span')
+      if (label !== null && label !== undefined) label.textContent = timing.label
+      if (responseWaiting !== undefined) responseWaiting.title = timing.details
+      elements.statusText.textContent = scheduleFooterStatus(snapshot)
+    }
+    elements.statusText.title = timing.details
+    elements.scheduleToggle.title = `${elements.scheduleToggle.dataset.baseTitle ?? ''}\n${timing.details}`
+  }, 1000)
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (state !== undefined) updateScheduleCountdown(state)
+})
+window.addEventListener('unload', () => {
+  if (scheduleCountdownTimer !== undefined) window.clearInterval(scheduleCountdownTimer)
+})
 
 function reorderConversationUnits(messages: readonly WorkbenchMessage[]): void {
   if (pendingAnchor === undefined) return
@@ -2551,7 +2615,7 @@ function renderStatus(snapshot: WorkbenchSnapshot): void {
     ? compacting
       ? 'Compacting context...'
       : autonomousWaiting
-      ? `${autonomousActivityLabel(snapshot)} - Pause available`
+      ? scheduleWaitingOnly ? scheduleFooterStatus(snapshot) : `${autonomousActivityLabel(snapshot)} - Pause available`
       : userInteractionWaiting
       ? 'Waiting for your input - Stop available'
       : running
@@ -2568,7 +2632,7 @@ function renderDeliveryMode(): void {
   const label = deliveryMode === 'auto' ? 'Auto' : deliveryMode === 'steer' ? 'Steer' : 'Queue'
   const detail = deliveryMode === 'auto'
     ? 'Running: steer | Idle: queue'
-    : deliveryMode === 'steer' ? 'Inject into active turn' : 'After current turn'
+    : deliveryMode === 'steer' ? 'Deliver at the next step; interrupt active foreground shell commands, not background jobs' : 'After current turn'
   elements.deliveryMode.title = `Delivery mode: ${label} (${detail})`
   elements.deliveryMode.setAttribute('aria-label', elements.deliveryMode.title)
   elements.deliveryMode.replaceChildren(svgIcon('chevron-down'))
@@ -3175,8 +3239,11 @@ function renderScheduleToggle(snapshot: WorkbenchSnapshot): void {
         ? 'Cancel the active scheduled reminder before changing scheduled follow-ups'
         : 'Stop the active Harness task before changing scheduled follow-ups'
       : enabled
-        ? 'Scheduled follow-ups enabled: schedule_create, schedule_list, and schedule_delete are available to the model; reminders run only while this Harness session stays live. Click to disable (runtime restart required).'
-        : 'Scheduled follow-ups disabled: the model cannot use schedule_create/list/delete. Click to mount the official dsh-schedule plugin (runtime restart required)'
+        ? 'Scheduled follow-ups enabled: schedule_create/list/delete/update are available; reminders persist across Host restarts and wake the original session while the Host is running. Click to disable (runtime restart required).'
+        : 'Scheduled follow-ups disabled: the model cannot use schedule_create/list/delete/update. Click to mount the official Host Schedule service (runtime restart required)'
+  elements.scheduleToggle.dataset.baseTitle = elements.scheduleToggle.title
+  const timing = currentScheduleTiming(snapshot)
+  if (timing !== undefined) elements.scheduleToggle.title += `\n${timing.details}`
   elements.scheduleToggle.setAttribute('aria-label', elements.scheduleToggle.title)
 }
 

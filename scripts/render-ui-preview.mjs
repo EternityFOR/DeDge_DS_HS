@@ -9,7 +9,7 @@ if (template === undefined) throw new Error('Could not locate the Webview HTML t
 
 const state = {
   phase: 'connected',
-  runtime: { phase: 'ready', version: '0.1.5-rc.3' },
+  runtime: { phase: 'ready', version: '0.2.0-rc.2' },
   hasApiKey: true,
   sessions: [
     { id: 'one', title: 'DeDge_DS_HS', running: false, blank: false },
@@ -87,7 +87,34 @@ const state = {
   },
 }
 
+if (process.argv.includes('--steering')) {
+  state.sessions[0].running = true
+  state.messages = [
+    { id: 'steer-u1', role: 'user', text: 'Please prepare a design document and wait for feedback.', status: 'complete', taskId: 'turn:steering', taskComplete: false },
+    { id: 'steer-r1', role: 'reasoning', text: 'Reviewing the design requirements.', status: 'complete', taskId: 'turn:steering', taskComplete: false },
+    { id: 'steer-t1', role: 'tool', title: 'pwsh', text: '{"command":"Start-Sleep -Seconds 30","description":"Synthetic foreground wait"}', status: 'streaming', taskId: 'turn:steering', taskComplete: false },
+  ]
+  state.queueItems = [
+    ...Array.from({ length: 11 }, (_, index) => ({ id: `queued-${index + 1}`, placement: 'queued', sourceKind: 'user', text: `Queued design section ${index + 1}: this is a deliberately long synthetic prompt that should truncate without hiding its action buttons.` })),
+    { id: 'steering-pending', placement: 'steering', sourceKind: 'user', text: 'Please interrupt the foreground wait and continue with this feedback.' },
+  ]
+}
+
+if (process.argv.includes('--scheduled')) {
+  state.sessions[0].running = false
+  state.messages = [
+    { id: 'schedule-u', role: 'user', text: 'Remind me to continue the design later.', status: 'complete', taskId: 'turn:scheduled', taskComplete: true },
+    { id: 'schedule-a', role: 'assistant', text: 'Two synthetic Host reminders are armed.', status: 'complete', taskId: 'turn:scheduled', taskComplete: true },
+  ]
+  state.queueItems = []
+  state.schedules = [
+    { id: 'schedule-nearest', title: 'Continue the design', kind: 'after', prompt: 'Synthetic reminder', afterSeconds: 90, scheduledAt: new Date(Date.now() + 90_000).toISOString() },
+    { id: 'schedule-later', title: 'Review the result', kind: 'after', prompt: 'Synthetic reminder', afterSeconds: 3600, scheduledAt: new Date(Date.now() + 3_600_000).toISOString() },
+  ]
+}
+
 const bootstrap = `<script nonce="preview">
+window.__previewMessages = []
 const previewSettings = {
   baseUrl: 'https://api.deepseek.com/', hasApiKey: true,
   visionBaseUrl: 'https://api.deepseek.com/', visionModel: 'deepseek-v4-flash-vision-exp', visionReasoningEffort: '', mainModelVisionCapable: false, auxiliaryVisionEnabled: false, visionModels: ['deepseek-v4-flash-vision-exp'], hasVisionApiKey: true,
@@ -100,6 +127,16 @@ const previewSettings = {
 window.acquireVsCodeApi = () => ({
   postMessage: message => {
     window.__lastWebviewMessage = message
+    window.__previewMessages.push(message)
+    if (['steerQueueItem', 'removeQueueItem', 'editQueueItem'].includes(message.type) && window.__previewState !== undefined) {
+      window.setTimeout(() => {
+        window.__previewState = { ...window.__previewState, queueItems: window.__previewState.queueItems.flatMap(item =>
+          item.id !== message.itemId ? [item] : message.type === 'removeQueueItem' ? []
+            : [{ ...item, ...(message.type === 'steerQueueItem' ? { placement: 'steering' } : { text: message.text }) }]) }
+        window.postMessage({ type: 'state', state: window.__previewState, attachments: [] }, '*')
+        window.postMessage({ type: 'queueActionSettled', itemId: message.itemId, accepted: true }, '*')
+      }, 120)
+    }
     if (message.type === 'openSettings' || message.type === 'openVisionSettings') {
       window.postMessage({ type: 'settings', settings: previewSettings, ...(message.type === 'openVisionSettings' ? { section: 'vision' } : {}) }, '*')
     }
@@ -171,11 +208,32 @@ window.acquireVsCodeApi = () => ({
 })
 </script>`
 const payload = `<script nonce="preview">window.__previewState = ${JSON.stringify(state)}; window.postMessage({ type: 'state', state: window.__previewState, attachments: [] }, '*'); window.postMessage({ type: 'settings', settings: previewSettings, open: false }, '*')</script>`
+// VS Code normally injects these variables. Synthetic browser previews must
+// supply them too, or missing fonts/colors falsely resemble a broken UI.
+const themeStyle = `<style nonce="preview">:root {
+  color-scheme: dark !important;
+  --vscode-font-family: "Segoe UI", sans-serif; --vscode-font-size: 13px;
+  --vscode-editor-font-family: Consolas, monospace; --vscode-editor-font-size: 12px;
+  --vscode-editor-background: #1e1e1e; --vscode-sideBar-background: #181818; --vscode-foreground: #cccccc;
+  --vscode-icon-foreground: #cccccc; --vscode-toolbar-hoverBackground: #ffffff1a;
+  --vscode-editor-inactiveSelectionBackground: #264f78; --vscode-charts-yellow: #cca700;
+  --vscode-descriptionForeground: #9d9d9d; --vscode-panel-border: #3c3c3c;
+  --vscode-input-background: #252526; --vscode-input-foreground: #cccccc; --vscode-input-border: #3c3c3c;
+  --vscode-focusBorder: #007fd4; --vscode-button-background: #0e639c; --vscode-button-foreground: #ffffff;
+  --vscode-button-hoverBackground: #1177bb; --vscode-editorWidget-background: #252526;
+  --vscode-list-hoverBackground: #2a2d2e; --vscode-list-activeSelectionBackground: #094771;
+  --vscode-charts-orange: #d18616; --vscode-charts-blue: #75beff; --vscode-charts-green: #89d185;
+  --vscode-progressBar-background: #0e70c0; --vscode-errorForeground: #f48771;
+  --vscode-textLink-foreground: #3794ff; --vscode-textCodeBlock-background: #2a2a2a;
+  --vscode-scrollbarSlider-background: #79797966; --vscode-scrollbarSlider-hoverBackground: #646464b3;
+  --vscode-badge-background: #4d4d4d; --vscode-badge-foreground: #ffffff;
+}</style>`
 const html = template
+  .replaceAll('\\u258d', '\u258d')
   .replaceAll('${webview.cspSource}', "'self'")
   .replaceAll('${nonce}', 'preview')
   .replace('${script}', '../../dist/webview.js')
-  .replace('<title>DeepSeek Harness</title>', '<title>DeepSeek Harness</title>\n  <link rel="icon" href="data:,">')
+  .replace('<title>DeepSeek Harness</title>', `<title>DeepSeek Harness</title>\n  <link rel="icon" href="data:,">\n${themeStyle}`)
   .replace('<script nonce="preview" src="../../dist/webview.js"></script>', `${bootstrap}\n<script nonce="preview" src="../../dist/webview.js"></script>\n${payload}`)
 
 const output = join(root, '.tmp', 'ui-preview', 'index.html')
