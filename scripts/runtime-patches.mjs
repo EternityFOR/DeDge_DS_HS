@@ -1,5 +1,44 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 
+/** Reject settled thinking-only/blank replies, preserving usage and original blocks.
+ * The agent retries only this failed request; no assistant tool calls are admitted.
+ */
+export function patchDeepSeekAnswerGuardSource(source) {
+  const old = '			if (blocks.size === 0 && reason.kind === "stop") throw new LlmError("DeepSeek Messages returned no content", "EMPTY_RESPONSE");'
+  const anchor = '			yield {\n				type: "finish",\n				reason,'
+  if (source.split(old).length !== 2 || source.split(anchor).length !== 2) throw new Error('Unexpected DeepSeek Messages completion shape; cannot guard missing answers.')
+  const guard = [
+    '			// DeDge: reasoning is not a user-facing answer. Never reinterpret it as text.',
+    '			if (reason.kind === "stop" && ![...blocks.values()].some(({ content }) => content.type === "tool-call" || content.type === "text" && content.text.trim().length > 0)) {',
+    '				throw new LlmError("DeepSeek returned no final answer (only reasoning or blank content). Automatic recovery is limited to one retry; earlier tool results are retained. You can send a follow-up if it still fails.", "EMPTY_RESPONSE");',
+    '			}',
+  ].join('\n')
+  return source.replace(old + '\n', '').replace(anchor, guard + '\n' + anchor)
+}
+
+export function patchDeepSeekAnswerGuard(file) {
+  writeFileSync(file, patchDeepSeekAnswerGuardSource(readFileSync(file, 'utf8')))
+}
+
+/** Preserve explicit retry exclusions/zero, but bound empty replies even in always mode. */
+export function patchEmptyResponseRetryLimitSource(source) {
+  const marker = '		if (policy === void 0) return next();'
+  if (source.split(marker).length !== 2 || source.includes('// DeDge: at most one retry')) throw new Error('Unexpected llm-retry recovery shape; cannot bound empty replies.')
+  return source.replace(marker, [
+    marker,
+    '		// DeDge: at most one retry of an empty response, never an endless reasoning loop.',
+    '		if (failure.code === "EMPTY_RESPONSE") policy = {',
+    '			...policy, mode: "normal",',
+    '			maxRetries: policy.mode === "normal" ? Math.min(policy.maxRetries, 1) : 1,',
+    '			retryableCodes: policy.mode === "normal" ? policy.retryableCodes : ["EMPTY_RESPONSE"]',
+    '		};',
+  ].join('\n'))
+}
+
+export function patchEmptyResponseRetryLimit(file) {
+  writeFileSync(file, patchEmptyResponseRetryLimitSource(readFileSync(file, 'utf8')))
+}
+
 const ALPHA2_INJECT = 'const inject = [\n\t"agents",\n\t"sessions",\n\t"tools",\n\t"sessionPersistence"\n];'
 const RC1_INJECT = 'const inject = [\n\t"agents",\n\t"sessions",\n\t"tools",\n\t"sessionPersistence"\n];'
 const RC1_APPLY_MARKER = 'function apply(ctx) {\n\tctx.inject(["sessionProjections"], (projectionCtx) => {'

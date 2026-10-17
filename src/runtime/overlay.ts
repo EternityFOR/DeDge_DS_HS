@@ -12,12 +12,13 @@ export function renderRuntimeOverlay(configuration: HarnessConfiguration, option
   const nativeDeepSeek = configuration.provider === 'deepseek-official' && usesDeepSeekMessagesEndpoint(configuration.baseUrl)
   const maxTokens = Math.min(256_000, configuration.contextWindowTokens)
   const models = advertisedModels(configuration)
-  const schedule = configuration.scheduleEnabled ? [
-    '- insert:',
-    '    - id: schedule',
-    "      name: '@deepseek-ai/dsh-schedule'",
+  // Since 0.2.1, the Web composition owns Schedule and presets own its tools.
+  // Toggle the existing Host row; reinserting it would duplicate the service.
+  const schedule = [
+    '- id: schedule',
+    `  disabled: ${!configuration.scheduleEnabled}`,
     '',
-  ] : []
+  ]
   const hooks = [
     ...(options.claudeHooksConfigPath === undefined ? [] : [
       '- insert:',

@@ -29,6 +29,8 @@ import {
   type GatewayLease,
   type GatewayStartupLock,
   gatewayLeaseMatchesVersion,
+  gatewayLeaseMatchesRevision,
+  BUNDLED_RUNTIME_REVISION,
 } from './gateway-lease.js'
 import { checkWindowsCompatibility, describeWindowsExitCode } from './windows-compat.js'
 import { requestLoopbackGateway } from '../gateway/local-http.js'
@@ -260,7 +262,7 @@ export class RuntimeManager implements vscode.Disposable {
       try {
         const url = await ready
         if (child.pid !== undefined) {
-          await writeGatewayLease(this.leasePath, { url, pid: child.pid, version: launch.version, workspace })
+          await writeGatewayLease(this.leasePath, { url, pid: child.pid, version: launch.version, workspace, ...(launch.source === 'bundled' ? { runtimeRevision: BUNDLED_RUNTIME_REVISION } : {}) })
             .catch(error => this.logger.error('Failed to publish the Harness gateway lease', error))
         }
         this.setState({ phase: 'ready', version: launch.version, url, workspace, ...(child.pid === undefined ? {} : { pid: child.pid }) })
@@ -333,7 +335,13 @@ export class RuntimeManager implements vscode.Disposable {
       if (lease !== undefined) return { lease }
       const lock = await tryAcquireGatewayStartupLock(this.leasePath)
       if (lock !== undefined) {
-        const racedLease = await this.readLiveGatewayLease()
+        let racedLease: GatewayLease | undefined
+        try {
+          racedLease = await this.readLiveGatewayLease()
+        } catch (error) {
+          await lock.release()
+          throw error
+        }
         if (racedLease === undefined) return { lock }
         await lock.release()
         return { lease: racedLease }
@@ -344,6 +352,7 @@ export class RuntimeManager implements vscode.Disposable {
   }
 
   private async readLiveGatewayLease(): Promise<GatewayLease | undefined> {
+    let outdatedRevision = false
     const candidates = [
       { path: this.primaryGatewayLease, compatibility: false },
       { path: this.unscopedRuntimeLease, compatibility: true },
@@ -361,6 +370,10 @@ export class RuntimeManager implements vscode.Disposable {
           this.logger.warn(`Ignoring shared Harness ${lease.version}; it belongs to a different workspace. A workspace-scoped runtime will be started.`)
           continue
         }
+        if (this.configuration.get().runtimeMode === 'bundled' && !gatewayLeaseMatchesRevision(lease)) {
+          outdatedRevision = true
+          continue
+        }
         if (candidate.compatibility) {
           this.leasePath = candidate.path
           this.logger.info(`Reusing a compatible legacy Harness lease for ${lease.version}; no duplicate runtime will be started.`)
@@ -371,6 +384,7 @@ export class RuntimeManager implements vscode.Disposable {
         // allowed to block a clean startup.
       }
     }
+    if (outdatedRevision) return this.fail(new Error('A live Harness for this workspace does not include the required response-recovery patch. Finish current tasks, close or reload all VS Code windows using the older extension, then start Harness again. The existing Host was left running; no duplicate Host was started.'), EXPECTED_DSH_VERSION)
     return undefined
   }
 

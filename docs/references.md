@@ -38,6 +38,14 @@ Codex 和 Claude Code 的公开仓库不包含其完整 VS Code 前端，因此�
 
 ## 更新规则
 
+### 2026-10-16：Harness 0.2.1-alpha.4
+
+- 官方 release tag：`dsh-v0.2.1-alpha.4`；固定 commit：`86a402200d95fecef4529d969836f1fe13c6cb0d`；GitHub 发布于 2026-10-15。直接核对官方 GitHub tag/ref 与 npm 版本元信息，包解析和 integrity 固定在锁文件中。
+- 审查已安装官方包的公开类型、Web/base/preset composition、模型适配器、凭据来源与 Gateway RPC，不依赖未发布 master 或临时克隆。
+- Web 内置 Schedule 服务，preset 单独提供 schedule tools；overlay 改为按既有 id 启停，避免重复挂载。精确锁定 alpha.4，不推定其他 alpha revision 兼容。
+- 确认凭据过滤、空闲 approval notice、权限切换终端关闭和持久终端失效缓存恢复仍需本地保护补丁；保留 fail-closed 源码形状检查。
+- 用隔离 mock-model runtime smoke 验证认证 RPC、control/follow/live stream、原生图片、纯 reasoning 正常结束、队列与插队、Schedule 开关及自定义 Chat Completions。不会调用真实模型或附着私人会话。
+
 ### 2026-09-30：Harness 0.2.0-rc.2
 
 - 官方 release tag：`dsh-v0.2.0-rc.2`；固定 commit：`639ed015397290b3745d163aafe02ffee4aa3f84`。npm `latest` / `next` 均核对为 `0.2.0-rc.2`。

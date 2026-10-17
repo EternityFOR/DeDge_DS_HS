@@ -2,6 +2,7 @@ import { isRecord, type ContextPressureProjection, type HistoryEntry, type Model
 import type { RuntimeState } from '../runtime/types.js'
 import type { PendingApproval, PendingQuestion, SessionOperation, WorkbenchImageAttachment, WorkbenchJob, WorkbenchMessage, WorkbenchMessageAttachment, WorkbenchPhase, WorkbenchQueueItem, WorkbenchSchedule, WorkbenchSession, WorkbenchSnapshot } from './types.js'
 import { projectUserPrompt } from './prompt-projection.js'
+import { emptyAttemptReasoning, isReasoningOnlyResponse } from './response-diagnostics.js'
 import type { LiveAssistantSnapshot } from '../gateway/assistant-stream.js'
 
 export interface StoreConfiguration {
@@ -480,9 +481,11 @@ export function projectMessages(entries: readonly HistoryEntry[], options: { rea
   const steeringMessageIds = collectSteeringMessageIds(entries)
   const streams = new Map<string, { id: string; role: 'assistant' | 'reasoning'; chunks: string[]; seq: number; time: number; turn: string }>()
   const toolIndexes = new Map<string, number>()
+  const reasoningOnlyTurns = new Map<string, boolean>()
 
   for (const { event } of entries) {
     const data = isRecord(event.data) ? event.data : {}
+    if (event.type === 'turn/start') reasoningOnlyTurns.clear()
     if (event.type === 'user/message') {
       // Compaction and other surface replacements are model-facing history
       // operations, not a new human message. The official client only renders
@@ -538,8 +541,28 @@ export function projectMessages(entries: readonly HistoryEntry[], options: { rea
       }
       continue
     }
+    if (event.type === 'assistant/attempt') {
+      let index = 0
+      for (const text of emptyAttemptReasoning(data)) {
+        const projected = projectVerboseText(text, 65_536)
+        output.push({ id: `attempt-reasoning:${event.seq}:${index++}`, role: 'reasoning', text: projected.text,
+          ...(projected.textLength === undefined ? {} : { textLength: projected.textLength }),
+          title: 'Reasoning (no final answer)', status: 'complete', seq: event.seq, time: event.time })
+      }
+      continue
+    }
+    if (event.type === 'llm/retry' && isRecord(data.failure) && data.failure.code === 'EMPTY_RESPONSE') {
+      output.push({ id: `retry:${event.seq}`, role: 'system', title: 'Retrying response',
+        text: 'The model returned no final answer. Retrying this request once; earlier tool results are retained.',
+        status: 'complete', seq: event.seq, time: event.time })
+      continue
+    }
     if (event.type === 'assistant/message') {
-      if (!isAppendSurfaceEvent(event)) continue
+      if (!isAppendSurfaceEvent(event)) {
+        reasoningOnlyTurns.delete(String(data.turn))
+        continue
+      }
+      reasoningOnlyTurns.set(String(data.turn), isReasoningOnlyResponse(data))
       const message = isRecord(data.message) ? data.message : undefined
       const turnPrefix = `${String(data.turn)}:${String(data.step)}:`
       const interrupted = message?.interrupted === true || data.interrupted === true
@@ -607,6 +630,15 @@ export function projectMessages(entries: readonly HistoryEntry[], options: { rea
         }
       }
       continue
+    }
+    if (event.type === 'turn/end' && isRecord(data.reason)
+      && (data.reason.kind === 'completed' || data.reason.kind === 'complete')
+      && reasoningOnlyTurns.get(String(data.turn)) === true) {
+      output.push({
+        id: `reasoning-only:${event.seq}`, role: 'system', title: 'No final answer',
+        text: 'This response ended with reasoning only; no final answer was returned. Expand Reasoning to inspect the received content. Nothing was resent automatically.',
+        status: 'complete', seq: event.seq, time: event.time,
+      })
     }
     if (event.type === 'turn/end' && isRecord(data.reason) && data.reason.kind === 'error') {
       const detail = isRecord(data.reason.error) && typeof data.reason.error.message === 'string' ? data.reason.error.message : 'The turn failed.'

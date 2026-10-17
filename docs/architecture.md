@@ -4,7 +4,7 @@
 
 本扩展选择原生 VS Code UI 加 DeepSeek Harness HTTP/WebSocket Gateway，而不是嵌入 Harness Web 页面或把 ACP 当成完整后端。Gateway 能提供会话历史、流式事件、工具状态、审批、问题、取消和模型控制；当前 ACP 接口不足以还原这些工作台能力。
 
-终端用户路径采用平台专用 VSIX。`@deepseek-ai/dsh@0.2.0-rc.2`、Node.js `22.22.3` 和 pnpm `11.21.0` 在发布时固定并打包，激活阶段禁止包管理器、克隆和全局安装。external runtime 只是明确配置后的兼容入口，不承担自动发现或修复。
+终端用户路径采用平台专用 VSIX。`@deepseek-ai/dsh@0.2.1-alpha.4`、Node.js `22.22.3` 和 pnpm `11.21.0` 在发布时固定并打包，激活阶段禁止包管理器、克隆和全局安装。external runtime 只是明确配置后的兼容入口，不承担自动发现或修复。
 
 ## 模块边界
 
@@ -90,6 +90,16 @@ globalStorage/
 - 诊断输出必须继续遵守不打印密钥、Authorization header 或完整环境的约束。
 
 ## 上游版本策略
+
+### 空回答恢复边界（0.1.97）
+
+固定的 alpha.4 Messages adapter 在 message_stop 时验证非空正文或工具调用；纯思考/空白正文先记录 usage 再报 EMPTY_RESPONSE。Agent 只重试当前 step 的模型请求，最多一次，保留已执行工具的结果，不重放工具或追加第二条用户消息。失败 attempt 的原始思考仅以 Reasoning 呈现，不推测 FINAL 标记，不改写正文。重试耗尽以 error 结束并允许后续输入；明确禁用重试或排除 EMPTY_RESPONSE 的配置仍有效。
+
+Claude/Codex hooks bridge 是与 Host 同版本的直接生产依赖。构建和 VSIX 审计强制验证存在及版本；隔离 smoke 必须运行两种 command hook 并验证 hook/invoked 与成功的 hook/result，不能仅检查 overlay 行。
+
+共享 lease 的 runtimeRevision 记录本地运行时补丁代际，独立于上游版本。新扩展遇到同工作区、同上游版本但缺少当前补丁的活动 Host 时明确报错并要求旧窗口收尾重载，不附着、不终止对方、不同时启动第二个 Host。不同工作区隔离、外部运行时与 Orbit 的原有 lease 路径不变。
+
+### 固定版本升级流程
 
 DeepSeek Harness 当前没有稳定兼容性保证，因此协议、运行时版本和 `DSH_HOME` 被视为一个升级单元。升级步骤：
 

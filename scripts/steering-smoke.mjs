@@ -8,6 +8,8 @@ export async function startMockModelServer() {
   const issued = new Set()
   const observed = []
   const paths = []
+  const requestTools = []
+  const recoveryRequests = []
   const server = http.createServer((request, response) => {
     void handle(request, response).catch(error => {
       response.writeHead(500, { 'content-type': 'application/json' })
@@ -24,6 +26,7 @@ export async function startMockModelServer() {
     const chunks = []
     for await (const chunk of request) chunks.push(Buffer.from(chunk))
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    requestTools.push({ path: request.url, names: (body.tools ?? []).map(tool => tool.name ?? tool.function?.name) })
     if (request.url?.endsWith('/chat/completions')) {
       response.writeHead(200, { 'content-type': 'text/event-stream' })
       const common = { id: 'smoke-compat', object: 'chat.completion.chunk', created: 1, model: body.model }
@@ -39,6 +42,29 @@ export async function startMockModelServer() {
     const latest = markers.at(-1)
     const canUseTools = Array.isArray(body.tools) && body.tools.length > 0
     if (canUseTools && latest !== undefined) observed.push({ marker: latest, at: Date.now() })
+    const recoveryMarker = text.match(/SMOKE_RECOVERY_(?:ONCE|ALWAYS|TOOL|CONTINUE|CANCEL)/gu)?.at(-1)
+    if (canUseTools && recoveryMarker !== undefined) {
+      const resultIds = (body.messages ?? []).flatMap(message => Array.isArray(message.content) ? message.content.filter(block => block.type === 'tool_result').map(block => block.tool_use_id) : [])
+      recoveryRequests.push({ marker: recoveryMarker, resultIds })
+      const count = recoveryRequests.filter(row => row.marker === recoveryMarker).length
+      if (recoveryMarker === 'SMOKE_RECOVERY_TOOL' && count === 1) {
+        const command = process.platform === 'win32' ? "Add-Content -LiteralPath 'recovery-tool-count.txt' -Value 'once'" : "printf 'once\\n' >> recovery-tool-count.txt"
+        sendMessages(response, body.model, { type: 'tool_use', id: 'smoke-recovery-tool', name: process.platform === 'win32' ? 'pwsh' : 'bash', input: { command, description: 'Synthetic side-effect counter to verify no tool replay during recovery.' } })
+        return
+      }
+      if (recoveryMarker === 'SMOKE_RECOVERY_CANCEL' && count > 1) {
+        response.writeHead(200, { 'content-type': 'text/event-stream' })
+        response.write(': synthetic wait until explicit test cancellation\n\n')
+        return
+      }
+      if (recoveryMarker === 'SMOKE_RECOVERY_ALWAYS' || recoveryMarker === 'SMOKE_RECOVERY_ONCE' && count === 1
+        || recoveryMarker === 'SMOKE_RECOVERY_TOOL' && count === 2 || recoveryMarker === 'SMOKE_RECOVERY_CANCEL') {
+        sendMessages(response, body.model, { type: 'thinking', thinking: 'FINAL. Synthetic conclusion received as reasoning, not text.' })
+        return
+      }
+      sendMessages(response, body.model, { type: 'text', text: 'SMOKE_RECOVERY_ACK ' + recoveryMarker })
+      return
+    }
     if (canUseTools && latest?.startsWith('SMOKE_BACKLOG_')) {
       // Keep the next ordinary queued turn open, making queue retention visible
       // until the test cancels that synthetic model request.
@@ -72,6 +98,8 @@ export async function startMockModelServer() {
     baseUrl: `${origin}/anthropic`,
     observed,
     paths,
+    requestTools,
+    recoveryRequests,
     async close() {
       server.closeAllConnections()
       await new Promise(resolve => server.close(resolve))
@@ -83,8 +111,8 @@ function sendMessages(response, model, block) {
   response.writeHead(200, { 'content-type': 'text/event-stream' })
   const event = (type, data) => response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`)
   event('message_start', { message: { id: 'smoke-message', type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 0 } } })
-  event('content_block_start', { index: 0, content_block: block.type === 'tool_use' ? { ...block, input: {} } : { type: 'text', text: '' } })
-  event('content_block_delta', { index: 0, delta: block.type === 'tool_use' ? { type: 'input_json_delta', partial_json: JSON.stringify(block.input) } : { type: 'text_delta', text: block.text } })
+  event('content_block_start', { index: 0, content_block: block.type === 'tool_use' ? { ...block, input: {} } : block.type === 'thinking' ? { type: 'thinking', thinking: '' } : { type: 'text', text: '' } })
+  event('content_block_delta', { index: 0, delta: block.type === 'tool_use' ? { type: 'input_json_delta', partial_json: JSON.stringify(block.input) } : block.type === 'thinking' ? { type: 'thinking_delta', thinking: block.thinking } : { type: 'text_delta', text: block.text } })
   event('content_block_stop', { index: 0 })
   event('message_delta', { delta: { stop_reason: block.type === 'tool_use' ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } })
   event('message_stop', {})

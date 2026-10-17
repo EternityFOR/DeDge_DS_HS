@@ -6,6 +6,8 @@ import {
   patchPersistentShellCacheRecoverySource,
   patchScheduleCancelCommandAlpha2Source,
   patchScheduleCancelCommandRc1Source,
+  patchDeepSeekAnswerGuardSource,
+  patchEmptyResponseRetryLimitSource,
 } from '../scripts/runtime-patches.mjs'
 
 const RC1_SHAPE = [
@@ -23,6 +25,14 @@ const RC1_SHAPE = [
 ].join('\n')
 
 describe('bundled runtime source patches', () => {
+  it('refuses unknown or already-patched completion/retry shapes', () => {
+    expect(() => patchDeepSeekAnswerGuardSource('unknown')).toThrow('Unexpected DeepSeek Messages')
+    expect(() => patchEmptyResponseRetryLimitSource('unknown')).toThrow('Unexpected llm-retry')
+    const patched = patchEmptyResponseRetryLimitSource('\t\tif (policy === void 0) return next();')
+    expect(patched).toContain('Math.min(policy.maxRetries, 1)')
+    expect(patched).toContain('policy.retryableCodes')
+    expect(() => patchEmptyResponseRetryLimitSource(patched)).toThrow('Unexpected llm-retry')
+  })
   it('adds the schedule-cancel command to the current 0.1.5 RC plugin shape', () => {
     const patched = patchScheduleCancelCommandRc1Source(RC1_SHAPE)
     expect(patched).toContain('"commands",')

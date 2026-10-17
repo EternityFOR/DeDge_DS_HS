@@ -8,6 +8,14 @@ export interface GatewayLease {
   readonly pid: number
   readonly version: string
   readonly workspace: string
+  readonly runtimeRevision?: string
+}
+
+/** Change whenever local runtime behavior changes without an upstream version bump. */
+export const BUNDLED_RUNTIME_REVISION = 'dedge-response-recovery-1'
+
+export function gatewayLeaseMatchesRevision(lease: Pick<GatewayLease, 'runtimeRevision'>): boolean {
+  return lease.runtimeRevision === BUNDLED_RUNTIME_REVISION
 }
 
 export interface GatewayStartupLock {
@@ -228,6 +236,7 @@ function normalizeGatewayLease(value: unknown): GatewayLease {
     pid: Number(value.pid),
     version: value.version,
     workspace: value.workspace,
+    ...(typeof value.runtimeRevision === 'string' ? { runtimeRevision: value.runtimeRevision } : {}),
   }
 }
 

@@ -14,6 +14,8 @@ import {
   writeGatewayLease,
   gatewayLeaseMatchesWorkspace,
   gatewayLeaseMatchesVersion,
+  gatewayLeaseMatchesRevision,
+  BUNDLED_RUNTIME_REVISION,
 } from '../src/runtime/gateway-lease.js'
 
 const temporaryDirectories: string[] = []
@@ -23,6 +25,19 @@ afterEach(async () => {
 })
 
 describe('Harness gateway lease', () => {
+  it('does not reuse an unpatched Host just because the upstream version matches', () => {
+    expect(gatewayLeaseMatchesRevision({})).toBe(false)
+    expect(gatewayLeaseMatchesRevision({ runtimeRevision: 'older-patch' })).toBe(false)
+    expect(gatewayLeaseMatchesRevision({ runtimeRevision: BUNDLED_RUNTIME_REVISION })).toBe(true)
+  })
+
+  it('retains the local runtime patch revision when writing and reading a lease', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'dedge-dsh-revision-'))
+    temporaryDirectories.push(directory)
+    const target = path.join(directory, 'lease.json')
+    await writeGatewayLease(target, { url: 'http://127.0.0.1:4321', pid: 42, version: '0.2.1-alpha.4', workspace: 'test', runtimeRevision: BUNDLED_RUNTIME_REVISION })
+    expect((await readGatewayLease(target)).runtimeRevision).toBe(BUNDLED_RUNTIME_REVISION)
+  })
   it('isolates lease files by bundled Harness version', () => {
     expect(runtimeGatewayLeasePath('0.1.3-alpha.2', { LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local' }, 'C:\\Users\\test'))
       .toBe(path.join('C:\\Users\\test\\AppData\\Local', 'DeDge', 'DeepSeekHarness', 'runtimes', '0.1.3-alpha.2', 'gateway-lease.json'))

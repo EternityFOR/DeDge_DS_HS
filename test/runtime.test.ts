@@ -34,12 +34,19 @@ describe('bundled Node compatibility', () => {
 
 describe('Harness runtime compatibility', () => {
   it('pins the bundled runtime to the current upstream release', () => {
-    expect(EXPECTED_DSH_VERSION).toBe('0.2.0-rc.2')
+    expect(EXPECTED_DSH_VERSION).toBe('0.2.1-alpha.4')
   })
 
   it('accepts RC revisions on the same protocol base', () => {
     expect(supportsHarnessVersion('0.1.0-rc.6', '0.1.0-rc.7')).toBe(true)
     expect(supportsHarnessVersion('0.1.0-rc.7', '0.1.0-rc.6')).toBe(true)
+  })
+
+  it('requires an exact alpha build rather than assuming alpha protocol compatibility', () => {
+    expect(supportsHarnessVersion('0.2.1-alpha.4', '0.2.1-alpha.4')).toBe(true)
+    expect(supportsHarnessVersion('0.2.1-alpha.4', '0.2.1-alpha.3')).toBe(false)
+    expect(supportsHarnessVersion('0.2.1-alpha.4', '0.2.0-rc.2')).toBe(false)
+    expect(supportsHarnessVersion('0.2.1-alpha.4', '0.2.1-rc.1')).toBe(false)
   })
 
   it('rejects different protocol bases and malformed versions', () => {
@@ -238,7 +245,7 @@ describe('runtime overlay rendering', () => {
     expect(overlay.match(/id: llm-pi-ai/gu)?.length).toBe(1)
   })
 
-  it('inserts the official schedule plugin only when explicitly enabled', () => {
+  it('toggles the built-in Host schedule without duplicating its plugin', () => {
     const base = {
       runtimeMode: 'bundled', runtimeCommand: '', runtimeNodePath: '', startTimeoutMs: 90_000,
       provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard',
@@ -249,8 +256,10 @@ describe('runtime overlay rendering', () => {
       handoffMaxBytes: 65_536, handoffLaunchMode: 'clipboard', skillDirectories: ['${userHome}/.codex/skills'],
       visionBaseUrl: '', visionModel: '', visionReasoningEffort: '', visionMaxBytes: 4_194_304,
     } satisfies HarnessConfiguration
-    expect(renderRuntimeOverlay(base)).not.toContain('@deepseek-ai/dsh-schedule')
-    expect(renderRuntimeOverlay({ ...base, scheduleEnabled: true })).toContain("name: '@deepseek-ai/dsh-schedule'")
+    expect(renderRuntimeOverlay(base)).toContain('- id: schedule\n  disabled: true')
+    const enabled = renderRuntimeOverlay({ ...base, scheduleEnabled: true })
+    expect(enabled).toContain('- id: schedule\n  disabled: false')
+    expect(enabled).not.toContain("name: '@deepseek-ai/dsh-schedule'")
   })
 
   it('mounts detected Claude and Codex hook bridges only when a config path is supplied', () => {

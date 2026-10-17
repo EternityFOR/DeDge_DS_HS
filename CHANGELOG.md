@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.1.97] - 2026-10-16
+
+### Fixes
+
+- Guard the pinned native DeepSeek Messages adapter against normal-stop responses containing only reasoning or blank text. Preserve usage and received reasoning, classify them as EMPTY_RESPONSE, and retry only the failed model request at most once. Never promote reasoning into an answer or replay previous tool executions.
+- Bound EMPTY_RESPONSE recovery even for an always-retry provider policy; respect explicit zero retries and retry-code exclusions. Other error recovery policies are unchanged. Exhaustion ends visibly with an error and permits a new follow-up.
+- Keep failed-attempt reasoning available after live output settles and show an explicit recovery notice. Legacy completed reasoning-only messages retain the 0.1.96 diagnostic.
+- Explicitly bundle the matching Claude Code and Codex hook bridges and their licenses instead of relying on removed upstream transitive dependencies. Fail package preparation/audit when either bridge is missing or mismatched.
+- Track the local runtime patch revision in shared leases. Refuse silent attachment to an unpatched same-version Host, with an actionable reload notice; leave existing tasks running rather than terminating them or starting a duplicate against the same home.
+
+### Verification
+
+- Cover actual-adapter SSE behavior, bounded retry policies, recovery/exhaustion/cancellation, continuation after failure, retained prior tool results and a real tool side effect executed once. Run both bridge command hooks and require successful correlated hook results.
+- Verification uses synthetic endpoints, credentials and temporary workspaces only; no active user session, paid model call, trading workspace, installed extension or running Host is changed.
+
+## [0.1.96] - 2026-10-16
+
+### Upstream adaptation
+
+- Pin official Harness to `0.2.1-alpha.4` and its matching agent/tools/Cordis dependencies. Keep exact alpha compatibility and workspace-scoped leases so an older live Host is not terminated or silently mixed with the new client.
+- Adapt Schedule to the built-in Web Host service and preset-owned tools. Toggle the existing service instead of inserting a duplicate; retain scoped list/delete, reminders and countdown presentation.
+- Retain guarded child-process credential filtering, idle approval-notice suppression, owner-only terminal cleanup and persistent shell cache recovery.
+- Account for alpha.4 official inspector/SDK payload growth with a 100 MiB compressed / 288 MiB unpacked Windows ceiling; retain every content, license, target, secret and duplicate audit instead of deleting upstream dependencies.
+
+### Response diagnostics
+
+- A completed final model message containing nonempty reasoning but no answer now gets a visible “No final answer” notice. Original reasoning remains available unchanged; no heuristic FINAL splitting, retry, prompt replay or model charge is introduced.
+- Exclude active, failed, cancelled, interrupted, tool-call, media, replaced-surface and incomplete-history cases from this diagnostic.
+
+### Validation
+
+- Test the installed upstream runtime with isolated temporary homes, synthetic credentials and a local mock model, including native images, reasoning-only completion, direct and promoted steering, ten retained queued prompts, enabled/disabled Schedule and custom Chat Completions.
+- No real user session, live trading workspace, NAS deployment or running VS Code/Orbit process is modified by this upgrade workflow.
+
 本文档遵循 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
 ## [Unreleased]

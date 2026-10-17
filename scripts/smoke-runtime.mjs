@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 import WebSocket from 'ws'
 import { startMockModelServer, verifyForegroundSteering, verifyHostSchedules, waitUntil } from './steering-smoke.mjs'
+import { verifyResponseAdapter } from './smoke-response.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const artifactArgument = process.argv.indexOf('--extension-root')
@@ -18,7 +19,10 @@ const runtimeVersion = JSON.parse(await readFile(path.join(runtimeModules, '@dee
 const overlayModule = path.join(smokeRoot, 'overlay.mjs')
 const overlayPath = path.join(smokeRoot, 'vscode.patch.yml')
 const hookConfigPath = path.join(smokeRoot, 'claude-hooks.json')
+const codexHookConfigPath = path.join(smokeRoot, 'codex-hooks.json')
+const hookScript = path.join(smokeRoot, 'hook.mjs')
 const gatewayClientModule = path.join(smokeRoot, 'gateway-client.mjs')
+const sessionStoreModule = path.join(smokeRoot, 'session-store.mjs')
 const home = path.join(smokeRoot, 'path with spaces', 'home')
 const smokeWorkspace = path.join(smokeRoot, 'workspace with spaces')
 const runtimeBin = path.join(smokeRoot, 'runtime-bin')
@@ -26,11 +30,15 @@ const runtimeBin = path.join(smokeRoot, 'runtime-bin')
 await rm(smokeRoot, { recursive: true, force: true })
 await mkdir(runtimeBin, { recursive: true })
 await mkdir(smokeWorkspace, { recursive: true })
-await writeFile(hookConfigPath, `${JSON.stringify({ SessionStart: [] })}\n`, 'utf8')
+await writeFile(hookScript, 'process.stdout.write("{}")\n', 'utf8')
+const hookConfig = JSON.stringify({ UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'node "' + hookScript.replaceAll('\\', '/') + '"' }] }] })
+await writeFile(hookConfigPath, hookConfig, 'utf8')
+await writeFile(codexHookConfigPath, hookConfig, 'utf8')
 
 let child
 let mock
 try {
+  await verifyResponseAdapter(runtimeModules)
   mock = await startMockModelServer()
   await build({
     entryPoints: [path.join(root, 'src', 'runtime', 'overlay.ts')],
@@ -51,6 +59,7 @@ try {
     external: ['vscode', 'ws'],
     logLevel: 'silent',
   })
+  await build({ entryPoints: [path.join(root, 'src', 'session', 'session-store.ts')], outfile: sessionStoreModule, bundle: true, platform: 'node', format: 'esm', target: 'node22', logLevel: 'silent' })
   const { renderRuntimeOverlay } = await import(`${pathToFileURL(overlayModule).href}?smoke=${Date.now()}`)
   const configuration = {
     runtimeMode: 'bundled',
@@ -75,6 +84,7 @@ try {
   }
   const overlayOptions = {
     claudeHooksConfigPath: hookConfigPath,
+    codexHooksConfigPath: codexHookConfigPath,
     steeringPluginUrl: pathToFileURL(path.join(artifactRoot, 'dist', 'steering-interrupt.mjs')).href,
   }
   await writeFile(overlayPath, renderRuntimeOverlay(configuration, overlayOptions), 'utf8')
@@ -195,6 +205,50 @@ try {
   if (!clientHistory.events.some(item => item.event.type === 'user/message')) throw new Error('GatewayClient did not open the session follow snapshot')
   if (!clientFrames.some(frame => frame.type === 'session/queue')) throw new Error('GatewayClient did not consume the session control stream')
   if ((await client.listSchedules(session.sessionId)).length !== 0) throw new Error('Fresh smoke session unexpectedly contained a reminder')
+  // Actual Host retry lifecycle: one retry only; current step, never previous tools.
+  const { projectMessages } = await import(pathToFileURL(sessionStoreModule).href)
+  for (const scenario of ['ONCE', 'ALWAYS', 'TOOL', 'CANCEL']) {
+    const marker = 'SMOKE_RECOVERY_' + scenario
+    const recoverySession = await client.createSession(smokeWorkspace, 'standard')
+    await client.selectModel(recoverySession.sessionId, 'deepseek-official', 'deepseek-flash', 'high')
+    await client.prompt(recoverySession.sessionId, marker)
+    if (scenario === 'CANCEL') {
+      await waitUntil(async () => mock.recoveryRequests.filter(row => row.marker === marker).length === 2, 15_000, 'Recovery request did not start')
+      await client.cancel(recoverySession.sessionId)
+    }
+    const history = await waitUntil(async () => {
+      const value = await client.history(recoverySession.sessionId, 200)
+      return value.events.some(row => row.event.type === 'turn/end') ? value : undefined
+    }, 15_000, 'Recovery scenario did not settle: ' + scenario)
+    const rows = history.events
+    const end = rows.find(row => row.event.type === 'turn/end').event.data
+    if (end.reason.kind !== (scenario === 'ALWAYS' ? 'error' : scenario === 'CANCEL' ? 'aborted' : 'completed')) throw new Error('Wrong recovery outcome: ' + JSON.stringify(end))
+    if (scenario === 'ALWAYS' && end.reason.error?.code !== 'EMPTY_RESPONSE') throw new Error('Missing-answer failure was not explicit')
+    const messages = projectMessages(rows)
+    if (messages.filter(row => row.id.startsWith('retry:')).length !== 1 || !messages.some(row => row.role === 'reasoning' && row.text.includes('Synthetic conclusion'))) throw new Error('Recovery lost received reasoning or retry status: ' + scenario)
+    if (scenario !== 'ALWAYS' && scenario !== 'CANCEL' && !messages.some(row => row.role === 'assistant' && row.text.includes('SMOKE_RECOVERY_ACK'))) throw new Error('Recovery did not return a final answer')
+    if (rows.filter(row => row.event.type === 'user/message' && JSON.stringify(row.event.data).includes(marker)).length !== 1) throw new Error('Recovery duplicated the user message')
+    const requests = mock.recoveryRequests.filter(row => row.marker === marker)
+    if (requests.length !== (scenario === 'TOOL' ? 3 : 2)) throw new Error('Unbounded or missing recovery requests: ' + scenario)
+    for (const dialect of ['claude-code', 'codex']) {
+      const invoked = rows.filter(row => row.event.type === 'hook/invoked' && row.event.data.dialect === dialect && row.event.data.point === 'UserPromptSubmit')
+      if (invoked.length !== 1) throw new Error('Hook missing or rerun on retry: ' + dialect)
+      const result = rows.find(row => row.event.type === 'hook/result' && row.event.data.handlerId === invoked[0].event.data.handlerId)
+      if (!result || result.event.data.exitCode !== 0) throw new Error('Hook did not execute successfully: ' + dialect + ' ' + JSON.stringify(result))
+    }
+    if (scenario === 'TOOL') {
+      const calls = rows.filter(row => row.event.type === 'tool/call')
+      const results = rows.filter(row => row.event.type === 'tool/result')
+      if (calls.length !== 1 || results.length !== 1 || JSON.stringify(results).includes('is_error":true')) throw new Error('Synthetic tool did not execute once: ' + JSON.stringify(results).slice(-2000))
+      if ((await readFile(path.join(smokeWorkspace, 'recovery-tool-count.txt'), 'utf8')).trim() !== 'once') throw new Error('Recovery reran a previous tool side effect')
+      if (requests.slice(1).some(row => !row.resultIds.includes('smoke-recovery-tool'))) throw new Error('Recovery lost earlier tool results')
+    }
+    if (scenario === 'ALWAYS') {
+      // A failed response must not leave the conversation unable to send.
+      await client.prompt(recoverySession.sessionId, 'SMOKE_RECOVERY_CONTINUE')
+      await waitUntil(async () => (await client.history(recoverySession.sessionId)).events.some(row => row.event.type === 'assistant/message' && JSON.stringify(row.event.data).includes('SMOKE_RECOVERY_ACK SMOKE_RECOVERY_CONTINUE')), 15_000, 'Conversation could not continue after exhausted recovery')
+    }
+  }
   const steeringTiming = await verifyForegroundSteering(client, clientFrames, smokeWorkspace, mock)
   if (!clientFrames.some(frame => frame.type === 'session/assistant-stream' && frame.value.messages.length > 0)) throw new Error('Cursorless live assistant text never reached the client')
   await verifyHostSchedules(client, smokeWorkspace)
@@ -206,7 +260,7 @@ try {
   // Start a fresh synthetic Host through the legacy custom-gateway route.
   // The explicit overlay disables the native Messages adapter for this URL.
   const compatBase = `${mock.origin}/v1`
-  await writeFile(overlayPath, renderRuntimeOverlay({ ...configuration, baseUrl: compatBase }, overlayOptions), 'utf8')
+  await writeFile(overlayPath, renderRuntimeOverlay({ ...configuration, baseUrl: compatBase, scheduleEnabled: false }, overlayOptions), 'utf8')
   child = spawn(node, [dsh, 'web', '--patch', overlayPath, '--host', '127.0.0.1', '--port', '0', '--no-open'], {
     cwd: smokeWorkspace,
     env: { ...env, DSH_HOME: path.join(smokeRoot, 'compat-home'), DEEPSEEK_BASE_URL: compatBase },
@@ -224,10 +278,13 @@ try {
     return history.events.some(row => row.event.type === 'assistant/message' && JSON.stringify(row.event.data).includes('SMOKE_COMPAT_ACK'))
   }, 15_000, 'Custom OpenAI-compatible gateway did not complete its synthetic request')
   compatClient.dispose()
+  const compatTools = mock.requestTools.filter(row => row.path?.endsWith('/chat/completions'))
+  if (compatTools.length === 0 || compatTools.some(row => row.names.some(name => name?.startsWith('schedule_')))) throw new Error('Disabled Host Schedule still exposed model tools')
+  if (!mock.requestTools.some(row => row.names.includes('schedule_create'))) throw new Error('Enabled Host Schedule did not expose its model tools')
   if (!mock.paths.some(endpoint => endpoint.endsWith('/chat/completions'))) throw new Error('Custom endpoint was not kept on Chat Completions')
   const displayUrl = new URL(url)
   displayUrl.search = ''
-  console.log(`Runtime smoke passed at ${displayUrl} with Gateway ${String(description?.version ?? 'unknown')}, authenticated RPC/streams, native images, scoped Host schedules, custom Chat Completions compatibility, and real foreground sleep interruption (${steeringTiming}) without losing the other ten queued prompts.`)
+  console.log(`Runtime smoke passed at ${displayUrl} with Gateway ${String(description?.version ?? 'unknown')}, authenticated RPC/streams, native images, bounded response recovery/exhaustion/cancellation, continuation after failure, single-execution tool effects, both real command-hook bridges, enabled/disabled Host schedules, custom Chat Completions compatibility, and real foreground sleep interruption (${steeringTiming}) without losing the other ten queued prompts.`)
 } finally {
   if (child !== undefined) await terminate(child)
   await mock?.close()

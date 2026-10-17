@@ -295,6 +295,20 @@ describe('session event projection', () => {
     expect(store.snapshot().agentPreset).toBe('minimal')
   })
 
+  it('keeps an empty-response retry busy, then settles failure without locking follow-up input', () => {
+    const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000, pasteFileThreshold: 8_192 })
+    store.addSession({ sessionId: 'retry-session', blank: false, running: false })
+    store.setActive('retry-session')
+    store.appendEvent('retry-session', { type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } })
+    store.appendEvent('retry-session', { type: 'llm/retry', seq: 2, time: 2, data: { turn: 1, failure: { code: 'EMPTY_RESPONSE' }, retry: 1 } })
+    expect(store.snapshot().sessions[0]?.running).toBe(true)
+    store.appendEvent('retry-session', { type: 'turn/end', seq: 3, time: 3, data: { turn: 1, reason: { kind: 'error', error: { code: 'EMPTY_RESPONSE', message: 'No final answer' } } } })
+    expect(store.snapshot().sessions[0]?.running).toBe(false)
+    expect(store.snapshot().messages.at(-1)).toMatchObject({ status: 'error', taskComplete: true })
+    store.appendEvent('retry-session', { type: 'turn/start', seq: 4, time: 4, data: { turn: 2 } })
+    expect(store.snapshot().sessions[0]?.running).toBe(true)
+  })
+
   it('projects transient queue and background-job state for an idle active session', () => {
     const store = new SessionStore({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high', agentPreset: 'standard', permissionMode: 'workspace-write', contextWindowTokens: 1_000_000, pasteFileThreshold: 8_192 })
     store.addSession({ sessionId: 's-1', blank: false, running: false })

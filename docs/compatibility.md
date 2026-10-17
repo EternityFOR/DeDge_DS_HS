@@ -19,15 +19,15 @@ Tier 表示发布验证优先级，不表示尚未运行发布门禁的构建已
 
 | 组件 | 内置版本 | 规则 |
 | --- | --- | --- |
-| DeepSeek Harness | `0.2.0-rc.2` | 当前官方 Inbox、无游标 assistant stream、Host Schedule、job RPC 与图片协议验证目标 |
+| DeepSeek Harness | `0.2.1-alpha.4` | 当前官方 Inbox、无游标 assistant stream、Host Schedule、job RPC 与图片协议验证目标 |
 | Node.js | `22.22.3` | VSIX 内置，不依赖系统 Node |
 | pnpm | `11.21.0` | 只供 Harness 内部工具链使用 |
 
-external JavaScript runtime 接受 Node `22.19+` 或 `24+`；Node 23 不在当前上游支持范围。bundled 精确固定 `0.2.0-rc.2`；external 只接受相同 `0.2.0` RC 协议基线，并会对其他 RC revision 记录兼容性警告。旧 `0.1.x` Host 不会被新客户端附着。扩展不会从 PATH 猜测版本，也不会在激活时自动升级。
+external JavaScript runtime 接受 Node `22.19+` 或 `24+`；Node 23 不在当前上游支持范围。bundled 精确固定 `0.2.1-alpha.4`；external 同样只接受精确的 `0.2.1-alpha.4`，不假定不同 alpha revision 的协议兼容。旧 `0.1.x` / `0.2.0` Host 不会被新客户端附着，也不会为升级强制终止它们。扩展不会从 PATH 猜测版本，也不会在激活时自动升级。
 
 官方 DeepSeek root 和显式 `/anthropic` namespace 使用新 Messages adapter；已有自定义 OpenAI-compatible / Sub2 root 使用 pi-ai Chat Completions 兼容路由。配置值和 endpoint 绑定的 SecretStorage 槽保留，运行时才适配官方 root。
 
-新 Schedule 使用 Host 级持久存储。旧 session-log reminders 仍可出现在历史文本中，但上游不会自动将它们转换为 active Host tasks；需要明确重新创建。Pause 只删除当前会话的 Host reminders 并停止当前会话拥有的 jobs，Steer 不执行这些操作。
+Schedule 使用官方 Web 内置的 Host 级持久服务；扩展只切换既有插件行，模型工具由官方 preset 提供，不重复插入服务。旧 session-log reminders 仍可出现在历史文本中，但上游不会自动将它们转换为 active Host tasks；需要明确重新创建。Pause 只删除当前会话的 Host reminders 并停止当前会话拥有的 jobs，Steer 不执行这些操作。
 
 工作区 hooks 使用上游 bridge 显式挂载：扩展按顺序检测 `.claude/hooks.json`、`.claude/settings.json`、根目录 `hooks.json` 和 `.codex/hooks.json`，只在文件存在时把对应 bridge 写入生成的 overlay；配置文件和 hook 脚本留在用户工作区，不进入 VSIX。上游 hook bridge 只运行其支持的同步 command hooks，其他 handler 会记录警告并跳过。
 
@@ -69,7 +69,8 @@ Windows 探针检查：
 ## 已知限制
 
 - VS Code 的自有工作台不启用上游浏览器 Office 转 PDF/文档预览服务；VSIX 排除它们的可选 LibreOffice native/WASM 引擎。此项不提供 Agent 工具，文件生成和原生图片输入不受影响。
-- DeepSeek Harness 是 developer preview，Gateway 事件可能在后续 RC 中变化。
+- DeepSeek Harness 是 developer preview，当前固定 alpha 预发布版本；Gateway 事件可能在后续版本中变化。
+- 旧历史若已把纯 reasoning 记录为正常完成，工作台仍显示“No final answer”且不自动重发；0.1.97 的固定 native adapter 对新请求直接验证正文，纯 reasoning/空白正文最多重试当前请求一次，仍失败则明确报错。始终不猜测 `FINAL` 分界或把思考伪造成正文。
 - 上下文占用依赖可选的 `contextPressure` projection；不提供 token-meter 的自定义 preset 会隐藏占用环，而不是显示伪造估算。
 - Codex 历史优先使用官方 app-server 的当前 provider、Active 交互式根会话列表；不可用时才扫描 Codex `sessions/`。Claude 只扫描 `projects/` 的 Active 顶层会话；Codex `archived_sessions/` 永不进入回退扫描。Codex rollout 文本读取限制为末尾 32 MiB，避免超大 JSONL 在 Windows 上阻塞 extension host。
 - 升级使用新的版本化 `DSH_HOME`；扩展会在目标目录已存在时合并缺失的会话、存储和附件对象，不覆盖当前数据或复制凭据。
@@ -79,7 +80,9 @@ Windows 探针检查：
 
 ## 发布门禁
 
-发布包的预算按原生载荷平台划分：Windows 为 90 MiB 压缩/256 MiB 解包，Linux/macOS 为 110 MiB/320 MiB。分平台预算只覆盖官方 Node/native binary 的大小差异；平台文件排除、秘密/私人路径、必需文件、许可证、重复文件与文件数量门禁仍统一检查。
+0.1.97 额外要求：纯 reasoning/空白正文返回 EMPTY_RESPONSE，当前模型请求最多恢复一次，失败后仍能发送；前一步工具副作用只执行一次且结果保留。原始思考不转换成正文。正常正文、工具调用、max_tokens、SSE 截断及 UTF-8 分片分别验证。Claude/Codex hooks bridge 必须显式打包且两种 command hook 都实际执行成功；用户配置仍不进入 VSIX。恢复请求可能产生额外模型费用，发布验证仅使用本地 mock。
+
+发布包的预算按原生载荷平台划分：Windows 为 100 MiB 压缩/288 MiB 解包，Linux/macOS 为 110 MiB/320 MiB。alpha.4 的官方 inspector 和 SDK 增量使 Windows 产物约为 93.5 MiB 压缩/280 MiB 解包，因此给出有界的新预算并保留完整依赖。分平台预算覆盖官方运行时载荷差异；平台文件排除、秘密/私人路径、必需文件、许可证、重复文件与文件数量门禁仍统一检查。
 
 每个目标 VSIX 至少需要：
 

@@ -9,11 +9,13 @@ const EOCD_SIGNATURE = 0x06054b50
 const CENTRAL_SIGNATURE = 0x02014b50
 const LOCAL_SIGNATURE = 0x04034b50
 const NODE_LICENSE_SHA256 = 'c738ae413cf561f174e34f6961f8ca458aae2369a73640dda6234c629b98bcc4'
-// Native Node and runtime libraries have materially different carrier sizes.
-// CI observed the pinned linux-x64 payload at 100.4 MiB/296.7 MiB; do not
-// apply Windows' smaller executable budget to a different platform.
+// Native carriers differ by platform and by the explicitly pinned upstream.
+// alpha.4 adds official inspector and SDK payloads: the audited win32-x64
+// archive is 93.5 MiB/279.8 MiB. Keep complete dependencies and a bounded
+// 100/288 MiB Windows budget; all content and duplicate audits stay enabled.
+// CI observed the prior linux-x64 carrier at 100.4 MiB/296.7 MiB.
 const PLATFORM_BUDGETS = {
-  win32: { compressed: 90 * 1024 ** 2, unpacked: 256 * 1024 ** 2 },
+  win32: { compressed: 100 * 1024 ** 2, unpacked: 288 * 1024 ** 2 },
   linux: { compressed: 110 * 1024 ** 2, unpacked: 320 * 1024 ** 2 },
   darwin: { compressed: 110 * 1024 ** 2, unpacked: 320 * 1024 ** 2 },
 }
@@ -57,6 +59,10 @@ export function auditVsix(file, target) {
     'extension/dist/runtime/node_modules/node/LICENSE',
     'extension/dist/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js',
     'extension/dist/runtime/node_modules/@deepseek-ai/dsh/LICENSE',
+    'extension/dist/runtime/node_modules/@deepseek-ai/dsh-hooks-claude-code/lib/index.js',
+    'extension/dist/runtime/node_modules/@deepseek-ai/dsh-hooks-codex/lib/index.js',
+    'extension/dist/runtime/node_modules/@deepseek-ai/dsh-hooks-claude-code/LICENSE',
+    'extension/dist/runtime/node_modules/@deepseek-ai/dsh-hooks-codex/LICENSE',
     'extension/dist/runtime/node_modules/pnpm/bin/pnpm.mjs',
     'extension/dist/runtime/node_modules/pnpm/LICENSE',
     `extension/dist/runtime/node_modules/@vscode/ripgrep-${target}/bin/${ripgrep}`,
@@ -147,6 +153,19 @@ export function auditVsix(file, target) {
     throw new Error('VSIX runtime manifest does not match package.json or the requested target.')
   }
   const vsixManifest = readText(archive, requiredEntry(entryByName, 'extension.vsixmanifest'))
+  const extensionCode = readText(archive, requiredEntry(entryByName, 'extension/dist/extension.cjs'))
+  if (!extensionCode.includes('dedge-response-recovery-1')) throw new Error('VSIX extension is missing local runtime-revision gating.')
+  for (const bridge of ['dsh-hooks-claude-code', 'dsh-hooks-codex']) {
+    const pkg = JSON.parse(readText(archive, requiredEntry(entryByName, 'extension/dist/runtime/node_modules/@deepseek-ai/' + bridge + '/package.json')))
+    if (pkg.version !== runtimeManifest.dsh || pkg.version !== packageManifest.dependencies?.['@deepseek-ai/' + bridge]) throw new Error('VSIX hook bridge version mismatch: ' + bridge)
+  }
+  for (const [pkg, marker] of [
+    ['dsh-llm-deepseek', '// DeDge: reasoning is not a user-facing answer.'],
+    ['dsh-llm-retry', '// DeDge: at most one retry of an empty response,'],
+  ]) {
+    const code = readText(archive, requiredEntry(entryByName, 'extension/dist/runtime/node_modules/@deepseek-ai/' + pkg + '/lib/index.js'))
+    if (!code.includes(marker)) throw new Error('VSIX is missing response recovery patch: ' + pkg)
+  }
   if (!vsixManifest.includes(`TargetPlatform="${target}"`)
     || !vsixManifest.includes(`Version="${packageManifest.version}"`)) {
     throw new Error('VSIX manifest target or extension version does not match package.json.')

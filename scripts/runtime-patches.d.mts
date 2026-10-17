@@ -10,3 +10,7 @@ export declare function patchApprovalPolicyIdleNoticeSource(source: string): str
 export declare function patchApprovalPolicyIdleNotice(file: string): void
 export declare function patchCredentialEnvironmentScrubSource(source: string): string
 export declare function patchCredentialEnvironmentScrub(file: string): void
+export declare function patchDeepSeekAnswerGuardSource(source: string): string
+export declare function patchDeepSeekAnswerGuard(file: string): void
+export declare function patchEmptyResponseRetryLimitSource(source: string): string
+export declare function patchEmptyResponseRetryLimit(file: string): void

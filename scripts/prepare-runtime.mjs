@@ -9,6 +9,8 @@ import {
   patchPersistentShellCacheRecovery,
   patchScheduleCancelCommandAlpha2,
   patchScheduleCancelCommandRc1,
+  patchDeepSeekAnswerGuard,
+  patchEmptyResponseRetryLimit,
 } from './runtime-patches.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -96,9 +98,9 @@ if (expectedDsh === '0.1.3-alpha.2') {
   patchPermissionSandboxTerminalClose(path.join(runtimeModules, '@deepseek-ai', 'dsh-permission-presets', 'lib', 'index.js'))
   patchPersistentShellCacheRecovery(path.join(runtimeModules, '@deepseek-ai', 'dsh-tool-pwsh-persistent', 'lib', 'index.js'), 'pwsh')
   patchPersistentShellCacheRecovery(path.join(runtimeModules, '@deepseek-ai', 'dsh-tool-bash-persistent', 'lib', 'index.js'), 'bash')
-} else if (expectedDsh.startsWith('0.2.0-rc.')) {
-  // Schedule now owns public Host list/delete RPCs, so the old source rewrite
-  // is unnecessary. Retain only fixes still absent from this upstream family.
+} else if (expectedDsh.startsWith('0.2.0-rc.') || expectedDsh === '0.2.1-alpha.4') {
+  // RC/alpha Host Schedule owns public list/delete RPCs; no schedule rewrite.
+  // These five guarded safety/terminal fixes are still absent in alpha.4.
   patchCredentialEnvironmentScrub(path.join(runtimeModules, '@deepseek-ai', 'dsh-subprocess', 'lib', 'index.js'))
   patchApprovalPolicyIdleNotice(path.join(runtimeModules, '@deepseek-ai', 'dsh-user-approval', 'lib', 'index.js'))
   patchPermissionSandboxTerminalClose(path.join(runtimeModules, '@deepseek-ai', 'dsh-permission-presets', 'lib', 'index.js'))
@@ -106,6 +108,16 @@ if (expectedDsh === '0.1.3-alpha.2') {
   patchPersistentShellCacheRecovery(path.join(runtimeModules, '@deepseek-ai', 'dsh-tool-bash-persistent', 'lib', 'index.js'), 'bash')
 } else {
   console.log(`Using upstream Harness ${expectedDsh}; skipping alpha.2 compatibility patches.`)
+}
+
+if (expectedDsh === '0.2.1-alpha.4') {
+  patchDeepSeekAnswerGuard(path.join(runtimeModules, '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js'))
+  patchEmptyResponseRetryLimit(path.join(runtimeModules, '@deepseek-ai', 'dsh-llm-retry', 'lib', 'index.js'))
+}
+for (const bridge of ['dsh-hooks-claude-code', 'dsh-hooks-codex']) {
+  const bridgeRoot = path.join(runtimeModules, '@deepseek-ai', bridge)
+  accessSync(path.join(bridgeRoot, 'lib', 'index.js'), constants.R_OK)
+  if (packageVersion(path.join(bridgeRoot, 'package.json')) !== expectedDsh) throw new Error(`Hook bridge version mismatch: ${bridge}`)
 }
 
 for (const metadata of ['.modules.yaml', '.package-map.json', '.pnpm-workspace-state-v1.json', '.pnpm']) {
